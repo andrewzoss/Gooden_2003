@@ -327,6 +327,9 @@ const GOODEN_PIC_DATA_URL = "/gooden.webp";
 // Override this constant if your file is hosted elsewhere.
 const AC_CARR_DATA_URL = "/ac-carr.webp";
 const MUSIC_SRC = "/soundtrack.mp3";
+// Silent 1×1 MP4 with a (silent) audio track — used to flip iOS Safari out of
+// silent-switch-mute mode so the actual music plays even when the ringer is off.
+const SILENT_MP4_SRC = "/silent.mp4";
 
 
 // TeamEmblem — generates a polished branded mark for any team/school.
