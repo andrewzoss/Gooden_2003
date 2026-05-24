@@ -2768,16 +2768,30 @@ export default function App(){
         }
         const ctx=new AudioCtx();
         audioCtxRef.current=ctx;
-        // EARLY UNLOCK: install gesture listeners NOW, before fetch/decode finishes.
-        // This way the user's first tap (e.g. "TAP TO START") resumes the AudioContext
-        // immediately. By the time decode completes, ctx is already running, so we'll
-        // hit the "ready" state and the playback effect will start music automatically —
-        // no second tap on the music button required.
-        // iOS requires ctx.resume() to be called SYNCHRONOUSLY inside the gesture handler.
+        // EARLY UNLOCK + iOS PRIME: install gesture listeners NOW, before fetch/decode finishes.
+        // The user's first tap (e.g. "TAP TO START") must do two things SYNCHRONOUSLY
+        // inside the gesture handler:
+        //   1. ctx.resume() — unlocks the AudioContext from "suspended" state
+        //   2. Play a 1-sample silent BufferSource — iOS Safari requires the FIRST
+        //      source.start() to happen inside a gesture. Once primed, subsequent
+        //      source.start() calls work freely, even outside gestures. Without this,
+        //      when our real MP3 finishes decoding a few seconds later, src.start()
+        //      silently produces no sound because the gesture has "expired".
         const earlyUnlock=()=>{
-          if(audioCtxRef.current && audioCtxRef.current.state==="suspended"){
-            audioCtxRef.current.resume().catch(()=>{});
+          const c=audioCtxRef.current;
+          if(!c) return;
+          if(c.state==="suspended"){
+            c.resume().catch(()=>{});
           }
+          try{
+            // 1 sample × 22050 Hz = ~45 microseconds of silence. Inaudible, but
+            // satisfies iOS's "first source must start in a gesture" rule.
+            const silentBuffer=c.createBuffer(1,1,22050);
+            const silentSrc=c.createBufferSource();
+            silentSrc.buffer=silentBuffer;
+            silentSrc.connect(c.destination);
+            silentSrc.start(0);
+          }catch(e){}
           window.removeEventListener("pointerdown",earlyUnlock);
           window.removeEventListener("keydown",earlyUnlock);
           window.removeEventListener("touchstart",earlyUnlock);
