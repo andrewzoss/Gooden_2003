@@ -2828,6 +2828,14 @@ export default function App(){
   // call this (i.e. only when they want playback to start).
   const startMusicFromGesture=()=>{
     userHasInteractedRef.current=true;
+    // Kick the silent video FIRST inside this gesture — it puts iOS into the
+    // "Playback" audio session category, which ignores the silent switch. Without
+    // it, iOS pauses our music ~50ms after it starts when the phone is on silent.
+    const v=silentVideoRef.current;
+    if(v){
+      const vp=v.play();
+      if(vp && typeof vp.then==="function") vp.catch(()=>{});
+    }
     const a=audioElRef.current;
     if(!a) return;
     const p=a.play();
