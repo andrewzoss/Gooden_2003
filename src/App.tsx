@@ -2873,6 +2873,40 @@ export default function App(){
     };
   },[]);
 
+  // STEP 2.6: Media Session API — declares us as a real media player so iOS
+  // gives our audio higher priority and won't pause it on incidental clicks
+  // (this is the same API YouTube and Spotify Web use). Without this, iOS treats
+  // our audio as a lower-priority "ambient" sound that can be interrupted.
+  useEffect(()=>{
+    if(typeof navigator==="undefined"||!("mediaSession" in navigator)) return;
+    try{
+      navigator.mediaSession.metadata=new window.MediaMetadata({
+        title:"NBA Live 2003 Soundtrack",
+        artist:"Gooden 2003",
+        album:"Game Soundtrack",
+      });
+      // Wire the media session play/pause to our audio element so iOS controls
+      // (lock screen, control center) work correctly — and so iOS recognizes
+      // our element as the "active media".
+      navigator.mediaSession.setActionHandler("play",()=>{
+        const a=audioElRef.current;
+        if(a){ setMusicOn(true); a.play().catch(()=>{}); }
+      });
+      navigator.mediaSession.setActionHandler("pause",()=>{
+        const a=audioElRef.current;
+        if(a){ setMusicOn(false); a.pause(); }
+      });
+    }catch(e){}
+    return()=>{
+      if(typeof navigator==="undefined"||!("mediaSession" in navigator)) return;
+      try{
+        navigator.mediaSession.metadata=null;
+        navigator.mediaSession.setActionHandler("play",null);
+        navigator.mediaSession.setActionHandler("pause",null);
+      }catch(e){}
+    };
+  },[]);
+
   // Imperative starter — called from the TAP TO START click handler so .play()
   // runs SYNCHRONOUSLY inside the user gesture (the only way iOS reliably allows
   // it). Also flips userHasInteractedRef so the STEP 2 effect takes over for
@@ -2953,16 +2987,18 @@ export default function App(){
     const v=silentVideoRef.current;
     if(!v) return;
     if(musicOn){
-      const tryPlay=()=>{v.play().catch(()=>{});};
+      // Only call play() if actually paused. Calling play() on an already-playing
+      // video in iOS Safari can briefly disrupt audio output (this was causing
+      // the click-pause-resume stutter).
+      const tryPlay=()=>{
+        if(v.paused){ v.play().catch(()=>{}); }
+      };
       tryPlay();
-      // Autoplay is usually blocked until a user gesture — retry on the same
-      // gestures we use to unlock the AudioContext.
+      // Listen for resume opportunities (in case iOS pauses the silent video).
       window.addEventListener("pointerdown",tryPlay);
-      window.addEventListener("keydown",tryPlay);
       window.addEventListener("touchstart",tryPlay,{passive:true});
       return()=>{
         window.removeEventListener("pointerdown",tryPlay);
-        window.removeEventListener("keydown",tryPlay);
         window.removeEventListener("touchstart",tryPlay);
       };
     } else {
