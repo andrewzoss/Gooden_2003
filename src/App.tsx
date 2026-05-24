@@ -175,7 +175,7 @@ const NBA_TEAM_DATA = {
   "Toronto Raptors":{p:"#CE1141",s:"#000000",abbr:"TOR",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Toronto_Raptors_logo.svg"},
   "Utah Jazz":{p:"#002B5C",s:"#00471B",abbr:"UTA",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Utah_Jazz_logo_2022.svg"},
   "Washington Wizards":{p:"#002B5C",s:"#E31837",abbr:"WAS",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Washington_Wizards_logo.svg"},
-  "Charlotte Bobcats":{p:"#1D1160",s:"#00788C",abbr:"CHA",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Charlotte_Bobcats_logo.svg"},
+  "Charlotte Bobcats":{p:"#F26532",s:"#053F61",abbr:"CHA",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Charlotte_Bobcats_logo.svg"},
   "New Jersey Nets":{p:"#002A60",s:"#C8102E",abbr:"NJN",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/New_Jersey_Nets_logo.svg"},
 };
 
@@ -599,36 +599,49 @@ function PlayerAvatar({app, size=80}){
           hides the center ropes; only the parts that extend past the head are
           visible from the front. Scalp cap is drawn later on top of the head. */}
       {hair==="Dreads"&&<g>
+        {/* Each dread is a tapered rope with a top anchor inside the head's
+            silhouette (hidden behind the head ellipse / scalp cap) and a
+            bottom that hangs past the head. The outer dreads sweep diagonally
+            outward so they appear to hang past the head's sides naturally,
+            rather than being parallel bars next to the head. */}
         {[
-          {x:22,top:38,bot:78,w:3.4},
-          {x:28,top:36,bot:82,w:3.6},
-          {x:42,top:34,bot:74,w:3.6},
-          {x:58,top:34,bot:74,w:3.6},
-          {x:72,top:36,bot:82,w:3.6},
-          {x:78,top:38,bot:78,w:3.4},
+          // {topX, topY, botX, botY, topW, botW} — top anchors are within head (x:28-72)
+          {topX:34, topY:41, botX:23, botY:84, topW:3.4, botW:2.5}, // far left, sweeps left
+          {topX:40, topY:36, botX:33, botY:90, topW:3.7, botW:2.8}, // mid-left
+          {topX:46, topY:33, botX:44, botY:91, topW:3.8, botW:2.9}, // front-left
+          {topX:54, topY:33, botX:56, botY:91, topW:3.8, botW:2.9}, // front-right
+          {topX:60, topY:36, botX:67, botY:90, topW:3.7, botW:2.8}, // mid-right
+          {topX:66, topY:41, botX:77, botY:84, topW:3.4, botW:2.5}, // far right, sweeps right
         ].map((d,i)=>{
-          const halfW = d.w/2;
-          const tipW = halfW * 0.7;
+          const topHalf=d.topW/2;
+          const botHalf=d.botW/2;
+          const tipW=botHalf*0.75;
+          const length=d.botY-d.topY;
+          const segCount=Math.floor(length/4);
           return(
             <g key={i}>
               <path d={`
-                M ${d.x-halfW} ${d.top}
-                L ${d.x-tipW} ${d.bot-1}
-                Q ${d.x} ${d.bot+1.4} ${d.x+tipW} ${d.bot-1}
-                L ${d.x+halfW} ${d.top}
+                M ${d.topX-topHalf} ${d.topY}
+                L ${d.botX-tipW} ${d.botY-1}
+                Q ${d.botX} ${d.botY+1.4} ${d.botX+tipW} ${d.botY-1}
+                L ${d.topX+topHalf} ${d.topY}
                 Z`}
                 fill={i%2===0?hairMid:hairDark}/>
-              {Array.from({length:Math.floor((d.bot-d.top)/4)}).map((_,j)=>{
-                const segY = d.top + 3 + j*4;
-                const wAt = halfW - (halfW-tipW)*((segY-d.top)/(d.bot-d.top));
+              {/* Segment texture — interpolated along the rope */}
+              {Array.from({length:segCount}).map((_,j)=>{
+                const t=(3+j*4)/length;
+                const segX=d.topX+(d.botX-d.topX)*t;
+                const segY=d.topY+(d.botY-d.topY)*t;
+                const halfAt=topHalf+(botHalf-topHalf)*t;
                 return(
                   <ellipse key={j}
-                    cx={d.x} cy={segY}
-                    rx={wAt-0.3} ry="0.7"
+                    cx={segX} cy={segY}
+                    rx={halfAt-0.3} ry="0.7"
                     fill={hairDark} opacity="0.55"/>
                 );
               })}
-              <line x1={d.x} y1={d.top+1} x2={d.x} y2={d.bot-1}
+              {/* Center highlight along rope */}
+              <line x1={d.topX} y1={d.topY+1} x2={d.botX} y2={d.botY-1}
                     stroke={hairLight} strokeWidth="0.5" opacity="0.4"/>
             </g>
           );
@@ -799,11 +812,26 @@ function PlayerAvatar({app, size=80}){
 
       {/* Beard — drawn AFTER face features */}
       {beard==="Stubble"&&<g>
-        {/* Subtle gradient shadow over jaw + sparse dots */}
-        <path d="M 32 60 Q 50 78 68 60 Q 65 70 50 73 Q 35 70 32 60" fill="rgba(0,0,0,0.13)"/>
-        {[36,42,48,54,60,38,46,52,58].map((x,i)=>(
-          <circle key={i} cx={x} cy={62+(i%3)*3} r="0.6" fill="rgba(0,0,0,0.4)"/>
-        ))}
+        {/* Base shadow over the jaw — gives stubble its tone */}
+        <path d="M 32 60 Q 50 78 68 60 Q 65 70 50 73 Q 35 70 32 60" fill="rgba(0,0,0,0.18)"/>
+        {/* Faint mustache shadow above the lip */}
+        <path d="M 41 65 Q 50 67 59 65 Q 56 67 50 67 Q 44 67 41 65" fill="rgba(0,0,0,0.15)"/>
+        {/* Dense hex-packed stubble dots, masked to the jaw area and the
+            mouth cut out. ~50-70 visible dots gives the look of actual stubble
+            rather than the sparse "9 random dots" effect. */}
+        {Array.from({length:9}).flatMap((_,row)=>
+          Array.from({length:15}).map((_,col)=>{
+            const y=60+row*1.5;
+            const stagger=(row%2)*1.3;
+            const x=31+col*2.6+stagger;
+            // Mask: stay within the lower-face oval
+            const dx=x-50, dy=y-67;
+            if((dx*dx)/(19*19)+(dy*dy)/(7.5*7.5)>1) return null;
+            // Cut out the mouth/lip area
+            if(y<67 && Math.abs(dx)<7) return null;
+            return <circle key={`${row}-${col}`} cx={x} cy={y} r="0.4" fill="rgba(0,0,0,0.55)"/>;
+          }).filter(Boolean)
+        )}
       </g>}
 
       {beard==="Goatee"&&<g>
@@ -3952,11 +3980,11 @@ export default function App(){
         {audioState==="error"?"⚠️":musicOn?(audioState==="playing"?"🔊":"🔈"):"🔇"}
       </div>
       {screen!=="loadscreen"&&screen!=="title"&&(
-        <div style={{position:"sticky",top:0,zIndex:10,background:"rgba(8,12,16,0.96)",backdropFilter:"blur(8px)",borderBottom:"1px solid rgba(232,135,58,0.1)",padding:"8px 14px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{position:"sticky",top:0,zIndex:10,background:"rgba(8,12,16,0.96)",backdropFilter:"blur(8px)",borderBottom:"1px solid rgba(232,135,58,0.1)",padding:"8px 14px",display:"flex",alignItems:"center",minHeight:42}}>
           <div onClick={()=>go("title")} style={{cursor:"pointer"}}>
             <Logo size={42}/>
           </div>
-          {player.name&&<div style={{display:"flex",alignItems:"center",gap:8}}><PlayerAvatar app={player.appearance} size={28}/><div style={{fontSize:11,color:"#888",textAlign:"right",lineHeight:1.3}}><div style={{color:"#f0ede8",fontWeight:700}}>{player.name}</div><div>{player.position} · {ovr} OVR</div></div></div>}
+          {player.name&&<div style={{position:"absolute",left:"50%",top:"50%",transform:"translate(-50%, -50%)",display:"flex",alignItems:"center",gap:8}}><PlayerAvatar app={player.appearance} size={28}/><div style={{fontSize:11,color:"#888",lineHeight:1.3}}><div style={{color:"#f0ede8",fontWeight:700}}>{player.name}</div><div>{player.position} · {ovr} OVR</div></div></div>}
         </div>
       )}
       <div style={{maxWidth:430,margin:"0 auto",padding:screen==="loadscreen"?0:`${screen==="title"?0:16}px 16px 80px`}}>
