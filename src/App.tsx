@@ -2580,7 +2580,13 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
                   paintOrder="stroke fill"
                   fontFamily="Impact, 'Arial Black', 'Oswald', sans-serif"
                   letterSpacing="2.5">
-              <textPath href="#nameArc" startOffset="50%" textAnchor="middle">
+              {/* xlinkHref is the SVG1 syntax that older mobile browsers
+                  (notably some Android Chrome / older iOS versions) need to
+                  render textPath. Newer browsers accept the SVG2 `href`. Setting
+                  BOTH ensures the curved name shows up everywhere — without
+                  this, the jersey would render with just the number on some
+                  devices. */}
+              <textPath href="#nameArc" xlinkHref="#nameArc" startOffset="50%" textAnchor="middle">
                 {lastName}
               </textPath>
             </text>
@@ -2763,6 +2769,48 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
   return null;
 }
 
+// ─── SAVE / LOAD ──────────────────────────────────────────────────────────────
+// Persists the entire career to localStorage so the player can resume across
+// app closes, browser restarts, and deploys. Saves are auto-written whenever
+// any tracked state changes (no manual "save" button — modern game UX).
+const SAVE_KEY = "gooden2003_save_v1";
+// Bump this version if the save shape changes incompatibly. Old saves with a
+// lower version will be ignored (treated as no save) rather than crashing.
+const SAVE_VERSION = 1;
+
+// Read a save from localStorage. Returns null if missing, malformed, or from
+// an incompatible version.
+function loadSave(){
+  try{
+    if(typeof localStorage==="undefined") return null;
+    const raw=localStorage.getItem(SAVE_KEY);
+    if(!raw) return null;
+    const parsed=JSON.parse(raw);
+    if(!parsed || parsed.version!==SAVE_VERSION) return null;
+    if(!parsed.data || typeof parsed.data!=="object") return null;
+    return parsed.data;
+  }catch(e){
+    return null;
+  }
+}
+
+function writeSave(data){
+  try{
+    if(typeof localStorage==="undefined") return;
+    localStorage.setItem(SAVE_KEY,JSON.stringify({version:SAVE_VERSION,savedAt:Date.now(),data}));
+  }catch(e){
+    // localStorage can throw on Safari private mode or quota exceeded — swallow
+    // silently so the game continues to function without persistence.
+  }
+}
+
+function clearSave(){
+  try{
+    if(typeof localStorage==="undefined") return;
+    localStorage.removeItem(SAVE_KEY);
+  }catch(e){}
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
   const [screen,setScreen]=useState("loadscreen");
@@ -2785,6 +2833,69 @@ export default function App(){
   const [xferSel,setXferSel]=useState(null);
   const [skillPoints,setSkillPoints]=useState(100);
   const [intangs,setIntangs]=useState([]);
+  // Whether a save exists in localStorage. Drives the "Resume Career" button
+  // on the title screen. Refreshed when we save, clear, or load.
+  const [hasSave,setHasSave]=useState(()=>loadSave()!==null);
+
+  // Auto-save: write the entire career to localStorage whenever any tracked
+  // state changes. Skipped when the player hasn't started (no name entered)
+  // so we don't clutter localStorage with the default empty state. Also
+  // skipped on the loadscreen so the initial mount doesn't write an empty save.
+  useEffect(()=>{
+    if(!player.name) return;
+    if(screen==="loadscreen") return;
+    writeSave({
+      screen, player, starTier, school, priorities, year, allYears,
+      agent, workoutPlayer, workoutDone, agentAttention,
+      interviewDone, combineDone, combineScore, interviewScore,
+      seasonResult, xferSel, skillPoints, intangs,
+    });
+    setHasSave(true);
+  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs]);
+
+  // Restore a saved career into all the state slots, then navigate to the
+  // screen they were on when they last played.
+  const resumeCareer=()=>{
+    const data=loadSave();
+    if(!data) return;
+    if(data.player) setPlayer(data.player);
+    if(data.starTier!==undefined) setStarTier(data.starTier);
+    if(data.school!==undefined) setSchool(data.school);
+    if(data.priorities) setPriorities(data.priorities);
+    if(data.year!==undefined) setYear(data.year);
+    if(data.allYears) setAllYears(data.allYears);
+    if(data.agent!==undefined) setAgent(data.agent);
+    if(data.workoutPlayer!==undefined) setWorkoutPlayer(data.workoutPlayer);
+    if(data.workoutDone!==undefined) setWorkoutDone(data.workoutDone);
+    if(data.agentAttention!==undefined) setAgentAttention(data.agentAttention);
+    if(data.interviewDone!==undefined) setInterviewDone(data.interviewDone);
+    if(data.combineDone!==undefined) setCombineDone(data.combineDone);
+    if(data.combineScore!==undefined) setCombineScore(data.combineScore);
+    if(data.interviewScore!==undefined) setInterviewScore(data.interviewScore);
+    if(data.seasonResult!==undefined) setSeasonResult(data.seasonResult);
+    if(data.xferSel!==undefined) setXferSel(data.xferSel);
+    if(data.skillPoints!==undefined) setSkillPoints(data.skillPoints);
+    if(data.intangs) setIntangs(data.intangs);
+    // Jump back to where they were (or title if their saved screen was
+    // somehow loadscreen/missing).
+    setScreen(data.screen && data.screen!=="loadscreen" ? data.screen : "title");
+  };
+
+  // Wipe the save and reset career state — used by "New Career" when a save
+  // already exists.
+  const wipeAndStartNew=()=>{
+    clearSave();
+    setHasSave(false);
+    setPlayer({name:"",position:"SG",height:76,weight:210,hometown:"",skills:{},intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
+    setStarTier(null);setSchool(null);setPriorities([]);
+    setYear(1);setAllYears([]);
+    setAgent(null);setWorkoutPlayer(null);setWorkoutDone(false);
+    setAgentAttention(100);setInterviewDone(false);setCombineDone(false);
+    setCombineScore(null);setInterviewScore(null);
+    setSeasonResult(null);setXferSel(null);
+    setSkillPoints(100);setIntangs([]);
+    setScreen("bio");
+  };
   // Background music using HTMLAudioElement — the same approach YouTube, Spotify Web,
   // etc. use for iOS reliability. Web Audio API was too finicky here: even after
   // priming, iOS would silently swallow source.start() calls outside a gesture.
@@ -3193,6 +3304,29 @@ export default function App(){
           Toggle music on/off here at any time. Your choice stays in effect through the whole career.
         </div>
 
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:OR,marginBottom:8}}>Save Data</div>
+        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"12px 14px",marginBottom:14}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#f0ede8"}}>💾 Career Save</div>
+          <div style={{fontSize:11,color:"#888",marginTop:2,lineHeight:1.5}}>
+            {hasSave
+              ? "Your progress auto-saves on this device. Pick up where you left off any time."
+              : "No save yet. Your progress will auto-save once you start a career."}
+          </div>
+          {hasSave && (
+            <button onClick={()=>{
+              const ok = typeof window!=="undefined" && window.confirm
+                ? window.confirm("Delete your saved career? This can't be undone.")
+                : true;
+              if(!ok) return;
+              clearSave();
+              setHasSave(false);
+              toast("Save deleted");
+            }} style={{...ghostS,marginTop:10,width:"auto",padding:"7px 14px",fontSize:12,color:RE,borderColor:RE}}>
+              Delete Save
+            </button>
+          )}
+        </div>
+
         <button onClick={()=>go("title")} style={btnS}>BACK TO HOME →</button>
       </MenuFrame>
     ),
@@ -3241,11 +3375,32 @@ export default function App(){
 
     title:(()=>{
       // NBA Live 2003 inspired menu: chrome arc, orange basketball background, highlighted selection.
-      const menuItems=[
-        {id:"new",   label:"PLAY NOW",         sub:"Start a new career",       action:()=>go("bio")},
-        {id:"how",   label:"HOW TO PLAY",      sub:"Learn the flow",           action:()=>go("howto")},
-        {id:"opts",  label:"OPTIONS",          sub:"Sound, settings",          action:()=>go("options")},
-        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",       action:()=>go("extras")},
+      // "PLAY NOW" becomes "RESUME CAREER" when a save exists, and starting a new
+      // career when a save exists prompts a confirmation so the user doesn't
+      // accidentally wipe progress.
+      const startNewCareer=()=>{
+        if(hasSave){
+          // eslint-disable-next-line no-restricted-globals
+          const ok = typeof window!=="undefined" && window.confirm
+            ? window.confirm("Starting a new career will erase your saved progress. Continue?")
+            : true;
+          if(!ok) return;
+          wipeAndStartNew();
+        } else {
+          go("bio");
+        }
+      };
+      const menuItems=hasSave?[
+        {id:"resume",label:"RESUME CAREER",   sub:"Pick up where you left off", action:resumeCareer},
+        {id:"new",   label:"NEW CAREER",      sub:"Start over from scratch",    action:startNewCareer},
+        {id:"how",   label:"HOW TO PLAY",     sub:"Learn the flow",             action:()=>go("howto")},
+        {id:"opts",  label:"OPTIONS",         sub:"Sound, settings",            action:()=>go("options")},
+        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",        action:()=>go("extras")},
+      ]:[
+        {id:"new",   label:"PLAY NOW",        sub:"Start a new career",         action:startNewCareer},
+        {id:"how",   label:"HOW TO PLAY",     sub:"Learn the flow",             action:()=>go("howto")},
+        {id:"opts",  label:"OPTIONS",         sub:"Sound, settings",            action:()=>go("options")},
+        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",        action:()=>go("extras")},
       ];
       return(
         <div style={{position:"relative",minHeight:"calc(100vh - 60px)",margin:"-16px -16px 0",overflow:"hidden"}}>
