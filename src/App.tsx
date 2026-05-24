@@ -2896,17 +2896,54 @@ export default function App(){
     if(data.xferSel!==undefined) setXferSel(data.xferSel);
     if(data.skillPoints!==undefined) setSkillPoints(data.skillPoints);
     if(data.intangs) setIntangs(data.intangs);
-    // Jump back to where they were. If the saved screen is somehow a menu
-    // screen (legacy saves from before the menu-screen guard was added), fall
-    // back to "bio" — early in the flow — rather than dumping them back on
-    // the title screen they just left.
+    // Jump back to where they were. If the saved screen is a menu screen
+    // (legacy saves from before the menu-screen guard was added), infer the
+    // best resume point from the saved progress data — much better UX than
+    // dumping them back at the very start.
     const saved=data.screen;
     if(saved && !MENU_SCREENS.has(saved)){
       setScreen(saved);
     } else {
-      setScreen("bio");
+      setScreen(inferCareerScreen(data));
     }
   };
+
+  // Determines the best resume point when the saved screen is missing or
+  // points to a menu (legacy/corrupted save). Walks the career flow in
+  // reverse order and picks the latest step the player has reached.
+  function inferCareerScreen(data){
+    if(!data) return "bio";
+    // Post-college: interview / combine / draft prep
+    if(data.combineDone||data.combineScore!=null||data.interviewDone||data.interviewScore!=null){
+      return "predraft";
+    }
+    // In-college: played a season already — drop them at the recap/decision
+    // screen so they can choose to return, transfer, or declare.
+    if(data.school&&data.allYears&&data.allYears.length>0){
+      return "recap";
+    }
+    // School signed and priorities chosen — ready to play a season.
+    if(data.school&&data.priorities&&data.priorities.length>=3){
+      return "season";
+    }
+    // School signed but priorities not yet picked.
+    if(data.school){
+      return "priorities";
+    }
+    // Star tier and skill build done — time to pick a school.
+    if(data.starTier&&data.player&&data.player.skills&&Object.keys(data.player.skills).length>0){
+      return "school";
+    }
+    // Star tier picked, skills not allocated.
+    if(data.starTier){
+      return "build";
+    }
+    // Basic bio entered, no star tier yet.
+    if(data.player&&data.player.position&&data.player.name){
+      return "stars";
+    }
+    return "bio";
+  }
 
   // Wipe the save and reset career state — used by "New Career" when a save
   // already exists.
