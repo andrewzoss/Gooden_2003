@@ -1825,7 +1825,19 @@ A bland "I work hard every day" is a 5, not a 7. A specific, personal answer wit
 Respond in EXACTLY this format (no extra text):
 REACTION: <1-2 sentences in scout voice. MUST reference the specific content of the prospect's answer — what they actually said, not generic praise. Be warm but honest.>
 SCORE: <integer 1-10>`;
-      const res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:200,messages:[{role:"user",content:prompt}]})});
+      // Hard 6-second timeout so the request can't hang forever (which was
+      // causing the "thinking..." spinner to never clear on Chrome mobile when
+      // the cross-origin call to api.anthropic.com was being blocked without
+      // a proper rejection). AbortController.signal triggers a fetch reject
+      // we'll catch below.
+      const controller=new AbortController();
+      const timeoutId=setTimeout(()=>controller.abort(),6000);
+      let res;
+      try{
+        res=await fetch("https://api.anthropic.com/v1/messages",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:200,messages:[{role:"user",content:prompt}]}),signal:controller.signal});
+      } finally {
+        clearTimeout(timeoutId);
+      }
       const data=await res.json();
       const raw=(data&&data.content&&data.content[0]&&data.content[0].text)||"";
       // Flexible score parsing — handles "SCORE: 7", "Score: 7/10", or just "7/10" at the end
@@ -1843,15 +1855,20 @@ SCORE: <integer 1-10>`;
       if(!replyText) replyText=""; // mark unusable so the dynamic fallback kicks in below
     }catch(err){
       replyText=""; // dynamic fallback will fill this in based on the actual answer
+    }finally{
+      // ALWAYS clear the loading state — even if something above threw past
+      // the catch (unlikely but bulletproof). This is what prevents the
+      // permanent "thinking..." stuck state.
+      // If model didn't give a usable score, fall back to heuristics on the actual answer
+      if(scoreVal===null) scoreVal=heuristicScore(userText);
+      // If we didn't get usable reply text (API failure on mobile, blank parse, etc.),
+      // synthesize a content-aware scout reaction so the player never sees a generic
+      // "Appreciate the answer" again.
+      if(!replyText) replyText=heuristicReaction(userText,scoreVal);
+      setScore(scoreVal);
+      setLoading(false);
+      setMsgs(prev=>[...prev,{role:"assistant",content:replyText}]);
     }
-    // If model didn't give a usable score, fall back to heuristics on the actual answer
-    if(scoreVal===null) scoreVal=heuristicScore(userText);
-    // If we didn't get usable reply text (API failure on mobile, blank parse, etc.),
-    // synthesize a content-aware scout reaction so the player never sees a generic
-    // "Appreciate the answer" again.
-    if(!replyText) replyText=heuristicReaction(userText,scoreVal);
-    setScore(scoreVal);setLoading(false);
-    setMsgs(prev=>[...prev,{role:"assistant",content:replyText}]);
     // No auto-advance — user clicks End Interview when they've read the feedback
   };
 
