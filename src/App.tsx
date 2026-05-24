@@ -2768,6 +2768,23 @@ export default function App(){
         }
         const ctx=new AudioCtx();
         audioCtxRef.current=ctx;
+        // EARLY UNLOCK: install gesture listeners NOW, before fetch/decode finishes.
+        // This way the user's first tap (e.g. "TAP TO START") resumes the AudioContext
+        // immediately. By the time decode completes, ctx is already running, so we'll
+        // hit the "ready" state and the playback effect will start music automatically —
+        // no second tap on the music button required.
+        // iOS requires ctx.resume() to be called SYNCHRONOUSLY inside the gesture handler.
+        const earlyUnlock=()=>{
+          if(audioCtxRef.current && audioCtxRef.current.state==="suspended"){
+            audioCtxRef.current.resume().catch(()=>{});
+          }
+          window.removeEventListener("pointerdown",earlyUnlock);
+          window.removeEventListener("keydown",earlyUnlock);
+          window.removeEventListener("touchstart",earlyUnlock);
+        };
+        window.addEventListener("pointerdown",earlyUnlock);
+        window.addEventListener("keydown",earlyUnlock);
+        window.addEventListener("touchstart",earlyUnlock,{passive:true});
         // MUSIC_SRC is a URL to /public — fetch() the audio file, then decode.
         const resp = await fetch(MUSIC_SRC);
         if(!resp.ok) throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
