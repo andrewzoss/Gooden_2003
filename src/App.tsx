@@ -2754,6 +2754,16 @@ export default function App(){
   const audioElRef=useRef(null);
   // Hidden <video> used to bypass iOS Safari's silent-switch mute (see effect below).
   const silentVideoRef=useRef(null);
+  // Mirror of musicOn that's readable from non-React contexts (event handlers
+  // captured at mount via [] effect deps would otherwise see stale values).
+  const musicOnRef=useRef(true);
+  musicOnRef.current=musicOn;
+  // Tracks whether the user has done a "start gesture" yet — once true, we can
+  // safely call .play() outside a gesture (iOS allows this after first unlock).
+  const userHasInteractedRef=useRef(false);
+  // Tracks the last self-heal retry timestamp to prevent infinite retry loops
+  // if iOS keeps refusing playback for a structural reason.
+  const lastRetryRef=useRef(0);
 
   // STEP 1: Create the HTMLAudioElement on mount. It loads in the background.
   useEffect(()=>{
@@ -2769,7 +2779,22 @@ export default function App(){
 
     const onCanPlay=()=>{ setAudioState(s=>s==="loading"?"ready":s); };
     const onPlaying=()=>{ setAudioState("playing"); };
-    const onPause=()=>{ setAudioState(s=>s==="playing"?"paused":s); };
+    const onPause=()=>{
+      setAudioState(s=>s==="playing"?"paused":s);
+      // Self-heal: if iOS paused us against our wishes (musicOn is true, user
+      // has interacted), try to resume. Throttle to once per 500ms to avoid
+      // tight loops if iOS keeps refusing.
+      if(userHasInteractedRef.current && musicOnRef.current){
+        const now=Date.now();
+        if(now-lastRetryRef.current<500) return;
+        lastRetryRef.current=now;
+        const a=audioElRef.current;
+        if(a){
+          const p=a.play();
+          if(p && typeof p.then==="function") p.catch(()=>{});
+        }
+      }
+    };
     const onError=()=>{
       const e=a.error;
       const code=e?e.code:"?";
@@ -2803,7 +2828,6 @@ export default function App(){
   // attempt autoplay on mount or on canplay; on iOS that creates a race where
   // .play() resolves briefly then iOS fires "pause" right after, leaving us
   // stuck in a paused state. Instead we wait for an explicit user click.
-  const userHasInteractedRef=useRef(false);
   useEffect(()=>{
     const a=audioElRef.current;
     if(!a) return;
@@ -2820,6 +2844,34 @@ export default function App(){
       try{a.pause();}catch(e){}
     }
   },[musicOn,audioState==="ready"]);
+
+  // STEP 2.5: Global click insurance. Any click anywhere in the app re-asserts
+  // audio playback if iOS has stalled it. This is the safety net for the
+  // self-healing onPause handler — if iOS pauses our audio when the user
+  // navigates between views, the very next click will resume it.
+  useEffect(()=>{
+    const ensurePlaying=()=>{
+      if(!userHasInteractedRef.current) return;
+      if(!musicOnRef.current) return;
+      const a=audioElRef.current;
+      if(!a) return;
+      if(!a.paused) return; // already playing, no-op
+      const p=a.play();
+      if(p && typeof p.then==="function") p.catch(()=>{});
+      // Also kick the silent video in case its session was lost too.
+      const v=silentVideoRef.current;
+      if(v && v.paused){
+        const vp=v.play();
+        if(vp && typeof vp.then==="function") vp.catch(()=>{});
+      }
+    };
+    document.addEventListener("click",ensurePlaying);
+    document.addEventListener("touchend",ensurePlaying,{passive:true});
+    return()=>{
+      document.removeEventListener("click",ensurePlaying);
+      document.removeEventListener("touchend",ensurePlaying);
+    };
+  },[]);
 
   // Imperative starter — called from the TAP TO START click handler so .play()
   // runs SYNCHRONOUSLY inside the user gesture (the only way iOS reliably allows
