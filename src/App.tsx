@@ -2798,40 +2798,46 @@ export default function App(){
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // STEP 2: Play / pause based on musicOn. iOS requires the FIRST .play() to be
-  // inside a user gesture, so if autoplay fails we install a one-shot gesture
-  // listener that retries play() on the very next tap. After the first
-  // successful play, subsequent play()/pause() work freely.
+  // STEP 2: Play/pause based on musicOn — but ONLY after the user has unlocked
+  // audio via a click handler (see loadscreen onClick). We deliberately do NOT
+  // attempt autoplay on mount or on canplay; on iOS that creates a race where
+  // .play() resolves briefly then iOS fires "pause" right after, leaving us
+  // stuck in a paused state. Instead we wait for an explicit user click.
+  const userHasInteractedRef=useRef(false);
   useEffect(()=>{
     const a=audioElRef.current;
     if(!a) return;
-
+    if(!userHasInteractedRef.current) return; // wait for first click
     if(musicOn){
-      const attemptPlay=()=>{
-        const p=a.play();
-        if(p && typeof p.then==="function"){
-          p.catch(err=>{
-            // Autoplay blocked - mark blocked and listen for next gesture.
-            setAudioState("blocked");
-            const onGesture=()=>{
-              window.removeEventListener("pointerdown",onGesture);
-              window.removeEventListener("touchstart",onGesture);
-              window.removeEventListener("keydown",onGesture);
-              a.play().catch(e2=>{
-                setAudioError(`Play failed: ${e2&&e2.message||e2}`);
-              });
-            };
-            window.addEventListener("pointerdown",onGesture);
-            window.addEventListener("touchstart",onGesture,{passive:true});
-            window.addEventListener("keydown",onGesture);
-          });
-        }
-      };
-      attemptPlay();
+      const p=a.play();
+      if(p && typeof p.then==="function"){
+        p.catch(err=>{
+          setAudioError(`Play failed: ${err&&err.message||err}`);
+          setAudioState("blocked");
+        });
+      }
     } else {
       try{a.pause();}catch(e){}
     }
   },[musicOn,audioState==="ready"]);
+
+  // Imperative starter — called from the TAP TO START click handler so .play()
+  // runs SYNCHRONOUSLY inside the user gesture (the only way iOS reliably allows
+  // it). Also flips userHasInteractedRef so the STEP 2 effect takes over for
+  // subsequent musicOn toggles. Caller is responsible for deciding whether to
+  // call this (i.e. only when they want playback to start).
+  const startMusicFromGesture=()=>{
+    userHasInteractedRef.current=true;
+    const a=audioElRef.current;
+    if(!a) return;
+    const p=a.play();
+    if(p && typeof p.then==="function"){
+      p.catch(err=>{
+        setAudioError(`Play failed: ${err&&err.message||err}`);
+        setAudioState("blocked");
+      });
+    }
+  };
 
   // ─── iOS SILENT-SWITCH BYPASS ─────────────────────────────────────────────
   // PROBLEM: iOS Safari plays Web Audio API output through the "Ambient" audio
@@ -2952,7 +2958,7 @@ export default function App(){
 
   const views={
     loadscreen:(
-      <div onClick={()=>go("title")} style={{position:"fixed",inset:0,cursor:"pointer",background:"#000",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:999,overflow:"hidden"}}>
+      <div onClick={()=>{startMusicFromGesture();go("title");}} style={{position:"fixed",inset:0,cursor:"pointer",background:"#000",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",zIndex:999,overflow:"hidden"}}>
         <img src={"/loadscreen.png"} alt="Gooden 2003" style={{width:"100%",height:"100%",objectFit:"contain",objectPosition:"center",position:"absolute",inset:0}}/>
         <div style={{position:"absolute",bottom:50,left:0,right:0,textAlign:"center",animation:"pulse 1.5s ease-in-out infinite"}}>
           <div style={{fontSize:18,fontWeight:900,letterSpacing:5,textTransform:"uppercase",color:"white",textShadow:"0 2px 20px rgba(0,0,0,0.9)"}}>TAP TO START</div>
@@ -3831,13 +3837,10 @@ export default function App(){
           // Toggling off
           setMusicOn(false);
         } else {
-          // Toggling on — also kick the audio element if needed
+          // Toggling on — call startMusicFromGesture so play() runs synchronously
+          // inside this click event (required by iOS).
           setMusicOn(true);
-          const a=audioElRef.current;
-          if(a){
-            const p=a.play();
-            if(p&&p.catch) p.catch(()=>{});
-          }
+          startMusicFromGesture();
         }
       }} style={{
         position:"fixed",top:12,right:12,zIndex:400,
