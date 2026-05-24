@@ -2752,6 +2752,10 @@ export default function App(){
   const audioBufferRef=useRef(null);
   const sourceNodeRef=useRef(null);
   const gainNodeRef=useRef(null);
+  // Sustained silent BufferSource that loops from the moment of first user gesture
+  // until the real music starts. Keeps iOS in "actively playing audio" mode during
+  // the decode gap, otherwise iOS silently swallows the eventual source.start() call.
+  const primeSrcRef=useRef(null);
   // Hidden <video> used to bypass iOS Safari's silent-switch mute (see effect below).
   const silentVideoRef=useRef(null);
 
@@ -2768,15 +2772,16 @@ export default function App(){
         }
         const ctx=new AudioCtx();
         audioCtxRef.current=ctx;
-        // EARLY UNLOCK + iOS PRIME: install gesture listeners NOW, before fetch/decode finishes.
-        // The user's first tap (e.g. "TAP TO START") must do two things SYNCHRONOUSLY
-        // inside the gesture handler:
+        // EARLY UNLOCK + iOS SUSTAINED PRIME: install gesture listeners NOW, before
+        // fetch/decode finishes. The user's first tap (e.g. "TAP TO START") must do
+        // these SYNCHRONOUSLY inside the gesture handler:
         //   1. ctx.resume() — unlocks the AudioContext from "suspended" state
-        //   2. Play a 1-sample silent BufferSource — iOS Safari requires the FIRST
-        //      source.start() to happen inside a gesture. Once primed, subsequent
-        //      source.start() calls work freely, even outside gestures. Without this,
-        //      when our real MP3 finishes decoding a few seconds later, src.start()
-        //      silently produces no sound because the gesture has "expired".
+        //   2. Start a LOOPING silent BufferSource and keep it playing — iOS Safari
+        //      requires the page to be actively producing audio for source.start()
+        //      to work outside a gesture. A one-shot silent buffer ends in microseconds,
+        //      and iOS "forgets" we're playing audio by the time the real MP3 finishes
+        //      decoding (2-3 seconds later on mobile). A sustained loop bridges that gap.
+        // The prime is stopped once the real music starts (see startPlayback below).
         const earlyUnlock=()=>{
           const c=audioCtxRef.current;
           if(!c) return;
@@ -2784,13 +2789,18 @@ export default function App(){
             c.resume().catch(()=>{});
           }
           try{
-            // 1 sample × 22050 Hz = ~45 microseconds of silence. Inaudible, but
-            // satisfies iOS's "first source must start in a gesture" rule.
-            const silentBuffer=c.createBuffer(1,1,22050);
-            const silentSrc=c.createBufferSource();
-            silentSrc.buffer=silentBuffer;
-            silentSrc.connect(c.destination);
-            silentSrc.start(0);
+            if(!primeSrcRef.current){
+              // 2 seconds of silence at the context's native sample rate. createBuffer
+              // returns a zero-filled buffer, so it's truly silent. loop=true keeps
+              // iOS happy until we swap in the real music.
+              const silentBuffer=c.createBuffer(1, Math.floor(c.sampleRate*2), c.sampleRate);
+              const silentSrc=c.createBufferSource();
+              silentSrc.buffer=silentBuffer;
+              silentSrc.loop=true;
+              silentSrc.connect(c.destination);
+              silentSrc.start(0);
+              primeSrcRef.current=silentSrc;
+            }
           }catch(e){}
           window.removeEventListener("pointerdown",earlyUnlock);
           window.removeEventListener("keydown",earlyUnlock);
@@ -2828,6 +2838,7 @@ export default function App(){
     return()=>{
       cancelled=true;
       try{if(sourceNodeRef.current) sourceNodeRef.current.stop();}catch(e){}
+      try{if(primeSrcRef.current) primeSrcRef.current.stop();}catch(e){}
       try{if(audioCtxRef.current) audioCtxRef.current.close();}catch(e){}
     };
   },[]);
@@ -2861,6 +2872,13 @@ export default function App(){
         src.connect(gain);
         src.start(0);
         sourceNodeRef.current=src;
+        // Real music is now playing — stop the sustained silent prime. Leaving it
+        // running is harmless (it's silent) but pointless once real audio is going.
+        if(primeSrcRef.current){
+          try{primeSrcRef.current.stop();}catch(e){}
+          try{primeSrcRef.current.disconnect();}catch(e){}
+          primeSrcRef.current=null;
+        }
         setAudioState("playing");
       }catch(err){
         console.warn("[music] start failed:",err);
