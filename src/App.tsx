@@ -2740,195 +2740,98 @@ export default function App(){
   const [xferSel,setXferSel]=useState(null);
   const [skillPoints,setSkillPoints]=useState(100);
   const [intangs,setIntangs]=useState([]);
-  // Background music using the Web Audio API. Far more reliable than <audio> for embedded
-  // audio: it decodes the MP3 to raw PCM once, then plays from memory.
+  // Background music using HTMLAudioElement — the same approach YouTube, Spotify Web,
+  // etc. use for iOS reliability. Web Audio API was too finicky here: even after
+  // priming, iOS would silently swallow source.start() calls outside a gesture.
+  // <audio> elements handle the gesture/buffering dance themselves.
   const [musicOn,setMusicOn]=useState(true);
-  // States: "loading" → decoding the audio. "ready" → decoded, waiting for user gesture.
-  //         "playing" → currently audible. "paused" → toggled off. "error" → failed.
+  // States: "loading" → audio element loading. "ready" → loaded, can play.
+  //         "playing" → audible. "paused" → toggled off. "blocked" → autoplay denied.
+  //         "error" → failed to load.
   const [audioState,setAudioState]=useState("loading");
   // Detailed error message for the debug overlay
   const [audioError,setAudioError]=useState("");
-  const audioCtxRef=useRef(null);
-  const audioBufferRef=useRef(null);
-  const sourceNodeRef=useRef(null);
-  const gainNodeRef=useRef(null);
-  // Sustained silent BufferSource that loops from the moment of first user gesture
-  // until the real music starts. Keeps iOS in "actively playing audio" mode during
-  // the decode gap, otherwise iOS silently swallows the eventual source.start() call.
-  const primeSrcRef=useRef(null);
+  const audioElRef=useRef(null);
   // Hidden <video> used to bypass iOS Safari's silent-switch mute (see effect below).
   const silentVideoRef=useRef(null);
 
-  // STEP 1: Decode the embedded MP3 once on mount.
+  // STEP 1: Create the HTMLAudioElement on mount. It loads in the background.
   useEffect(()=>{
-    let cancelled=false;
-    const decode=async()=>{
-      try{
-        const AudioCtx=window.AudioContext||window.webkitAudioContext;
-        if(!AudioCtx){
-          setAudioError("AudioContext API not supported in this browser");
-          setAudioState("error");
-          return;
-        }
-        const ctx=new AudioCtx();
-        audioCtxRef.current=ctx;
-        // EARLY UNLOCK + iOS SUSTAINED PRIME: install gesture listeners NOW, before
-        // fetch/decode finishes. The user's first tap (e.g. "TAP TO START") must do
-        // these SYNCHRONOUSLY inside the gesture handler:
-        //   1. ctx.resume() — unlocks the AudioContext from "suspended" state
-        //   2. Start a LOOPING silent BufferSource and keep it playing — iOS Safari
-        //      requires the page to be actively producing audio for source.start()
-        //      to work outside a gesture. A one-shot silent buffer ends in microseconds,
-        //      and iOS "forgets" we're playing audio by the time the real MP3 finishes
-        //      decoding (2-3 seconds later on mobile). A sustained loop bridges that gap.
-        // The prime is stopped once the real music starts (see startPlayback below).
-        const earlyUnlock=()=>{
-          const c=audioCtxRef.current;
-          if(!c) return;
-          if(c.state==="suspended"){
-            c.resume().catch(()=>{});
-          }
-          try{
-            if(!primeSrcRef.current){
-              // 2 seconds of silence at the context's native sample rate. createBuffer
-              // returns a zero-filled buffer, so it's truly silent. loop=true keeps
-              // iOS happy until we swap in the real music.
-              const silentBuffer=c.createBuffer(1, Math.floor(c.sampleRate*2), c.sampleRate);
-              const silentSrc=c.createBufferSource();
-              silentSrc.buffer=silentBuffer;
-              silentSrc.loop=true;
-              silentSrc.connect(c.destination);
-              silentSrc.start(0);
-              primeSrcRef.current=silentSrc;
-            }
-          }catch(e){}
-          window.removeEventListener("pointerdown",earlyUnlock);
-          window.removeEventListener("keydown",earlyUnlock);
-          window.removeEventListener("touchstart",earlyUnlock);
-        };
-        window.addEventListener("pointerdown",earlyUnlock);
-        window.addEventListener("keydown",earlyUnlock);
-        window.addEventListener("touchstart",earlyUnlock,{passive:true});
-        // MUSIC_SRC is a URL to /public — fetch() the audio file, then decode.
-        const resp = await fetch(MUSIC_SRC);
-        if(!resp.ok) throw new Error(`Fetch failed: ${resp.status} ${resp.statusText}`);
-        const arrayBuffer = await resp.arrayBuffer();
-        if(cancelled) return;
-        // decodeAudioData accepts an ArrayBuffer directly.
-        const buffer = await new Promise((res,rej)=>{
-          try{
-            const p=ctx.decodeAudioData(arrayBuffer,res,rej);
-            if(p&&p.then) p.then(res,rej);
-          }catch(e){rej(e);}
-        });
-        if(cancelled) return;
-        audioBufferRef.current=buffer;
-        const gain=ctx.createGain();
-        gain.gain.value=0.45;
-        gain.connect(ctx.destination);
-        gainNodeRef.current=gain;
-        setAudioState(ctx.state==="running"?"ready":"blocked");
-      }catch(err){
-        console.error("[music] decode failed:",err);
-        setAudioError(`Decode failed: ${err&&err.message||err}`);
-        setAudioState("error");
-      }
+    const a=new Audio();
+    a.src=MUSIC_SRC;
+    a.loop=true;
+    a.preload="auto";
+    a.volume=0.45;
+    // playsInline keeps iOS from showing native player controls / going fullscreen
+    a.setAttribute("playsinline","");
+    a.setAttribute("webkit-playsinline","");
+    audioElRef.current=a;
+
+    const onCanPlay=()=>{ setAudioState(s=>s==="loading"?"ready":s); };
+    const onPlaying=()=>{ setAudioState("playing"); };
+    const onPause=()=>{ setAudioState(s=>s==="playing"?"paused":s); };
+    const onError=()=>{
+      const e=a.error;
+      const code=e?e.code:"?";
+      setAudioError(`Audio load error (code ${code})`);
+      setAudioState("error");
     };
-    decode();
+    a.addEventListener("canplaythrough",onCanPlay);
+    a.addEventListener("canplay",onCanPlay);
+    a.addEventListener("playing",onPlaying);
+    a.addEventListener("pause",onPause);
+    a.addEventListener("error",onError);
+
+    // Kick off loading
+    try{ a.load(); }catch(e){}
+
     return()=>{
-      cancelled=true;
-      try{if(sourceNodeRef.current) sourceNodeRef.current.stop();}catch(e){}
-      try{if(primeSrcRef.current) primeSrcRef.current.stop();}catch(e){}
-      try{if(audioCtxRef.current) audioCtxRef.current.close();}catch(e){}
+      a.removeEventListener("canplaythrough",onCanPlay);
+      a.removeEventListener("canplay",onCanPlay);
+      a.removeEventListener("playing",onPlaying);
+      a.removeEventListener("pause",onPause);
+      a.removeEventListener("error",onError);
+      try{a.pause();}catch(e){}
+      a.src="";
+      audioElRef.current=null;
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
 
-  // STEP 2: Start/stop playback. Re-run whenever musicOn changes or audio is decoded.
+  // STEP 2: Play / pause based on musicOn. iOS requires the FIRST .play() to be
+  // inside a user gesture, so if autoplay fails we install a one-shot gesture
+  // listener that retries play() on the very next tap. After the first
+  // successful play, subsequent play()/pause() work freely.
   useEffect(()=>{
-    const ctx=audioCtxRef.current;
-    const buffer=audioBufferRef.current;
-    const gain=gainNodeRef.current;
-    if(!ctx||!buffer||!gain) return;
-
-    const startPlayback=async()=>{
-      try{
-        // Resume the AudioContext (browsers create it in "suspended" state until user gesture)
-        if(ctx.state==="suspended"){
-          await ctx.resume();
-        }
-        if(ctx.state!=="running"){
-          // Still blocked — needs a user gesture
-          setAudioState("blocked");
-          return;
-        }
-        // BufferSourceNodes are one-shot. If we already have one playing, leave it alone.
-        if(sourceNodeRef.current){
-          setAudioState("playing");
-          return;
-        }
-        const src=ctx.createBufferSource();
-        src.buffer=buffer;
-        src.loop=true;
-        src.connect(gain);
-        src.start(0);
-        sourceNodeRef.current=src;
-        // Real music is now playing — stop the sustained silent prime. Leaving it
-        // running is harmless (it's silent) but pointless once real audio is going.
-        if(primeSrcRef.current){
-          try{primeSrcRef.current.stop();}catch(e){}
-          try{primeSrcRef.current.disconnect();}catch(e){}
-          primeSrcRef.current=null;
-        }
-        setAudioState("playing");
-      }catch(err){
-        console.warn("[music] start failed:",err);
-        setAudioError(`Start failed: ${err&&err.message||err}`);
-        setAudioState("blocked");
-      }
-    };
-
-    const stopPlayback=async()=>{
-      try{
-        if(sourceNodeRef.current){
-          sourceNodeRef.current.stop();
-          sourceNodeRef.current=null;
-        }
-        if(ctx.state==="running"){
-          await ctx.suspend();
-        }
-        setAudioState("paused");
-      }catch(err){
-        console.warn("[music] stop failed:",err);
-      }
-    };
+    const a=audioElRef.current;
+    if(!a) return;
 
     if(musicOn){
-      startPlayback();
-      // iOS Safari requires ctx.resume() to be called SYNCHRONOUSLY inside the
-      // gesture handler — not after an await. So the unlock fires resume()
-      // immediately (no async), then once the context is running it kicks
-      // startPlayback() which can use awaits safely.
-      const unlock=()=>{
-        if(ctx.state==="suspended"){
-          // Fire-and-forget — Safari only cares that resume() was CALLED inside
-          // the gesture, not that it resolves. The promise resolves on next tick.
-          ctx.resume().then(()=>{startPlayback();}).catch(()=>{});
-        } else {
-          startPlayback();
+      const attemptPlay=()=>{
+        const p=a.play();
+        if(p && typeof p.then==="function"){
+          p.catch(err=>{
+            // Autoplay blocked - mark blocked and listen for next gesture.
+            setAudioState("blocked");
+            const onGesture=()=>{
+              window.removeEventListener("pointerdown",onGesture);
+              window.removeEventListener("touchstart",onGesture);
+              window.removeEventListener("keydown",onGesture);
+              a.play().catch(e2=>{
+                setAudioError(`Play failed: ${e2&&e2.message||e2}`);
+              });
+            };
+            window.addEventListener("pointerdown",onGesture);
+            window.addEventListener("touchstart",onGesture,{passive:true});
+            window.addEventListener("keydown",onGesture);
+          });
         }
       };
-      window.addEventListener("pointerdown",unlock);
-      window.addEventListener("keydown",unlock);
-      window.addEventListener("touchstart",unlock,{passive:true});
-      return()=>{
-        window.removeEventListener("pointerdown",unlock);
-        window.removeEventListener("keydown",unlock);
-        window.removeEventListener("touchstart",unlock);
-      };
+      attemptPlay();
     } else {
-      stopPlayback();
+      try{a.pause();}catch(e){}
     }
-  },[musicOn,audioState==="ready"||audioState==="blocked"]);
+  },[musicOn,audioState==="ready"]);
 
   // ─── iOS SILENT-SWITCH BYPASS ─────────────────────────────────────────────
   // PROBLEM: iOS Safari plays Web Audio API output through the "Ambient" audio
@@ -3928,11 +3831,12 @@ export default function App(){
           // Toggling off
           setMusicOn(false);
         } else {
-          // Toggling on — also kick the AudioContext if needed
+          // Toggling on — also kick the audio element if needed
           setMusicOn(true);
-          const ctx=audioCtxRef.current;
-          if(ctx&&ctx.state==="suspended"){
-            ctx.resume().catch(()=>{});
+          const a=audioElRef.current;
+          if(a){
+            const p=a.play();
+            if(p&&p.catch) p.catch(()=>{});
           }
         }
       }} style={{
