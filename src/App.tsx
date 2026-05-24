@@ -2777,6 +2777,11 @@ const SAVE_KEY = "gooden2003_save_v1";
 // Bump this version if the save shape changes incompatibly. Old saves with a
 // lower version will be ignored (treated as no save) rather than crashing.
 const SAVE_VERSION = 1;
+// Screens that are NOT part of the career flow — these are menu/info pages
+// the user can visit at any time. We don't save them as the "resume to"
+// destination, otherwise hitting "Resume Career" from the title would just
+// return you to the title.
+const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras"]);
 
 // Read a save from localStorage. Returns null if missing, malformed, or from
 // an incompatible version.
@@ -2844,8 +2849,23 @@ export default function App(){
   useEffect(()=>{
     if(!player.name) return;
     if(screen==="loadscreen") return;
+    // When the user is on a menu screen (title, options, etc.) DON'T overwrite
+    // the saved screen — otherwise "Resume Career" would just send them right
+    // back to the menu. Read the previous save's screen and keep that as the
+    // resume destination.
+    let screenToSave=screen;
+    if(MENU_SCREENS.has(screen)){
+      const prev=loadSave();
+      if(prev && prev.screen && !MENU_SCREENS.has(prev.screen)){
+        screenToSave=prev.screen;
+      } else {
+        // First time saving and we're on a menu — skip the save entirely;
+        // we'll write a proper one once the user gets to a career screen.
+        return;
+      }
+    }
     writeSave({
-      screen, player, starTier, school, priorities, year, allYears,
+      screen:screenToSave, player, starTier, school, priorities, year, allYears,
       agent, workoutPlayer, workoutDone, agentAttention,
       interviewDone, combineDone, combineScore, interviewScore,
       seasonResult, xferSel, skillPoints, intangs,
@@ -2876,9 +2896,16 @@ export default function App(){
     if(data.xferSel!==undefined) setXferSel(data.xferSel);
     if(data.skillPoints!==undefined) setSkillPoints(data.skillPoints);
     if(data.intangs) setIntangs(data.intangs);
-    // Jump back to where they were (or title if their saved screen was
-    // somehow loadscreen/missing).
-    setScreen(data.screen && data.screen!=="loadscreen" ? data.screen : "title");
+    // Jump back to where they were. If the saved screen is somehow a menu
+    // screen (legacy saves from before the menu-screen guard was added), fall
+    // back to "bio" — early in the flow — rather than dumping them back on
+    // the title screen they just left.
+    const saved=data.screen;
+    if(saved && !MENU_SCREENS.has(saved)){
+      setScreen(saved);
+    } else {
+      setScreen("bio");
+    }
   };
 
   // Wipe the save and reset career state — used by "New Career" when a save
