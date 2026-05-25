@@ -199,6 +199,198 @@ function fmtMoney(n){
   return `$${n}`;
 }
 
+// ─── 2003-04 NBA ROSTER DATA ───────────────────────────────────────────────────
+// Real records and ~9-deep rotations from Basketball-Reference.com for the
+// 2003-04 season. Players listed: [name, position, OVR, PPG]. OVRs are scout-
+// style approximations (60-99) based on season performance. The player gets
+// slotted into this rotation by OVR at their position when they join the team.
+//
+// Note: 2003-04 was the season BEFORE Charlotte Bobcats joined the league (they
+// debuted 2004-05). For continuity with our team list, the Bobcats are included
+// as a hypothetical expansion roster.
+const NBA_2003_DATA = {
+  "Atlanta Hawks": {w:28, l:54, players:[
+    ["Stephen Jackson","SG",78,18.1],["Shareef Abdur-Rahim","PF",80,20.1],
+    ["Theo Ratliff","C",73,13.3],["Boris Diaw","PG",70,4.5],
+    ["Jason Terry","PG",77,16.8],["Predrag Drobnjak","C",68,8.0],
+    ["Chris Crawford","SF",65,5.7],["Jason Collier","C",62,4.1],
+    ["Tony Delk","PG",66,6.3]]},
+  "Boston Celtics": {w:36, l:46, players:[
+    ["Paul Pierce","SF",87,23.0],["Antoine Walker","PF",75,15.5],
+    ["Mark Blount","C",72,10.3],["Ricky Davis","SG",76,16.0],
+    ["Marcus Banks","PG",65,5.0],["Walter McCarty","SF",64,5.0],
+    ["Raef LaFrentz","PF",71,9.4],["Jiri Welsch","SG",66,7.7],
+    ["Chucky Atkins","PG",68,8.5]]},
+  "Chicago Bulls": {w:23, l:59, players:[
+    ["Jamal Crawford","SG",75,17.3],["Eddy Curry","C",73,14.7],
+    ["Tyson Chandler","C",70,6.1],["Kirk Hinrich","PG",74,12.0],
+    ["Scottie Pippen","SF",72,5.9],["Marcus Fizer","PF",68,9.2],
+    ["Eddie Robinson","SF",65,5.6],["Linton Johnson","PF",60,3.8],
+    ["Jerome Williams","PF",66,4.7]]},
+  "Cleveland Cavaliers": {w:35, l:47, players:[
+    ["LeBron James","SF",88,20.9],["Carlos Boozer","PF",78,15.5],
+    ["Zydrunas Ilgauskas","C",80,15.3],["Ricky Davis","SG",76,15.3],
+    ["Eric Snow","PG",70,7.6],["Dajuan Wagner","PG",65,4.5],
+    ["Jeff McInnis","PG",72,9.8],["Ira Newble","SF",62,4.0],
+    ["DeSagana Diop","C",60,1.8]]},
+  "Dallas Mavericks": {w:52, l:30, players:[
+    ["Dirk Nowitzki","PF",90,21.8],["Steve Nash","PG",84,14.5],
+    ["Michael Finley","SG",79,18.6],["Antawn Jamison","SF",80,14.8],
+    ["Antoine Walker","PF",75,14.0],["Josh Howard","SF",73,8.3],
+    ["Marquis Daniels","SG",72,10.3],["Shawn Bradley","C",68,3.7],
+    ["Jamison Brewer","PG",60,2.0]]},
+  "Denver Nuggets": {w:43, l:39, players:[
+    ["Carmelo Anthony","SF",82,21.0],["Andre Miller","PG",76,14.8],
+    ["Marcus Camby","C",78,11.0],["Nene","PF",74,11.8],
+    ["Voshon Lenard","SG",71,11.2],["Earl Boykins","PG",70,9.6],
+    ["Jon Barry","SG",65,5.7],["Rodney White","SF",62,4.7],
+    ["Kenny Satterfield","PG",58,2.5]]},
+  "Detroit Pistons": {w:54, l:28, players:[
+    ["Chauncey Billups","PG",83,16.9],["Richard Hamilton","SG",81,17.6],
+    ["Ben Wallace","C",84,9.5],["Rasheed Wallace","PF",82,13.7],
+    ["Tayshaun Prince","SF",77,10.3],["Corliss Williamson","PF",70,9.4],
+    ["Mehmet Okur","C",72,9.6],["Lindsey Hunter","PG",65,5.3],
+    ["Mike James","PG",67,5.4]]},
+  "Golden State Warriors": {w:37, l:45, players:[
+    ["Jason Richardson","SG",80,18.7],["Mike Dunleavy","SF",73,11.7],
+    ["Erick Dampier","C",75,12.3],["Nick Van Exel","PG",75,12.5],
+    ["Troy Murphy","PF",72,10.9],["Cliff Robinson","PF",70,9.9],
+    ["Speedy Claxton","PG",68,9.2],["Calbert Cheaney","SG",62,4.7],
+    ["Adonal Foyle","C",65,5.7]]},
+  "Houston Rockets": {w:45, l:37, players:[
+    ["Yao Ming","C",84,17.5],["Steve Francis","PG",82,16.6],
+    ["Cuttino Mobley","SG",78,15.8],["Jim Jackson","SF",72,11.7],
+    ["Maurice Taylor","PF",70,9.7],["Eric Piatkowski","SF",65,6.4],
+    ["Bostjan Nachbar","SF",62,4.4],["Kelvin Cato","C",66,4.4],
+    ["Mike Wilks","PG",58,2.5]]},
+  "Indiana Pacers": {w:61, l:21, players:[
+    ["Jermaine O'Neal","PF",87,20.1],["Ron Artest","SF",83,18.3],
+    ["Reggie Miller","SG",76,10.0],["Jamaal Tinsley","PG",73,8.0],
+    ["Al Harrington","PF",72,13.3],["Jeff Foster","C",68,5.3],
+    ["Austin Croshere","PF",65,6.3],["Anthony Johnson","PG",66,5.5],
+    ["Fred Jones","SG",64,4.1]]},
+  "LA Clippers": {w:28, l:54, players:[
+    ["Elton Brand","PF",82,20.0],["Corey Maggette","SF",78,20.7],
+    ["Quentin Richardson","SG",76,17.2],["Marko Jaric","PG",70,8.6],
+    ["Chris Kaman","C",70,6.1],["Bobby Simmons","SF",68,5.5],
+    ["Lamond Murray","SF",65,6.4],["Eddie House","PG",65,6.4],
+    ["Olden Polynice","C",60,2.4]]},
+  "LA Lakers": {w:56, l:26, players:[
+    ["Kobe Bryant","SG",91,24.0],["Shaquille O'Neal","C",92,21.5],
+    ["Karl Malone","PF",80,13.2],["Gary Payton","PG",80,14.6],
+    ["Devean George","SF",68,7.7],["Derek Fisher","PG",72,7.1],
+    ["Rick Fox","SF",65,4.7],["Slava Medvedenko","PF",66,8.3],
+    ["Brian Cook","PF",62,3.6]]},
+  "Memphis Grizzlies": {w:50, l:32, players:[
+    ["Pau Gasol","PF",83,17.7],["Mike Miller","SG",75,13.7],
+    ["James Posey","SF",74,13.0],["Jason Williams","PG",75,11.0],
+    ["Bonzi Wells","SG",73,11.7],["Stromile Swift","PF",70,9.6],
+    ["Lorenzen Wright","C",68,5.3],["Earl Watson","PG",68,5.7],
+    ["Shane Battier","SF",70,8.4]]},
+  "Miami Heat": {w:42, l:40, players:[
+    ["Dwyane Wade","SG",81,16.2],["Lamar Odom","PF",80,17.1],
+    ["Eddie Jones","SG",75,12.7],["Caron Butler","SF",73,9.2],
+    ["Brian Grant","PF",70,9.8],["Rafer Alston","PG",72,10.6],
+    ["Udonis Haslem","PF",70,7.5],["Loren Woods","C",60,2.8],
+    ["Samaki Walker","C",60,2.9]]},
+  "Milwaukee Bucks": {w:41, l:41, players:[
+    ["Michael Redd","SG",83,21.7],["T.J. Ford","PG",73,7.1],
+    ["Desmond Mason","SG",75,15.3],["Joe Smith","PF",72,11.0],
+    ["Brian Skinner","C",68,5.9],["Damon Jones","PG",70,10.1],
+    ["Tim Thomas","SF",70,12.0],["Toni Kukoc","SF",68,8.0],
+    ["Daniel Santiago","C",58,3.2]]},
+  "Minnesota Timberwolves": {w:58, l:24, players:[
+    ["Kevin Garnett","PF",92,24.2],["Sam Cassell","PG",81,19.8],
+    ["Latrell Sprewell","SG",78,16.8],["Wally Szczerbiak","SF",75,12.0],
+    ["Trenton Hassell","SF",70,7.4],["Michael Olowokandi","C",65,6.5],
+    ["Ervin Johnson","C",62,2.6],["Fred Hoiberg","SG",68,5.4],
+    ["Troy Hudson","PG",65,5.0]]},
+  "New Jersey Nets": {w:47, l:35, players:[
+    ["Jason Kidd","PG",87,15.5],["Richard Jefferson","SF",78,18.5],
+    ["Kenyon Martin","PF",80,16.7],["Kerry Kittles","SG",73,10.3],
+    ["Jason Collins","C",68,6.4],["Brian Scalabrine","PF",60,2.6],
+    ["Rodney Rogers","PF",65,6.4],["Lucious Harris","SG",68,7.7],
+    ["Aaron Williams","PF",62,5.0]]},
+  "New Orleans Hornets": {w:41, l:41, players:[
+    ["Baron Davis","PG",83,22.9],["Jamal Mashburn","SF",75,20.0],
+    ["David Wesley","PG",73,12.5],["P.J. Brown","PF",72,9.0],
+    ["Jamaal Magloire","C",75,13.6],["George Lynch","SF",65,4.6],
+    ["Stacey Augmon","SF",62,3.3],["Robert Traylor","C",60,3.5],
+    ["Darrell Armstrong","PG",66,6.5]]},
+  "New York Knicks": {w:39, l:43, players:[
+    ["Stephon Marbury","PG",82,19.8],["Allan Houston","SG",78,18.5],
+    ["Keith Van Horn","PF",73,16.4],["Kurt Thomas","C",72,12.5],
+    ["Dikembe Mutombo","C",70,5.6],["Penny Hardaway","SG",68,9.1],
+    ["Tim Thomas","SF",70,12.3],["Frank Williams","PG",60,2.5],
+    ["Othella Harrington","PF",62,5.3]]},
+  "Orlando Magic": {w:21, l:61, players:[
+    ["Tracy McGrady","SG",88,28.0],["Drew Gooden","PF",75,12.3],
+    ["Tyronn Lue","PG",70,9.3],["Juwan Howard","PF",73,17.0],
+    ["Andrew DeClercq","C",60,3.5],["Gordan Giricek","SG",68,10.7],
+    ["Pat Garrity","SF",65,6.3],["Reece Gaines","PG",58,2.5],
+    ["Steven Hunter","C",60,4.0]]},
+  "Philadelphia 76ers": {w:33, l:49, players:[
+    ["Allen Iverson","SG",87,26.4],["Glenn Robinson","SF",75,16.6],
+    ["Eric Snow","PG",70,9.4],["Kenny Thomas","PF",72,12.5],
+    ["Samuel Dalembert","C",70,7.6],["Aaron McKie","SG",68,8.7],
+    ["Derrick Coleman","PF",65,7.4],["Marc Jackson","C",62,5.8],
+    ["Willie Green","PG",65,5.8]]},
+  "Phoenix Suns": {w:29, l:53, players:[
+    ["Stephon Marbury","PG",82,20.8],["Shawn Marion","SF",84,19.0],
+    ["Amar'e Stoudemire","PF",81,20.6],["Joe Johnson","SG",76,16.7],
+    ["Bo Outlaw","SF",65,4.7],["Casey Jacobsen","SG",65,4.5],
+    ["Tom Gugliotta","PF",65,4.1],["Howard Eisley","PG",62,3.4],
+    ["Jake Voskuhl","C",60,3.4]]},
+  "Portland Trail Blazers": {w:41, l:41, players:[
+    ["Damon Stoudamire","PG",75,13.4],["Rasheed Wallace","PF",80,14.1],
+    ["Bonzi Wells","SG",73,12.9],["Ruben Patterson","SF",72,12.6],
+    ["Zach Randolph","PF",78,20.1],["Theo Ratliff","C",73,11.2],
+    ["Derek Anderson","SG",70,11.0],["Travis Outlaw","SF",62,2.7],
+    ["Dale Davis","PF",65,4.3]]},
+  "Sacramento Kings": {w:55, l:27, players:[
+    ["Peja Stojakovic","SF",85,24.2],["Chris Webber","PF",82,18.7],
+    ["Mike Bibby","PG",80,18.4],["Brad Miller","C",78,14.1],
+    ["Vlade Divac","C",73,9.9],["Doug Christie","SG",75,11.7],
+    ["Bobby Jackson","PG",75,15.2],["Anthony Peeler","SG",65,5.9],
+    ["Gerald Wallace","SF",70,7.2]]},
+  "San Antonio Spurs": {w:57, l:25, players:[
+    ["Tim Duncan","PF",89,22.3],["Tony Parker","PG",80,14.7],
+    ["Manu Ginobili","SG",81,12.8],["Bruce Bowen","SF",73,6.6],
+    ["Rasho Nesterovic","C",70,8.7],["Hedo Turkoglu","SF",73,9.2],
+    ["Malik Rose","PF",70,8.0],["Devin Brown","SG",65,5.9],
+    ["Robert Horry","PF",68,4.8]]},
+  "Seattle SuperSonics": {w:37, l:45, players:[
+    ["Ray Allen","SG",86,23.0],["Rashard Lewis","SF",80,17.8],
+    ["Vladimir Radmanovic","PF",72,9.9],["Brent Barry","SG",73,10.4],
+    ["Antonio Daniels","PG",70,9.6],["Nick Collison","PF",68,5.7],
+    ["Reggie Evans","PF",65,4.4],["Calvin Booth","C",62,3.5],
+    ["Luke Ridnour","PG",70,7.2]]},
+  "Toronto Raptors": {w:33, l:49, players:[
+    ["Vince Carter","SG",83,22.5],["Chris Bosh","PF",78,11.5],
+    ["Jalen Rose","SF",76,15.3],["Alvin Williams","PG",70,9.7],
+    ["Donyell Marshall","PF",72,11.8],["Morris Peterson","SF",70,11.9],
+    ["Jerome Williams","PF",65,4.0],["Lonny Baxter","C",60,3.2],
+    ["Milt Palacio","PG",60,3.0]]},
+  "Utah Jazz": {w:42, l:40, players:[
+    ["Andrei Kirilenko","SF",84,16.5],["Carlos Arroyo","PG",74,12.6],
+    ["Matt Harpring","SF",72,13.5],["Greg Ostertag","C",65,4.0],
+    ["DeShawn Stevenson","SG",70,11.5],["Raul Lopez","PG",65,5.3],
+    ["Tom Gugliotta","PF",65,5.1],["Jarron Collins","C",62,3.5],
+    ["Gordan Giricek","SG",68,10.2]]},
+  "Washington Wizards": {w:25, l:57, players:[
+    ["Gilbert Arenas","PG",81,19.6],["Larry Hughes","SG",78,18.8],
+    ["Jerry Stackhouse","SG",76,15.0],["Kwame Brown","PF",70,10.9],
+    ["Brendan Haywood","C",70,7.9],["Jared Jeffries","SF",65,6.0],
+    ["Etan Thomas","C",65,4.0],["Christian Laettner","PF",65,7.9],
+    ["Steve Blake","PG",62,3.6]]},
+  "Charlotte Bobcats": {w:30, l:52, players:[
+    ["Emeka Okafor","C",75,15.1],["Gerald Wallace","SF",74,11.1],
+    ["Brevin Knight","PG",70,10.1],["Primoz Brezec","C",68,13.0],
+    ["Jason Kapono","SF",65,7.4],["Melvin Ely","PF",62,5.8],
+    ["Keith Bogans","SG",65,8.8],["Steve Smith","SG",65,6.5],
+    ["Jahidi White","C",60,3.1]]},
+};
+
 const IQ_QUESTIONS = [
   "What makes you different from every other prospect in this draft?",
 ];
@@ -2663,7 +2855,7 @@ function ShoeDealsBlock({pick, isLottery, onSign, signedBrand, toast}){
 }
 
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,setPlayer,skillPoints,setSkillPoints,money,setMoney,signedShoeBrand,setSignedShoeBrand,toast}){
+function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,setPlayer,skillPoints,setSkillPoints,money,setMoney,signedShoeBrand,setSignedShoeBrand,setNbaTeam,go,toast}){
   // Reveal stages: black-out → "with the Xth pick" → team name → "selects..." → name + jersey
   const [stage,setStage]=useState("intro"); // intro → onClock → teamReveal → playerReveal → details
   const [pick,setPick]=useState(null);
@@ -3070,10 +3262,13 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
           </div>
         )}
 
-<div style={{background:"rgba(0,0,0,0.3)",borderRadius:12,padding:14}}>
-          <div style={{fontSize:13,color:OR,fontWeight:700,marginBottom:4}}>🏆 Part 1 Complete!</div>
-          <div style={{fontSize:12,color:"#888",lineHeight:1.5}}>The NBA journey starts in Part 2. Your build, draft slot, and {isSecondRound?"G League placement":"team"} carry over.</div>
-        </div>
+        {/* Continue to the NBA hub — captures the team affiliation. */}
+        <button onClick={()=>{
+          setNbaTeam&&setNbaTeam(team);
+          go&&go("leagueHub");
+        }} style={{...btnS,fontSize:16,padding:14,marginTop:8}}>
+          {isSecondRound?"OFF TO G LEAGUE":"WELCOME TO THE LEAGUE"} →
+        </button>
       </div>
     );
   }
@@ -3128,6 +3323,525 @@ function clearSave(){
   }catch(e){}
 }
 
+// ─── NBA HELPERS ───────────────────────────────────────────────────────────────
+// Look up the player's actual rotation slot on their team. Uses the player's
+// position and OVR vs the existing roster's OVRs at that position. Returns the
+// depth-chart index (0=starter, 1=first off bench, etc.) and starter status.
+function calcRotationSlot(player, teamName){
+  const data=NBA_2003_DATA[teamName];
+  if(!data) return {slot:99, minutes:8, isStarter:false};
+  const pos=player.position||"SG";
+  const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
+  // Players at the same position, sorted by OVR descending
+  const samePos=data.players.filter(p=>p[1]===pos).sort((a,b)=>b[2]-a[2]);
+  // Count how many existing players at this position are better
+  const betterCount=samePos.filter(p=>p[2]>playerOvr).length;
+  const slot=betterCount;
+  const isStarter=slot===0;
+  // Minutes by depth: 0→34, 1→24, 2→14, 3→8, 4+→4
+  const mpgBySlot=[34,24,14,8,4];
+  const minutes=mpgBySlot[Math.min(slot,4)];
+  return {slot, minutes, isStarter};
+}
+
+// Run-of-season stat generator. Given the player's profile, mini-game points,
+// and minutes, produce per-game PPG/RPG/APG/FG% for THIS chunk of games.
+function generateNbaGameStats(player, totalPts, made, minutes, mentor){
+  const posMult={
+    PG:{ppg:0.85,apg:1.6,rpg:0.55},
+    SG:{ppg:1.00,apg:0.9,rpg:0.65},
+    SF:{ppg:0.95,apg:0.7,rpg:0.95},
+    PF:{ppg:0.90,apg:0.5,rpg:1.40},
+    C: {ppg:0.85,apg:0.4,rpg:1.70},
+  };
+  const pm=posMult[player.position]||posMult.SG;
+  // Minutes factor — 36 minutes is "full starter load"
+  const minFactor=minutes/36;
+  // Scoring skill influences PPG
+  const scoringSkill=((player.skills?.threePoint||50)+(player.skills?.midRange||50)+(player.skills?.finishing||50))/3;
+  const scoringMult=0.70+scoringSkill/200;
+  // Height bonus for rebounds
+  const heightBonus=Math.max(0,(player.height-74)*0.18);
+  // Mentor bump: +5% across the board if they have a mentor
+  const mentorMult=mentor?1.05:1.0;
+  // Mini-game performance ratio (0.0-1.0 of max 15 pts across 5 games)
+  const perf=Math.min(1,totalPts/15);
+  // PPG calculation — blends position role × scoring skill × minutes × perf
+  const ppg=parseFloat((perf*22*minFactor*pm.ppg*scoringMult*mentorMult).toFixed(1));
+  // APG
+  const playmaking=(player.skills?.playmaking||50)/10;
+  const apg=parseFloat((playmaking*minFactor*pm.apg*mentorMult).toFixed(1));
+  // RPG
+  const rebounding=(player.skills?.rebounding||50)/9;
+  const rpg=parseFloat((rebounding*minFactor*pm.rpg+heightBonus*minFactor).toFixed(1));
+  // FG% — roughly 40-55% range based on shot accuracy
+  const fgPct=Math.round(38+(perf*15)+(scoringSkill-50)*0.1);
+  return {ppg, apg, rpg, fg:clamp(fgPct,30,60)};
+}
+
+// Returns a sorted-by-OVR-then-position depth chart array for display. The
+// player is inserted at their proper slot.
+function buildDepthChart(player, teamName){
+  const data=NBA_2003_DATA[teamName];
+  if(!data) return [];
+  const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
+  const playerEntry={name:player.name||"You", position:player.position, ovr:playerOvr, ppg:0, isPlayer:true};
+  // Convert roster array to objects
+  const all=data.players.map(p=>({name:p[0], position:p[1], ovr:p[2], ppg:p[3], isPlayer:false}));
+  all.push(playerEntry);
+  // Group by position, sort each group by OVR desc
+  const byPos={};
+  ["PG","SG","SF","PF","C"].forEach(p=>{
+    byPos[p]=all.filter(x=>x.position===p).sort((a,b)=>b.ovr-a.ovr);
+  });
+  return byPos;
+}
+
+// ─── NBA GAME RUNNER ───────────────────────────────────────────────────────────
+// Reuses the same 5 mini-games but feeds results into NBA stat calculations.
+// Each completed sequence = "41 games" of chunked simulation. The orchestrator
+// reports {totalPts, made, gameDetails} on completion.
+function NbaGameSequence({player, mentor, minutes, onComplete}){
+  // The "difficulty" in the NBA is higher across the board — every defender
+  // is a pro. We base it on the player's slot quality (lower slot = harder
+  // matchups for them since better defenders guard the starters).
+  const difficulty=1.3;
+  const [gameIdx,setGameIdx]=useState(0);
+  const [results,setResults]=useState([]);
+  const [phase,setPhase]=useState("intro");
+  const handleResult=(r)=>{
+    const next=[...results,r];
+    setResults(next);
+    if(next.length>=MINI_GAMES.length){
+      const totalPts=next.reduce((a,b)=>a+(b.pts||0),0);
+      const made=next.filter(x=>x.made).length;
+      onComplete&&onComplete({totalPts,made,details:next});
+    } else {
+      setGameIdx(next.length);
+    }
+  };
+  const gameType=MINI_GAMES[gameIdx];
+  const props={player,difficulty,onResult:handleResult,key:gameIdx};
+  if(phase==="intro") return(
+    <div style={{textAlign:"center",padding:"20px 0"}}>
+      <div style={{fontSize:11,letterSpacing:3,color:OR,marginBottom:10,textTransform:"uppercase"}}>Game Stretch</div>
+      <div style={{fontSize:13,color:"#aaa",marginBottom:6,lineHeight:1.5}}>You'll play 5 key situations representing 41 games of the season.</div>
+      <div style={{fontSize:12,color:"#888",marginBottom:18}}>Your stat line will be based on minutes ({minutes}/game), performance, and skill.</div>
+      <button onClick={()=>setPhase("playing")} style={{...btnS,width:"auto",padding:"12px 36px"}}>BEGIN STRETCH →</button>
+    </div>
+  );
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,fontSize:11,color:"#888"}}>
+        <span>Game {gameIdx+1}/{MINI_GAMES.length}</span>
+        <span>{minutes} min/game · {mentor?`Mentor: ${mentor}`:"No mentor"}</span>
+      </div>
+      <div style={{display:"flex",gap:3,marginBottom:14}}>
+        {MINI_GAMES.map((_,i)=>(
+          <div key={i} style={{flex:1,height:4,borderRadius:2,background:i<results.length?(results[i].made?GR:RE):i===gameIdx?OR:"rgba(255,255,255,0.08)"}}/>
+        ))}
+      </div>
+      {gameType==="shot"&&<ShotMeterGame {...props}/>}
+      {gameType==="defense"&&<DefenseGame {...props}/>}
+      {gameType==="possession"&&<OffensivePossessionGame {...props}/>}
+      {gameType==="steal"&&<StealAndDunkGame {...props}/>}
+      {gameType==="pass"&&<PassingGame {...props}/>}
+    </div>
+  );
+}
+
+// ─── LEAGUE HUB ────────────────────────────────────────────────────────────────
+// The post-draft "home screen" — like the title menu, but with the team logo,
+// current W-L record, and 5 menu options.
+function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals, playoffsDone, go}){
+  const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
+  const season=NBA_2003_DATA[nbaTeam]||{w:0,l:0};
+  // Current season's projected record proportional to games played
+  const gp=nbaGamesPlayed;
+  const projectedW=Math.round((season.w*gp)/82);
+  const projectedL=gp-projectedW;
+  const seasonsPlayed=nbaSeasons.length;
+  const yearLabel=`${2003+seasonsPlayed}-${String(2004+seasonsPlayed).slice(2)}`;
+  // Determine playoff eligibility — top 8 in each conference. With our data
+  // ~50% of teams qualify. A team with ≥41 wins always makes it; below that,
+  // we use the season record.
+  const madePlayoffs=season.w>=41;
+  // What does "Play" actually do right now?
+  const regSeasonDone=gp>=82;
+  const playoffsAvailable=regSeasonDone && madePlayoffs && !playoffsDone;
+  let playLabel="PLAY";
+  let playSub="";
+  if(gp===0) playSub=`Start the ${yearLabel} season (41 games)`;
+  else if(gp<82) playSub=`Continue season — ${gp}/82 played`;
+  else if(playoffsAvailable) {playLabel="PLAYOFFS";playSub="Season over — playoff run begins";}
+  else if(playoffsDone) {playLabel="OFFSEASON";playSub="Season complete — start next year";}
+  else if(regSeasonDone && !madePlayoffs) {playLabel="OFFSEASON";playSub="Missed the playoffs — start next year";}
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      {/* Team header — logo + record */}
+      <div style={{
+        background:`linear-gradient(135deg, ${teamData.p}44 0%, rgba(0,0,0,0.6) 80%)`,
+        border:`1px solid ${teamData.p}66`,
+        borderRadius:14, padding:"16px 18px", marginBottom:16,
+        display:"flex", alignItems:"center", gap:14
+      }}>
+        <TeamEmblem colors={{p:teamData.p,s:teamData.s}} abbr={teamData.abbr} name={nbaTeam} size={66} logoUrl={teamData.logoUrl}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",textTransform:"uppercase",marginBottom:2}}>{yearLabel} Season</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{nbaTeam}</div>
+          <div style={{fontSize:13,color:"#ddd",marginTop:3}}>
+            <span style={{color:GR,fontWeight:700}}>{projectedW}</span> – <span style={{color:RE,fontWeight:700}}>{projectedL}</span>
+            <span style={{color:"#666",marginLeft:8,fontSize:11}}>{gp}/82</span>
+          </div>
+        </div>
+      </div>
+      {/* Menu options */}
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        <button onClick={()=>go("nbaPlay")} style={{...btnS,padding:"14px 16px",textAlign:"left",position:"relative"}}>
+          <div style={{fontSize:16,fontWeight:900,letterSpacing:2}}>▶ {playLabel}</div>
+          {playSub&&<div style={{fontSize:11,fontWeight:400,color:"rgba(0,0,0,0.6)",marginTop:2,letterSpacing:0.5}}>{playSub}</div>}
+        </button>
+        <button onClick={()=>go("nbaSkills")} style={{...ghostS,padding:"12px 16px",textAlign:"left"}}>
+          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>⚡ SKILLS</div>
+          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Spend skill points to improve your player</div>
+        </button>
+        <button onClick={()=>go("nbaTeam")} style={{...ghostS,padding:"12px 16px",textAlign:"left"}}>
+          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>👥 TEAM</div>
+          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Roster, depth chart, mentor</div>
+        </button>
+        <button onClick={()=>go("nbaBank")} style={{...ghostS,padding:"12px 16px",textAlign:"left",opacity:0.6}}>
+          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>💰 BANK</div>
+          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Coming soon</div>
+        </button>
+        <button onClick={()=>go("nbaStats")} style={{...ghostS,padding:"12px 16px",textAlign:"left"}}>
+          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>📊 STATS</div>
+          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Career stats — college & pros</div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
+function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, go, toast}){
+  const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
+  const season=NBA_2003_DATA[nbaTeam]||{w:0,l:0};
+  const {slot, minutes, isStarter}=calcRotationSlot(player,nbaTeam);
+  const gp=nbaGamesPlayed;
+  const regSeasonDone=gp>=82;
+  const madePlayoffs=season.w>=41;
+  const isPlayoffRun=regSeasonDone && madePlayoffs && !playoffsDone;
+  const seasonsPlayed=nbaSeasons.length;
+  const yearLabel=`${2003+seasonsPlayed}-${String(2004+seasonsPlayed).slice(2)}`;
+
+  // Offseason path — finalize the season's stats into history, reset season totals,
+  // and bounce back to the hub.
+  if((regSeasonDone&&!madePlayoffs)||(regSeasonDone&&madePlayoffs&&playoffsDone)){
+    return(
+      <div style={{textAlign:"center",padding:"24px 0"}}>
+        <div style={{fontSize:10,letterSpacing:3,color:"#aaa",marginBottom:6}}>{yearLabel} SEASON</div>
+        <div style={{fontSize:24,fontWeight:900,color:OR,marginBottom:14}}>OFFSEASON</div>
+        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:12,padding:16,marginBottom:14,textAlign:"left"}}>
+          <Lbl color="#ddd">Final {yearLabel} Stats</Lbl>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,textAlign:"center",marginTop:8}}>
+            {[
+              ["PPG",nbaSeasonTotals.games>0?(nbaSeasonTotals.pts/nbaSeasonTotals.games).toFixed(1):"--"],
+              ["RPG",nbaSeasonTotals.games>0?(nbaSeasonTotals.reb/nbaSeasonTotals.games).toFixed(1):"--"],
+              ["APG",nbaSeasonTotals.games>0?(nbaSeasonTotals.ast/nbaSeasonTotals.games).toFixed(1):"--"],
+              ["GP",nbaSeasonTotals.games],
+            ].map(([l,v])=>(
+              <div key={l}>
+                <div style={{fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:2}}>{l}</div>
+                <div style={{fontSize:18,fontWeight:900,color:OR}}>{v}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{marginTop:12,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",fontSize:11,color:"#aaa"}}>
+            Team record: <span style={{color:GR,fontWeight:700}}>{season.w}</span>-<span style={{color:RE,fontWeight:700}}>{season.l}</span> {madePlayoffs?"· Made playoffs ✓":"· Missed playoffs"}
+          </div>
+        </div>
+        <button onClick={()=>{
+          // Push this season into history, then reset for next year.
+          const totals=nbaSeasonTotals;
+          const seasonEntry={
+            year:yearLabel, team:nbaTeam, teamRecord:`${season.w}-${season.l}`, madePlayoffs,
+            gp:totals.games,
+            ppg:totals.games>0?+(totals.pts/totals.games).toFixed(1):0,
+            rpg:totals.games>0?+(totals.reb/totals.games).toFixed(1):0,
+            apg:totals.games>0?+(totals.ast/totals.games).toFixed(1):0,
+            fg:totals.fga>0?Math.round((totals.fgm/totals.fga)*100):0,
+          };
+          setNbaSeasons(prev=>[...prev,seasonEntry]);
+          setNbaGamesPlayed(0);
+          setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
+          setPlayoffsDone(false);
+          go("leagueHub");
+        }} style={{...btnS,padding:"12px 32px"}}>NEXT SEASON →</button>
+      </div>
+    );
+  }
+
+  // Active game stretch (regular or playoff).
+  const stretchSize=isPlayoffRun?16:41;
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:isPlayoffRun?YE:OR,marginBottom:4,textTransform:"uppercase"}}>
+          {isPlayoffRun?"🏆 Playoff Run":(gp===0?`${yearLabel} Season — Games 1-41`:`Games 42-82`)}
+        </div>
+        <div style={{fontSize:13,color:"#aaa"}}>
+          {isStarter?"STARTER":`Bench · slot ${slot+1}`} · ~{minutes} MPG
+        </div>
+      </div>
+      <NbaGameSequence
+        player={player}
+        mentor={nbaMentor}
+        minutes={minutes}
+        onComplete={({totalPts,made})=>{
+          // Generate stats for this stretch
+          const stats=generateNbaGameStats(player,totalPts,made,minutes,nbaMentor);
+          // Apply to season totals (each stretch = `stretchSize` games)
+          setNbaSeasonTotals(prev=>({
+            pts:prev.pts+stats.ppg*stretchSize,
+            reb:prev.reb+stats.rpg*stretchSize,
+            ast:prev.ast+stats.apg*stretchSize,
+            games:prev.games+stretchSize,
+            fgm:prev.fgm+Math.round(stats.fg*0.18*stretchSize),
+            fga:prev.fga+Math.round(0.18*100*stretchSize),
+          }));
+          if(isPlayoffRun){
+            setPlayoffsDone(true);
+            toast&&toast(`Playoffs done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG`,YE);
+          } else {
+            setNbaGamesPlayed(g=>g+41);
+            toast&&toast(`Stretch done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG`,OR);
+          }
+          go("leagueHub");
+        }}
+      />
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginTop:14,padding:"10px 0"}}>← Back to Hub</button>
+    </div>
+  );
+}
+
+// ─── NBA SKILLS ────────────────────────────────────────────────────────────────
+// Lets player spend skill points to improve attributes during the season.
+function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, toast}){
+  const skills=player.skills||{};
+  // Use the global SKILLS list so labels & icons match the rest of the game.
+  const SKILL_LIST=SKILLS;
+  const bumpSkill=(id)=>{
+    if(skillPoints<=0) return toast&&toast("Out of skill points","#888");
+    const cur=skills[id]||50;
+    if(cur>=99) return toast&&toast(`${id} is maxed at 99`,"#888");
+    setPlayer(p=>({...p,skills:{...p.skills,[id]:Math.min(99,(p.skills?.[id]||50)+1)}}));
+    setSkillPoints(p=>p-1);
+  };
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Train</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SKILLS</div>
+        <div style={{fontSize:13,color:"#aaa",marginTop:4}}>Skill Points: <span style={{color:YE,fontWeight:900,fontSize:16}}>{skillPoints}</span></div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+        {SKILL_LIST.map(s=>{
+          const v=skills[s.id]||50;
+          return(
+            <div key={s.id} style={{display:"flex",alignItems:"center",gap:10,background:"rgba(255,255,255,0.04)",padding:"10px 12px",borderRadius:8}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700,color:"#fff"}}>{s.icon} {s.label}</div>
+                <div style={{height:5,background:"rgba(255,255,255,0.08)",borderRadius:3,marginTop:5,overflow:"hidden"}}>
+                  <div style={{height:"100%",width:`${v}%`,background:v>=80?GR:v>=65?OR:"#888"}}/>
+                </div>
+              </div>
+              <div style={{fontSize:14,fontWeight:900,color:OR,minWidth:28,textAlign:"right"}}>{v}</div>
+              <button onClick={()=>bumpSkill(s.id)} disabled={skillPoints<=0||v>=99} style={{padding:"6px 12px",background:skillPoints>0&&v<99?OR:"rgba(255,255,255,0.08)",border:"none",borderRadius:6,color:skillPoints>0&&v<99?"#080c10":"#666",fontWeight:900,cursor:skillPoints>0&&v<99?"pointer":"default",fontSize:13,fontFamily:"'Barlow Condensed',sans-serif"}}>+1</button>
+            </div>
+          );
+        })}
+      </div>
+      <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+    </div>
+  );
+}
+
+// ─── NBA TEAM ──────────────────────────────────────────────────────────────────
+// Roster view by position with depth chart. Mentor selection at the top.
+function NbaTeamScreen({player, nbaTeam, nbaMentor, setNbaMentor, skillPoints, setSkillPoints, go, toast}){
+  const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
+  const depthChart=buildDepthChart(player,nbaTeam);
+  const {slot, minutes}=calcRotationSlot(player,nbaTeam);
+  const [showMentorPick,setShowMentorPick]=useState(false);
+
+  const chooseMentor=(name)=>{
+    if(nbaMentor){
+      toast&&toast(`You already have a mentor: ${nbaMentor}`,"#888");
+      return;
+    }
+    setNbaMentor(name);
+    setSkillPoints(p=>p+5);
+    toast&&toast(`${name} is now your mentor! +5 SP`,GR);
+    setShowMentorPick(false);
+  };
+
+  // Eligible mentors = veterans (OVR >= 75) on the team, NOT including the player.
+  const data=NBA_2003_DATA[nbaTeam];
+  const mentorCandidates=data?data.players.filter(p=>p[2]>=75).map(p=>({name:p[0],pos:p[1],ovr:p[2]})):[];
+
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Roster</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff",lineHeight:1.1}}>{nbaTeam}</div>
+        <div style={{fontSize:12,color:"#aaa",marginTop:4}}>Your slot: #{slot+1} at {player.position} · ~{minutes} MPG</div>
+      </div>
+
+      {/* Mentor block */}
+      <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${nbaMentor?GO:"rgba(255,215,0,0.18)"}55`,borderRadius:10,padding:12,marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <div>
+            <div style={{fontSize:10,letterSpacing:2,color:GO,textTransform:"uppercase",fontWeight:700}}>Mentor</div>
+            <div style={{fontSize:15,fontWeight:900,color:"#fff",marginTop:2}}>{nbaMentor||"No mentor selected"}</div>
+            <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{nbaMentor?"+5% performance boost (active)":"Pick a vet for a one-time +5 SP"}</div>
+          </div>
+          {!nbaMentor&&mentorCandidates.length>0&&(
+            <button onClick={()=>setShowMentorPick(s=>!s)} style={{padding:"7px 12px",background:GO,border:"none",borderRadius:6,color:"#080c10",fontWeight:900,cursor:"pointer",fontSize:11,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>{showMentorPick?"CANCEL":"CHOOSE"}</button>
+          )}
+        </div>
+        {showMentorPick&&(
+          <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:5}}>
+            {mentorCandidates.map(m=>(
+              <button key={m.name} onClick={()=>chooseMentor(m.name)} style={{textAlign:"left",padding:"8px 11px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:6,color:"#fff",cursor:"pointer",fontSize:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                <span style={{fontWeight:700}}>{m.name}</span> <span style={{color:"#888"}}>· {m.pos} · {m.ovr} OVR</span>
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Depth chart by position */}
+      {["PG","SG","SF","PF","C"].map(pos=>(
+        <div key={pos} style={{marginBottom:14,background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px"}}>
+          <div style={{fontSize:10,letterSpacing:2,color:OR,textTransform:"uppercase",marginBottom:6,fontWeight:700}}>{pos}</div>
+          {(depthChart[pos]||[]).map((p,i)=>(
+            <div key={p.name+i} style={{
+              display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"6px 8px",marginBottom:3,
+              background:p.isPlayer?"rgba(232,135,58,0.18)":"transparent",
+              border:p.isPlayer?`1px solid ${OR}66`:"1px solid transparent",
+              borderRadius:5
+            }}>
+              <div>
+                <span style={{fontSize:10,color:"#666",marginRight:8,fontFamily:"monospace"}}>{i+1}.</span>
+                <span style={{fontSize:13,fontWeight:p.isPlayer?900:600,color:p.isPlayer?OR:"#ddd"}}>{p.name}</span>
+                {p.isPlayer&&<span style={{fontSize:9,color:OR,marginLeft:6,letterSpacing:1}}>YOU</span>}
+              </div>
+              <div style={{fontSize:12,color:"#aaa"}}>
+                <span style={{color:p.ovr>=85?GR:p.ovr>=75?OR:"#888",fontWeight:700}}>{p.ovr}</span>
+                <span style={{color:"#555",marginLeft:6,fontSize:10}}>OVR</span>
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+
+      <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+    </div>
+  );
+}
+
+// ─── NBA BANK (coming soon) ────────────────────────────────────────────────────
+function NbaBankScreen({money, go}){
+  return(
+    <div style={{textAlign:"center",padding:"30px 0"}}>
+      <div style={{fontSize:48,marginBottom:8}}>💰</div>
+      <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:4}}>BANK</div>
+      <div style={{fontSize:13,color:"#aaa",marginBottom:6}}>Current balance</div>
+      <div style={{fontSize:32,fontWeight:900,color:GR,marginBottom:24}}>{fmtMoney(money||0)}</div>
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:18,fontSize:12,color:"#888",lineHeight:1.6}}>
+        Coming soon: contracts, endorsements, investments, charity, off-court spending.
+      </div>
+      <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+    </div>
+  );
+}
+
+// ─── NBA STATS ─────────────────────────────────────────────────────────────────
+function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPlayed, nbaTeam, go}){
+  const college=allYears||[];
+  // Current season (in progress) as an active row
+  const seasonsPlayed=nbaSeasons.length;
+  const currentYearLabel=`${2003+seasonsPlayed}-${String(2004+seasonsPlayed).slice(2)}`;
+  const liveSeason=nbaGamesPlayed>0?{
+    year:currentYearLabel+" (live)",team:nbaTeam,
+    gp:nbaSeasonTotals.games,
+    ppg:nbaSeasonTotals.games>0?+(nbaSeasonTotals.pts/nbaSeasonTotals.games).toFixed(1):0,
+    rpg:nbaSeasonTotals.games>0?+(nbaSeasonTotals.reb/nbaSeasonTotals.games).toFixed(1):0,
+    apg:nbaSeasonTotals.games>0?+(nbaSeasonTotals.ast/nbaSeasonTotals.games).toFixed(1):0,
+    fg:nbaSeasonTotals.fga>0?Math.round((nbaSeasonTotals.fgm/nbaSeasonTotals.fga)*100):0,
+  }:null;
+  const allNba=[...nbaSeasons,...(liveSeason?[liveSeason]:[])];
+
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Career</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>STATS</div>
+      </div>
+
+      {/* College / Overseas section */}
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
+        <Lbl color="#ddd">College / Overseas</Lbl>
+        {college.length===0?(
+          <div style={{fontSize:12,color:"#888",fontStyle:"italic",padding:"8px 0"}}>No college games played.</div>
+        ):(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"1.4fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:4,paddingBottom:4,borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+              <div>SCHOOL</div><div style={{textAlign:"right"}}>PPG</div><div style={{textAlign:"right"}}>RPG</div><div style={{textAlign:"right"}}>APG</div><div style={{textAlign:"right"}}>FG%</div>
+            </div>
+            {college.map((y,i)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1.4fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<college.length-1?"1px solid rgba(255,255,255,0.04)":"none"}}>
+                <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{y.school?.name||"—"}</div>
+                <div style={{textAlign:"right",color:OR,fontWeight:700}}>{y.stats?.ppg||"—"}</div>
+                <div style={{textAlign:"right",color:"#ddd"}}>{y.stats?.rpg||"—"}</div>
+                <div style={{textAlign:"right",color:"#ddd"}}>{y.stats?.apg||"—"}</div>
+                <div style={{textAlign:"right",color:"#ddd"}}>{y.stats?.fg?y.stats.fg+"%":"—"}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* NBA section */}
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
+        <Lbl color="#ddd">NBA</Lbl>
+        {allNba.length===0?(
+          <div style={{fontSize:12,color:"#888",fontStyle:"italic",padding:"8px 0"}}>No NBA games played yet.</div>
+        ):(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"1.2fr 0.4fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:4,paddingBottom:4,borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+              <div>YEAR</div><div style={{textAlign:"right"}}>GP</div><div style={{textAlign:"right"}}>PPG</div><div style={{textAlign:"right"}}>RPG</div><div style={{textAlign:"right"}}>APG</div><div style={{textAlign:"right"}}>FG%</div>
+            </div>
+            {allNba.map((s,i)=>(
+              <div key={i} style={{display:"grid",gridTemplateColumns:"1.2fr 0.4fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<allNba.length-1?"1px solid rgba(255,255,255,0.04)":"none"}}>
+                <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.year}</div>
+                <div style={{textAlign:"right",color:"#aaa"}}>{s.gp}</div>
+                <div style={{textAlign:"right",color:OR,fontWeight:700}}>{s.ppg}</div>
+                <div style={{textAlign:"right",color:"#ddd"}}>{s.rpg}</div>
+                <div style={{textAlign:"right",color:"#ddd"}}>{s.apg}</div>
+                <div style={{textAlign:"right",color:"#ddd"}}>{s.fg}%</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+    </div>
+  );
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
   const [screen,setScreen]=useState("loadscreen");
@@ -3155,6 +3869,26 @@ export default function App(){
   // Which shoe brand the player signed with (full brand object or null).
   // Locked in once selected — players sign with at most one brand.
   const [signedShoeBrand,setSignedShoeBrand]=useState(null);
+  // ─── NBA PHASE STATE ───────────────────────────────────────────────────────
+  // The team the player was drafted by. Set once at the end of DraftScreen
+  // (when they continue past the summary). Persists for the whole NBA career.
+  const [nbaTeam,setNbaTeam]=useState(null);
+  // Current season's game count. Each "Play" click runs 41 games. After 82
+  // (full regular season), if the team makes the playoffs, one more click
+  // simulates the playoff run.
+  const [nbaGamesPlayed,setNbaGamesPlayed]=useState(0);
+  // Cumulative season-in-progress totals — averaged into per-game stats at
+  // the end-of-season recap and pushed into nbaSeasons history.
+  const [nbaSeasonTotals,setNbaSeasonTotals]=useState({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
+  // Mentor: a veteran player on the team. Selected once per team affiliation
+  // — gives a one-time +5 SP bonus. Resets if the player ever switches teams.
+  // Stored as the player's name string (matched against NBA_2003_DATA roster).
+  const [nbaMentor,setNbaMentor]=useState(null);
+  // Per-season history. Each entry: {year, team, gp, ppg, rpg, apg, fg%, teamRecord, madePlayoffs, wonChamp}
+  const [nbaSeasons,setNbaSeasons]=useState([]);
+  // Tracks whether the current season's playoffs have been simulated.
+  // Reset to false when a new season starts (after first "Play" of the next year).
+  const [playoffsDone,setPlayoffsDone]=useState(false);
   // Whether a save exists in localStorage. Drives the "Resume Career" button
   // on the title screen. Refreshed when we save, clear, or load.
   const [hasSave,setHasSave]=useState(()=>loadSave()!==null);
@@ -3187,9 +3921,10 @@ export default function App(){
       interviewDone, combineDone, combineScore, interviewScore,
       seasonResult, xferSel, skillPoints, intangs,
       money, signedShoeBrand,
+      nbaTeam, nbaGamesPlayed, nbaSeasonTotals, nbaMentor, nbaSeasons, playoffsDone,
     });
     setHasSave(true);
-  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs,money,signedShoeBrand]);
+  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs,money,signedShoeBrand,nbaTeam,nbaGamesPlayed,nbaSeasonTotals,nbaMentor,nbaSeasons,playoffsDone]);
 
   // Restore a saved career into all the state slots, then navigate to the
   // screen they were on when they last played.
@@ -3216,6 +3951,12 @@ export default function App(){
     if(data.intangs) setIntangs(data.intangs);
     if(data.money!==undefined) setMoney(data.money);
     if(data.signedShoeBrand!==undefined) setSignedShoeBrand(data.signedShoeBrand);
+    if(data.nbaTeam!==undefined) setNbaTeam(data.nbaTeam);
+    if(data.nbaGamesPlayed!==undefined) setNbaGamesPlayed(data.nbaGamesPlayed);
+    if(data.nbaSeasonTotals!==undefined) setNbaSeasonTotals(data.nbaSeasonTotals);
+    if(data.nbaMentor!==undefined) setNbaMentor(data.nbaMentor);
+    if(data.nbaSeasons!==undefined) setNbaSeasons(data.nbaSeasons);
+    if(data.playoffsDone!==undefined) setPlayoffsDone(data.playoffsDone);
     // Jump back to where they were. If the saved screen is a menu screen
     // (legacy saves from before the menu-screen guard was added), infer the
     // best resume point from the saved progress data — much better UX than
@@ -3233,6 +3974,10 @@ export default function App(){
   // reverse order and picks the latest step the player has reached.
   function inferCareerScreen(data){
     if(!data) return "bio";
+    // Made it to the NBA — leagueHub is the home base from here on.
+    if(data.nbaTeam){
+      return "leagueHub";
+    }
     // Post-college: interview / combine / draft prep
     if(data.combineDone||data.combineScore!=null||data.interviewDone||data.interviewScore!=null){
       return "predraft";
@@ -3279,6 +4024,8 @@ export default function App(){
     setSeasonResult(null);setXferSel(null);
     setSkillPoints(100);setIntangs([]);
     setMoney(0);setSignedShoeBrand(null);
+    setNbaTeam(null);setNbaGamesPlayed(0);setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
+    setNbaMentor(null);setNbaSeasons([]);setPlayoffsDone(false);
     setScreen("bio");
   };
   // Background music using HTMLAudioElement — the same approach YouTube, Spotify Web,
@@ -4489,7 +5236,38 @@ export default function App(){
 
     draft:(
       <MenuFrame sub="Draft Night" title="THE CALL">
-        <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} money={money} setMoney={setMoney} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} toast={toast}/>
+        <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} money={money} setMoney={setMoney} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} setNbaTeam={setNbaTeam} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+
+    leagueHub:(
+      <MenuFrame sub="The Association" title={(nbaTeam||"NBA").toUpperCase()}>
+        <LeagueHub player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} nbaGamesPlayed={nbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} playoffsDone={playoffsDone} go={go}/>
+      </MenuFrame>
+    ),
+    nbaPlay:(
+      <MenuFrame sub={`${nbaTeam||"Team"} · Season`} title="GAMETIME">
+        <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaSkills:(
+      <MenuFrame sub="Train" title="SKILLS">
+        <NbaSkillsScreen player={player} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaTeam:(
+      <MenuFrame sub="Roster & Mentor" title="TEAM">
+        <NbaTeamScreen player={player} nbaTeam={nbaTeam} nbaMentor={nbaMentor} setNbaMentor={setNbaMentor} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaBank:(
+      <MenuFrame sub="Coming Soon" title="BANK">
+        <NbaBankScreen money={money} go={go}/>
+      </MenuFrame>
+    ),
+    nbaStats:(
+      <MenuFrame sub="College & NBA" title="CAREER STATS">
+        <NbaStatsScreen player={player} allYears={allYears} nbaSeasons={nbaSeasons} nbaSeasonTotals={nbaSeasonTotals} nbaGamesPlayed={nbaGamesPlayed} nbaTeam={nbaTeam} go={go}/>
       </MenuFrame>
     ),
   };
