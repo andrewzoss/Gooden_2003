@@ -1444,9 +1444,13 @@ function OffensivePossessionGame({player, difficulty, onResult}){
   useEffect(()=>{
     if(phase!=="shooting") return;
     meterValRef.current=0;
+    // Pass-count multiplier: each pass before the shot increases meter speed,
+    // capped at 3 passes (60% boost). This rewards quick decisions — if you
+    // pass the ball around hunting for an open look, the shot window shrinks.
+    const passBoost=1+Math.min(passCount,3)*0.2;
     const step=()=>{
       setMeter(m=>{
-        const n=m+meterDir.current*(0.85+difficulty*0.2);
+        const n=m+meterDir.current*(0.85+difficulty*0.2)*passBoost;
         let next;
         if(n>=100){meterDir.current=-1;next=100;}
         else if(n<=0){meterDir.current=1;next=0;}
@@ -1666,7 +1670,7 @@ function OffensivePossessionGame({player, difficulty, onResult}){
 // ─── SEASON GAME ORCHESTRATOR ──────────────────────────────────────────────────
 const MINI_GAMES=["shot","defense","possession","steal","pass"];
 
-function SeasonGame({player, school, priorities, year, starTier, onEnd}){
+function SeasonGame({player, school, priorities, year, starTier, allYears=[], onEnd}){
   // Combined difficulty: school strength × star tier expectations.
   // starTier is now a real prop (was previously expected on player.starTier but
   // never passed there). Falls back to player.starTier for any legacy callers.
@@ -1691,11 +1695,24 @@ function SeasonGame({player, school, priorities, year, starTier, onEnd}){
     // 5★: +20%, 4★: +12%, 3★: +5%, 2★: 0%. Capped at 100% so we don't exceed reality.
     // This stacks on top of the school's baseline playTime.
     const starTierBonus=tier?Math.max(0,(tier.stars-2)*0.07):0;
+    // Returning-player bonus — each prior season played AT THIS SAME SCHOOL
+    // adds 6% playing time. So a sophomore returner gets +6%, a junior +12%,
+    // a senior +18%. This represents earning trust with the coaching staff
+    // and growing into the rotation. It does NOT carry across transfers —
+    // moving schools means starting over from the bottom of the depth chart.
+    // EXCEPTION: if the player transferred UP to a school they don't quite
+    // qualify for (their star tier is below the school's minStars), this
+    // bonus is wiped AND a small penalty applies — they're a project there.
+    const priorYearsHere=allYears.filter(y=>y.school?.id===school.id).length;
+    const playerStars=tier?.stars||3;
+    const overReached=school.minStars && playerStars<school.minStars;
+    const returnerBonus=overReached?-0.08:priorYearsHere*0.06;
+    const totalPlayBonus=starTierBonus+returnerBonus;
     const devGains={};
     priorities.forEach((pid,i)=>{
       const w=[1.0,0.7,0.4][i];
       const sb=school.devStrengths.includes(pid)?1.5:0.8;
-      const pb=Math.min(1.0,school.playTime/100+starTierBonus);
+      const pb=Math.max(0.3,Math.min(1.0,school.playTime/100+totalPlayBonus));
       const perf=totalPts/(MINI_GAMES.length*3);
       devGains[pid]=Math.max(1,Math.round(w*sb*pb*perf*rand(3,9)));
     });
@@ -1726,9 +1743,10 @@ function SeasonGame({player, school, priorities, year, starTier, onEnd}){
       C: {ppg:0.90,apg:0.5,rpg:1.90},
     };
     const pm=posMult[player.position]||posMult.SG;
-    // Same star-tier playing-time bonus applied to PPG/APG/RPG: higher-rated
-    // recruits get more minutes, which means more counting stats.
-    const playTimePct=Math.min(1.0,(school.playTime||80)/100+starTierBonus);
+    // Same playing-time bonus applied to PPG/APG/RPG: higher-rated recruits
+    // and returning players get more minutes, which means more counting stats.
+    // Floor at 30% so overreached transfers still see some action.
+    const playTimePct=Math.max(0.3,Math.min(1.0,(school.playTime||80)/100+totalPlayBonus));
     // Height in inches. League avg by position roughly: PG ~73, SG ~76, SF ~79, PF ~82, C ~83
     // A 7-footer (84") gets a meaningful rebound bonus.
     const heightBonus=Math.max(0,(player.height-74)*0.20);
@@ -4158,7 +4176,7 @@ export default function App(){
     season:(
       <div>
         <Hd sub={`${START_YEAR+year-1}-${String(START_YEAR+year).slice(2)} — Game Time`} title="SEASON"/>
-        <SeasonGame player={player} school={school} priorities={priorities} year={year} starTier={starTier} onEnd={(res)=>{
+        <SeasonGame player={player} school={school} priorities={priorities} year={year} starTier={starTier} allYears={allYears} onEnd={(res)=>{
           setSeasonResult(res);
           setPlayer(p=>{
             const ns={...p.skills};
