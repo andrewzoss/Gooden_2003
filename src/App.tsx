@@ -139,7 +139,7 @@ const NBA_TEAMS = [
   "Atlanta Hawks","Boston Celtics","Chicago Bulls","Cleveland Cavaliers","Dallas Mavericks",
   "Denver Nuggets","Detroit Pistons","Golden State Warriors","Houston Rockets","Indiana Pacers",
   "LA Clippers","LA Lakers","Memphis Grizzlies","Miami Heat","Milwaukee Bucks",
-  "Minnesota Timberwolves","New Orleans Hornets","New York Knicks","Oklahoma City Thunder",
+  "Minnesota Timberwolves","New Orleans Hornets","New York Knicks","Seattle SuperSonics",
   "Orlando Magic","Philadelphia 76ers","Phoenix Suns","Portland Trail Blazers",
   "Sacramento Kings","San Antonio Spurs","Toronto Raptors","Utah Jazz","Washington Wizards",
   "Charlotte Bobcats","New Jersey Nets",
@@ -147,36 +147,36 @@ const NBA_TEAMS = [
 
 // Era-accurate team colors for 2003-04 jersey reveals
 const NBA_TEAM_DATA = {
-  "Atlanta Hawks":{p:"#E03A3E",s:"#C1D32F",abbr:"ATL",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Atlanta_Hawks_logo.svg"},
-  "Boston Celtics":{p:"#007A33",s:"#FFFFFF",abbr:"BOS",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Boston_Celtics.svg"},
-  "Chicago Bulls":{p:"#CE1141",s:"#000000",abbr:"CHI",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Chicago_Bulls_logo.svg"},
-  "Cleveland Cavaliers":{p:"#860038",s:"#FDBB30",abbr:"CLE",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Cleveland_Cavaliers_logo.svg"},
-  "Dallas Mavericks":{p:"#00538C",s:"#002B5E",abbr:"DAL",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Dallas_Mavericks_logo.svg"},
-  "Denver Nuggets":{p:"#0E2240",s:"#FEC524",abbr:"DEN",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Denver_Nuggets.svg"},
-  "Detroit Pistons":{p:"#C8102E",s:"#1D42BA",abbr:"DET",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Detroit_Pistons_logo.svg"},
-  "Golden State Warriors":{p:"#1D428A",s:"#FFC72C",abbr:"GSW",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Golden_State_Warriors_logo.svg"},
-  "Houston Rockets":{p:"#CE1141",s:"#000000",abbr:"HOU",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Houston_Rockets.svg"},
-  "Indiana Pacers":{p:"#002D62",s:"#FDBB30",abbr:"IND",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Indiana_Pacers.svg"},
-  "LA Clippers":{p:"#C8102E",s:"#1D428A",abbr:"LAC",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Los_Angeles_Clippers_(2024).svg"},
-  "LA Lakers":{p:"#552583",s:"#FDB927",abbr:"LAL",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Los_Angeles_Lakers_logo.svg"},
-  "Memphis Grizzlies":{p:"#5D76A9",s:"#12173F",abbr:"MEM",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Memphis_Grizzlies.svg"},
-  "Miami Heat":{p:"#98002E",s:"#F9A01B",abbr:"MIA",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Miami_Heat_logo.svg"},
-  "Milwaukee Bucks":{p:"#00471B",s:"#EEE1C6",abbr:"MIL",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Milwaukee_Bucks_logo.svg"},
-  "Minnesota Timberwolves":{p:"#0C2340",s:"#236192",abbr:"MIN",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Minnesota_Timberwolves_logo.svg"},
-  "New Orleans Hornets":{p:"#0F586C",s:"#B4975A",abbr:"NOH",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/New_Orleans_Hornets_logo.svg"},
-  "New York Knicks":{p:"#006BB6",s:"#F58426",abbr:"NYK",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/New_York_Knicks_logo.svg"},
-  "Oklahoma City Thunder":{p:"#007AC1",s:"#EF3B24",abbr:"OKC",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Oklahoma_City_Thunder.svg"},
-  "Orlando Magic":{p:"#0077C0",s:"#000000",abbr:"ORL",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Orlando_Magic_logo.svg"},
-  "Philadelphia 76ers":{p:"#006BB6",s:"#ED174C",abbr:"PHI",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Philadelphia_76ers_logo.svg"},
-  "Phoenix Suns":{p:"#1D1160",s:"#E56020",abbr:"PHX",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Phoenix_Suns_logo.svg"},
-  "Portland Trail Blazers":{p:"#E03A3E",s:"#000000",abbr:"POR",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Portland_Trail_Blazers_logo.svg"},
-  "Sacramento Kings":{p:"#5A2D81",s:"#63727A",abbr:"SAC",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/SacramentoKings.svg"},
-  "San Antonio Spurs":{p:"#000000",s:"#C4CED4",abbr:"SAS",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/San_Antonio_Spurs.svg"},
-  "Toronto Raptors":{p:"#CE1141",s:"#000000",abbr:"TOR",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Toronto_Raptors_logo.svg"},
-  "Utah Jazz":{p:"#002B5C",s:"#00471B",abbr:"UTA",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Utah_Jazz_logo_2022.svg"},
-  "Washington Wizards":{p:"#002B5C",s:"#E31837",abbr:"WAS",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Washington_Wizards_logo.svg"},
-  "Charlotte Bobcats":{p:"#F26532",s:"#053F61",abbr:"CHA",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/Charlotte_Bobcats_logo.svg"},
-  "New Jersey Nets":{p:"#002A60",s:"#C8102E",abbr:"NJN",logoUrl:"https://en.wikipedia.org/wiki/Special:FilePath/New_Jersey_Nets_logo.svg"},
+  "Atlanta Hawks":{p:"#E03A3E",s:"#C1D32F",abbr:"ATL",logoUrl:"/logos/atl.svg"},
+  "Boston Celtics":{p:"#007A33",s:"#FFFFFF",abbr:"BOS",logoUrl:"/logos/bos.svg"},
+  "Chicago Bulls":{p:"#CE1141",s:"#000000",abbr:"CHI",logoUrl:"/logos/chi.svg"},
+  "Cleveland Cavaliers":{p:"#860038",s:"#FDBB30",abbr:"CLE",logoUrl:"/logos/cle.svg"},
+  "Dallas Mavericks":{p:"#00538C",s:"#002B5E",abbr:"DAL",logoUrl:"/logos/dal.svg"},
+  "Denver Nuggets":{p:"#0E2240",s:"#FEC524",abbr:"DEN",logoUrl:"/logos/den.svg"},
+  "Detroit Pistons":{p:"#C8102E",s:"#1D42BA",abbr:"DET",logoUrl:"/logos/det.svg"},
+  "Golden State Warriors":{p:"#1D428A",s:"#FFC72C",abbr:"GSW",logoUrl:"/logos/gsw.svg"},
+  "Houston Rockets":{p:"#CE1141",s:"#000000",abbr:"HOU",logoUrl:"/logos/hou.svg"},
+  "Indiana Pacers":{p:"#002D62",s:"#FDBB30",abbr:"IND",logoUrl:"/logos/ind.svg"},
+  "LA Clippers":{p:"#C8102E",s:"#1D428A",abbr:"LAC",logoUrl:"/logos/lac.svg"},
+  "LA Lakers":{p:"#552583",s:"#FDB927",abbr:"LAL",logoUrl:"/logos/lal.svg"},
+  "Memphis Grizzlies":{p:"#5D76A9",s:"#12173F",abbr:"MEM",logoUrl:"/logos/mem.svg"},
+  "Miami Heat":{p:"#98002E",s:"#F9A01B",abbr:"MIA",logoUrl:"/logos/mia.svg"},
+  "Milwaukee Bucks":{p:"#00471B",s:"#EEE1C6",abbr:"MIL",logoUrl:"/logos/mil.svg"},
+  "Minnesota Timberwolves":{p:"#0C2340",s:"#236192",abbr:"MIN",logoUrl:"/logos/min.svg"},
+  "New Orleans Hornets":{p:"#0F586C",s:"#B4975A",abbr:"NOH",logoUrl:"/logos/noh.svg"},
+  "New York Knicks":{p:"#006BB6",s:"#F58426",abbr:"NYK",logoUrl:"/logos/nyk.svg"},
+  "Seattle SuperSonics":{p:"#00653A",s:"#FFC200",abbr:"SEA",logoUrl:"/logos/sea.svg"},
+  "Orlando Magic":{p:"#0077C0",s:"#000000",abbr:"ORL",logoUrl:"/logos/orl.svg"},
+  "Philadelphia 76ers":{p:"#006BB6",s:"#ED174C",abbr:"PHI",logoUrl:"/logos/phi.svg"},
+  "Phoenix Suns":{p:"#1D1160",s:"#E56020",abbr:"PHX",logoUrl:"/logos/phx.svg"},
+  "Portland Trail Blazers":{p:"#E03A3E",s:"#000000",abbr:"POR",logoUrl:"/logos/por.svg"},
+  "Sacramento Kings":{p:"#5A2D81",s:"#63727A",abbr:"SAC",logoUrl:"/logos/sac.svg"},
+  "San Antonio Spurs":{p:"#000000",s:"#C4CED4",abbr:"SAS",logoUrl:"/logos/sas.svg"},
+  "Toronto Raptors":{p:"#CE1141",s:"#000000",abbr:"TOR",logoUrl:"/logos/tor.svg"},
+  "Utah Jazz":{p:"#002B5C",s:"#00471B",abbr:"UTA",logoUrl:"/logos/uta.svg"},
+  "Washington Wizards":{p:"#002B5C",s:"#E31837",abbr:"WAS",logoUrl:"/logos/was.svg"},
+  "Charlotte Bobcats":{p:"#F26532",s:"#053F61",abbr:"CHA",logoUrl:"/logos/cha.svg"},
+  "New Jersey Nets":{p:"#002A60",s:"#C8102E",abbr:"NJN",logoUrl:"/logos/njn.svg"},
 };
 
 const IQ_QUESTIONS = [
@@ -343,10 +343,36 @@ const SILENT_MP4_SRC = "/silent.mp4";
 //     { name:"Ohio State", colors:{p:"#bb0000",s:"#666666"}, logoUrl:"https://yourhost.com/osu.png" }
 //   When logoUrl is set, the SVG fallback is skipped entirely.
 function TeamEmblem({colors, abbr, size=120, decorative=true, name="", logoUrl=null}){
-  // Track whether the logo image successfully loaded. If it 404s or errors,
-  // fall back to the stylized SVG below.
-  const [imgFailed, setImgFailed] = useState(false);
-  const showImg = logoUrl && !imgFailed;
+  // Track which extension we're currently trying. When `logoUrl` ends in
+  // a path without a known image extension (e.g. "/logos/atl"), we try
+  // .svg → .png → .webp in order. The state is the *index* into the
+  // candidate list; -1 means "give up, show fallback".
+  const [extIdx, setExtIdx] = useState(0);
+  const exts = [".svg", ".png", ".webp"];
+  // Build the candidate URL. If the original URL already ends in an image
+  // extension (with or without query string), we just use it as-is. If it's
+  // bare (e.g. "/logos/atl"), we append the current candidate extension —
+  // letting us fall back across formats so the user can save any of svg/png/webp.
+  const resolveUrl=(url)=>{
+    if(!url) return null;
+    if(/\.(svg|png|webp|jpg|jpeg|gif)(\?|$)/i.test(url)){
+      // Already has an extension — strip it so we can try alternatives
+      const base=url.replace(/\.(svg|png|webp|jpg|jpeg|gif)(\?|$)/i,"$2");
+      return base+exts[extIdx];
+    }
+    return url+exts[extIdx];
+  };
+  const resolvedUrl = resolveUrl(logoUrl);
+  const showImg = resolvedUrl && extIdx>=0 && extIdx<exts.length;
+  // If the current extension's URL 404s, advance to the next one. After
+  // exhausting all extensions, hide the image and let the SVG fallback render.
+  const handleError=()=>{
+    if(extIdx+1<exts.length){
+      setExtIdx(extIdx+1);
+    } else {
+      setExtIdx(-1);
+    }
+  };
   // If a logo image URL is provided AND it loads ok, render the image inside a
   // framed badge. Background is a soft light tint so logos with dark elements are visible.
   if(showImg){
@@ -361,9 +387,9 @@ function TeamEmblem({colors, abbr, size=120, decorative=true, name="", logoUrl=n
         boxShadow:`0 0 0 2px ${p}, 0 6px 18px ${p}99, inset 0 -4px 12px rgba(0,0,0,0.2)`,
       }}>
         <img
-          src={logoUrl}
+          src={resolvedUrl}
           alt={abbr}
-          onError={()=>setImgFailed(true)}
+          onError={handleError}
           style={{width:"78%", height:"78%", objectFit:"contain", filter:"drop-shadow(0 2px 4px rgba(0,0,0,0.25))"}}
         />
       </div>
@@ -3800,7 +3826,7 @@ export default function App(){
             {/* School emblem — varied shape & design per school.
                 Set school.logoUrl in COLLEGES data to use your own hosted image. */}
             <div style={{margin:"0 auto 22px",animation:"signedPop 0.7s ease-out"}}>
-              <TeamEmblem colors={colors} abbr={logo} name={school.name} size={200} logoUrl={school.logoUrl}/>
+              <TeamEmblem colors={colors} abbr={logo} name={school.name} size={200} logoUrl={school.logoUrl||school.colors?.logoUrl}/>
             </div>
 
             {/* SIGNED banner */}
