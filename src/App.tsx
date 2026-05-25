@@ -159,9 +159,9 @@ const NBA_TEAM_DATA = {
   "Indiana Pacers":{p:"#002D62",s:"#FDBB30",abbr:"IND",logoUrl:"/logos/ind.svg"},
   "LA Clippers":{p:"#C8102E",s:"#1D428A",abbr:"LAC",logoUrl:"/logos/lac.svg"},
   "LA Lakers":{p:"#552583",s:"#FDB927",abbr:"LAL",logoUrl:"/logos/lal.svg"},
-  "Memphis Grizzlies":{p:"#5D76A9",s:"#12173F",abbr:"MEM",logoUrl:"/logos/mem.svg"},
+  "Memphis Grizzlies":{p:"#00B2A9",s:"#040204",abbr:"MEM",logoUrl:"/logos/mem.svg"},
   "Miami Heat":{p:"#98002E",s:"#F9A01B",abbr:"MIA",logoUrl:"/logos/mia.svg"},
-  "Milwaukee Bucks":{p:"#00471B",s:"#EEE1C6",abbr:"MIL",logoUrl:"/logos/mil.svg"},
+  "Milwaukee Bucks":{p:"#6F263D",s:"#274E13",abbr:"MIL",logoUrl:"/logos/mil.svg"},
   "Minnesota Timberwolves":{p:"#0C2340",s:"#236192",abbr:"MIN",logoUrl:"/logos/min.svg"},
   "New Orleans Hornets":{p:"#0F586C",s:"#B4975A",abbr:"NOH",logoUrl:"/logos/noh.svg"},
   "New York Knicks":{p:"#006BB6",s:"#F58426",abbr:"NYK",logoUrl:"/logos/nyk.svg"},
@@ -172,12 +172,32 @@ const NBA_TEAM_DATA = {
   "Portland Trail Blazers":{p:"#E03A3E",s:"#000000",abbr:"POR",logoUrl:"/logos/por.svg"},
   "Sacramento Kings":{p:"#5A2D81",s:"#63727A",abbr:"SAC",logoUrl:"/logos/sac.svg"},
   "San Antonio Spurs":{p:"#000000",s:"#C4CED4",abbr:"SAS",logoUrl:"/logos/sas.svg"},
-  "Toronto Raptors":{p:"#CE1141",s:"#000000",abbr:"TOR",logoUrl:"/logos/tor.svg"},
-  "Utah Jazz":{p:"#002B5C",s:"#00471B",abbr:"UTA",logoUrl:"/logos/uta.svg"},
+  "Toronto Raptors":{p:"#753BBD",s:"#CE1141",abbr:"TOR",logoUrl:"/logos/tor.svg"},
+  "Utah Jazz":{p:"#5C2D91",s:"#75B2DD",abbr:"UTA",logoUrl:"/logos/uta.svg"},
   "Washington Wizards":{p:"#002B5C",s:"#E31837",abbr:"WAS",logoUrl:"/logos/was.svg"},
   "Charlotte Bobcats":{p:"#F26532",s:"#053F61",abbr:"CHA",logoUrl:"/logos/cha.svg"},
   "New Jersey Nets":{p:"#002A60",s:"#C8102E",abbr:"NJN",logoUrl:"/logos/njn.svg"},
 };
+
+// ─── SHOE DEALS ────────────────────────────────────────────────────────────────
+// 2003-era endorsement market. Each brand has a maxPick (their cutoff: a brand
+// only signs prospects drafted at or above this slot), a signingBonus, and a
+// skillBonus. Order in the array = display order in the offers box.
+const SHOE_BRANDS = [
+  {id:"nike",     name:"Nike",     maxPick:5,  bonus:2000000, skillBonus:5, color:"#FA5400", subtitle:"Top 5 picks only"},
+  {id:"adidas",   name:"Adidas",   maxPick:10, bonus:2000000, skillBonus:5, color:"#FFFFFF", subtitle:"Top 10 picks only"},
+  {id:"reebok",   name:"Reebok",   maxPick:14, bonus:1000000, skillBonus:5, color:"#DA1A32", subtitle:"Top 14 (lottery)"},
+  {id:"puma",     name:"Puma",     maxPick:14, bonus:1000000, skillBonus:5, color:"#FFD500", subtitle:"Top 14 (lottery)"},
+  {id:"converse", name:"Converse", maxPick:14, bonus: 500000, skillBonus:5, color:"#C8102E", subtitle:"Top 14 (lottery)"},
+  {id:"and1",     name:"AND1",     maxPick:14, bonus:      0, skillBonus:5, color:"#000000", subtitle:"Top 14 (lottery)"},
+];
+// Format a dollar amount as "$2M", "$500K", or "$0" — used by the deals box.
+function fmtMoney(n){
+  if(n===0) return "$0";
+  if(n>=1000000) return `$${(n/1000000).toFixed(n%1000000===0?0:1)}M`;
+  if(n>=1000) return `$${Math.round(n/1000)}K`;
+  return `$${n}`;
+}
 
 const IQ_QUESTIONS = [
   "What makes you different from every other prospect in this draft?",
@@ -1043,16 +1063,38 @@ function DefenseGame({player, difficulty, onResult}){
 
   useEffect(()=>{
     if(phase!=="play") return;
-    let offDir=1;
-    // Was (1.8+rand(0,10)/10)*difficulty — way too fast. Cut roughly in half and damp difficulty.
-    let offSpd=(0.55+rand(0,5)/10)*(0.85+difficulty*0.4);
-    // Direction changes feel more deliberate with a small pause built into the bounce
+    // Random-direction ball movement. Instead of a deterministic side-to-side
+    // bounce, the offensive player can change direction at any moment — like
+    // a real ball-handler shifting direction with a hesitation or crossover.
+    // We do this by tracking a velocity that drifts and occasionally flips
+    // direction at random intervals (with a higher chance of changing when
+    // the ball is far from the walls).
+    let offVel=(rand(0,1)?1:-1)*(0.55+rand(0,5)/10)*(0.85+difficulty*0.4);
+    let nextDirChangeAt=performance.now()+rand(250,900);
     const step=(ts)=>{
       if(!lastRef.current) lastRef.current=ts;
       const dt=ts-lastRef.current; lastRef.current=ts;
+      // Time to randomly change direction? Speed and timing both reroll.
+      if(ts>=nextDirChangeAt){
+        // 70% chance of a direction flip, 30% chance of just a speed change
+        // (so the ball can also speed up / slow down mid-motion).
+        if(rand(0,10)<7) offVel=-offVel;
+        // Speed varies between 50%-100% of the difficulty-scaled base.
+        const baseSpd=(0.55+rand(0,5)/10)*(0.85+difficulty*0.4);
+        offVel=(offVel>=0?1:-1)*baseSpd*(0.5+rand(0,5)/10);
+        // Next direction change in 250-900ms — random rhythm makes it feel
+        // less predictable than a metronome.
+        nextDirChangeAt=ts+rand(250,900);
+      }
       setOffX(prev=>{
-        let nx=prev+offDir*offSpd*(dt/16);
-        if(nx>88||nx<12){offDir*=-1;nx=clamp(nx,12,88);}
+        let nx=prev+offVel*(dt/16);
+        // Bounce off the edges — and force a direction change schedule reset
+        // so it doesn't just hug the wall after rebounding.
+        if(nx>88||nx<12){
+          offVel=-offVel;
+          nx=clamp(nx,12,88);
+          nextDirChangeAt=ts+rand(250,900);
+        }
         return nx;
       });
       setTimeLeft(prev=>{
@@ -1136,11 +1178,16 @@ function StealAndDunkGame({player, difficulty, onResult}){
   const [stealWindow,setStealWindow]=useState({x:0,w:30});
   const animRef=useRef(); const t0=useRef();
   const TAP_TARGET=Math.max(5,Math.round(5*difficulty));
-  const PASS_SPD=290*difficulty; // sped up significantly — needs sharper reactions
+  // Pass speed and steal-window width — both eased from prior values. The
+  // previous tuning (290 base, 30/difficulty width) made 5-star prospects
+  // need near-superhuman reflexes; this keeps it challenging but reachable.
+  const PASS_SPD=220*difficulty;
 
   const startPass=()=>{
     setPhase("steal");
-    const w=clamp(Math.round(30/difficulty),12,40);
+    // Wider window: 38 base for 3-star, ~25 for 5-star. Capped 18-44 so neither
+    // extreme is impossible nor trivial.
+    const w=clamp(Math.round(38/difficulty),18,44);
     setStealWindow({x:rand(10,60),w});
     passDirRef.current=1;
     setPassX(15);
@@ -1180,7 +1227,11 @@ function StealAndDunkGame({player, difficulty, onResult}){
 
   useEffect(()=>{
     if(phase!=="dunk") return;
-    const step=()=>{setMeterVal(p=>{const n=p+meterDir*3;if(n>=100||n<=0)setMeterDir(d=>-d);return clamp(n,0,100);});animRef.current=requestAnimationFrame(step);};
+    // Meter speed scales with difficulty — higher star tiers get a faster
+    // oscillating meter, making the sweet spot harder to time. Eased from
+    // the previous (2 + difficulty*2.2) so 5-star isn't punishing.
+    const meterSpeed=1.8+difficulty*1.5;
+    const step=()=>{setMeterVal(p=>{const n=p+meterDir*meterSpeed;if(n>=100||n<=0)setMeterDir(d=>-d);return clamp(n,0,100);});animRef.current=requestAnimationFrame(step);};
     animRef.current=requestAnimationFrame(step);
     return()=>cancelAnimationFrame(animRef.current);
   },[phase,meterDir]);
@@ -1188,8 +1239,13 @@ function StealAndDunkGame({player, difficulty, onResult}){
   const holdDunk=()=>{
     if(phase!=="dunk") return;
     cancelAnimationFrame(animRef.current);
-    const perfect=meterVal>=70&&meterVal<=90;
-    const good=meterVal>=50&&meterVal<=95;
+    // Dunk sweet spot tightens with difficulty so 5-star prospects need
+    // sharper timing, but kept generous enough to be fair: 3-star gets a
+    // 24-unit perfect window centered on 80, 5-star gets ~16 units.
+    const perfectHalf=Math.max(8,Math.round(12/difficulty));
+    const goodHalf=Math.max(18,Math.round(26/difficulty));
+    const perfect=meterVal>=(80-perfectHalf)&&meterVal<=(80+perfectHalf);
+    const good=meterVal>=(80-goodHalf)&&meterVal<=(80+goodHalf);
     const pts=perfect?3:good?2:0;
     setResult({made:good,pts,perfect});
     setPhase("done");
@@ -1610,8 +1666,12 @@ function OffensivePossessionGame({player, difficulty, onResult}){
 // ─── SEASON GAME ORCHESTRATOR ──────────────────────────────────────────────────
 const MINI_GAMES=["shot","defense","possession","steal","pass"];
 
-function SeasonGame({player, school, priorities, year, onEnd}){
-  const difficulty=(school.difficulty||1.0)*(player.starTier?.difficulty||1.0);
+function SeasonGame({player, school, priorities, year, starTier, onEnd}){
+  // Combined difficulty: school strength × star tier expectations.
+  // starTier is now a real prop (was previously expected on player.starTier but
+  // never passed there). Falls back to player.starTier for any legacy callers.
+  const tier=starTier||player.starTier;
+  const difficulty=(school.difficulty||1.0)*(tier?.difficulty||1.0);
   const [gameIdx,setGameIdx]=useState(0);
   const [results,setResults]=useState([]);
   const [phase,setPhase]=useState("intro");
@@ -1627,11 +1687,15 @@ function SeasonGame({player, school, priorities, year, onEnd}){
   const finalize=(all)=>{
     const totalPts=all.reduce((a,b)=>a+(b.pts||0),0);
     const made=all.filter(x=>x.made).length;
+    // Star tier playing-time bonus — higher recruits get more minutes from day one.
+    // 5★: +20%, 4★: +12%, 3★: +5%, 2★: 0%. Capped at 100% so we don't exceed reality.
+    // This stacks on top of the school's baseline playTime.
+    const starTierBonus=tier?Math.max(0,(tier.stars-2)*0.07):0;
     const devGains={};
     priorities.forEach((pid,i)=>{
       const w=[1.0,0.7,0.4][i];
       const sb=school.devStrengths.includes(pid)?1.5:0.8;
-      const pb=school.playTime/100;
+      const pb=Math.min(1.0,school.playTime/100+starTierBonus);
       const perf=totalPts/(MINI_GAMES.length*3);
       devGains[pid]=Math.max(1,Math.round(w*sb*pb*perf*rand(3,9)));
     });
@@ -1662,7 +1726,9 @@ function SeasonGame({player, school, priorities, year, onEnd}){
       C: {ppg:0.90,apg:0.5,rpg:1.90},
     };
     const pm=posMult[player.position]||posMult.SG;
-    const playTimePct=(school.playTime||80)/100;
+    // Same star-tier playing-time bonus applied to PPG/APG/RPG: higher-rated
+    // recruits get more minutes, which means more counting stats.
+    const playTimePct=Math.min(1.0,(school.playTime||80)/100+starTierBonus);
     // Height in inches. League avg by position roughly: PG ~73, SG ~76, SF ~79, PF ~82, C ~83
     // A 7-footer (84") gets a meaningful rebound bonus.
     const heightBonus=Math.max(0,(player.height-74)*0.20);
@@ -2380,8 +2446,206 @@ function CombineShooting({player,onDone}){
   );
 }
 
+// ─── SIGNATURE PAD ─────────────────────────────────────────────────────────────
+// Lightweight signature drawing surface — used when signing shoe deals so the
+// player gets a tactile "make it official" beat instead of just tapping a brand.
+// Captures pointer events (works for mouse + touch); the parent gets the path
+// data and a hasInk boolean for the Confirm button.
+function SignaturePad({onChange, height=140}){
+  const canvasRef=useRef(null);
+  const drawingRef=useRef(false);
+  const lastPtRef=useRef(null);
+  const [hasInk,setHasInk]=useState(false);
+
+  // Resize the canvas to its rendered width on mount, and again on viewport
+  // resize. We multiply by devicePixelRatio so the strokes stay crisp on
+  // retina displays. The 2D context is scaled to match so logical coordinates
+  // (CSS pixels) stay simple.
+  useEffect(()=>{
+    const canvas=canvasRef.current;
+    if(!canvas) return;
+    const resize=()=>{
+      const rect=canvas.getBoundingClientRect();
+      const dpr=window.devicePixelRatio||1;
+      canvas.width=rect.width*dpr;
+      canvas.height=rect.height*dpr;
+      const ctx=canvas.getContext("2d");
+      ctx.scale(dpr,dpr);
+      ctx.strokeStyle="#1a1a1a";
+      ctx.lineWidth=2.5;
+      ctx.lineCap="round";
+      ctx.lineJoin="round";
+    };
+    resize();
+    window.addEventListener("resize",resize);
+    return()=>window.removeEventListener("resize",resize);
+  },[]);
+
+  const ptFromEvent=(e)=>{
+    const canvas=canvasRef.current;
+    if(!canvas) return null;
+    const rect=canvas.getBoundingClientRect();
+    return {x:e.clientX-rect.left, y:e.clientY-rect.top};
+  };
+
+  const start=(e)=>{
+    e.preventDefault();
+    const pt=ptFromEvent(e);
+    if(!pt) return;
+    drawingRef.current=true;
+    lastPtRef.current=pt;
+  };
+  const move=(e)=>{
+    if(!drawingRef.current) return;
+    e.preventDefault();
+    const pt=ptFromEvent(e);
+    if(!pt) return;
+    const ctx=canvasRef.current.getContext("2d");
+    ctx.beginPath();
+    ctx.moveTo(lastPtRef.current.x,lastPtRef.current.y);
+    ctx.lineTo(pt.x,pt.y);
+    ctx.stroke();
+    lastPtRef.current=pt;
+    if(!hasInk){
+      setHasInk(true);
+      onChange&&onChange(true);
+    }
+  };
+  const end=(e)=>{
+    if(!drawingRef.current) return;
+    e.preventDefault();
+    drawingRef.current=false;
+    lastPtRef.current=null;
+  };
+  const clearPad=()=>{
+    const canvas=canvasRef.current;
+    if(!canvas) return;
+    const ctx=canvas.getContext("2d");
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+    setHasInk(false);
+    onChange&&onChange(false);
+  };
+
+  return(
+    <div>
+      <div style={{position:"relative",height,background:"#fafaf6",borderRadius:8,border:"1px solid rgba(255,255,255,0.15)",overflow:"hidden",boxShadow:"inset 0 2px 6px rgba(0,0,0,0.15)"}}>
+        <canvas ref={canvasRef} onPointerDown={start} onPointerMove={move} onPointerUp={end} onPointerLeave={end} onPointerCancel={end}
+          style={{width:"100%",height:"100%",display:"block",touchAction:"none",cursor:"crosshair"}}/>
+        {!hasInk&&<div style={{position:"absolute",top:"50%",left:0,right:0,transform:"translateY(-50%)",textAlign:"center",fontSize:11,color:"#999",letterSpacing:2,pointerEvents:"none",textTransform:"uppercase"}}>Sign here ✍️</div>}
+        {/* Signature line — the dotted underline you sign on top of */}
+        <div style={{position:"absolute",left:16,right:16,bottom:24,borderBottom:"1px dashed #b0a8a0",pointerEvents:"none"}}/>
+      </div>
+      <button onClick={clearPad} style={{marginTop:8,padding:"4px 10px",fontSize:11,background:"transparent",color:"#888",border:"1px solid #444",borderRadius:6,cursor:"pointer",letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+        CLEAR
+      </button>
+    </div>
+  );
+}
+
+// ─── SHOE DEALS BLOCK ──────────────────────────────────────────────────────────
+// Renders all 6 shoe brands as a grid. Brands the player doesn't qualify for
+// (based on draft pick) are greyed out and show "Not available at this pick"
+// in a toast when clicked. Otherwise, clicking opens a signature modal —
+// after the player draws their signature and confirms, the deal is signed,
+// signing bonus added to career money, skill points granted, and a "SIGNED!"
+// confirmation flashes. After signing one brand, the others lock out.
+function ShoeDealsBlock({pick, isLottery, onSign, signedBrand, toast}){
+  const [pendingBrand,setPendingBrand]=useState(null); // brand being signed (modal open)
+  const [hasInk,setHasInk]=useState(false);
+
+  const tryClickBrand=(brand)=>{
+    if(signedBrand) return; // already signed something — locked
+    if(pick>brand.maxPick){
+      toast&&toast(`${brand.name} not available at pick #${pick}`,"#888");
+      return;
+    }
+    setPendingBrand(brand);
+    setHasInk(false);
+  };
+
+  const confirmSign=()=>{
+    if(!pendingBrand||!hasInk) return;
+    onSign&&onSign(pendingBrand);
+    setPendingBrand(null);
+  };
+
+  return(
+    <div style={{background:"rgba(255,215,0,0.07)",border:"1px solid rgba(255,215,0,0.22)",borderRadius:12,padding:14,marginBottom:14}}>
+      <div style={{fontSize:10,color:"#FFD700",fontWeight:700,marginBottom:10,letterSpacing:3,textTransform:"uppercase"}}>Shoe Deal Offers</div>
+
+      {!isLottery&&!signedBrand&&(
+        <div style={{fontSize:12,color:"#aaa",textAlign:"center",padding:"10px 0",fontStyle:"italic"}}>
+          No offers yet — break into the rotation and put up numbers, the deals will come.
+        </div>
+      )}
+
+      {(isLottery||signedBrand)&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {SHOE_BRANDS.map(b=>{
+            const available=pick<=b.maxPick;
+            const isSigned=signedBrand?.id===b.id;
+            const isLocked=signedBrand&&!isSigned;
+            const opacity=isLocked?0.25:available?1:0.4;
+            return(
+              <button key={b.id} onClick={()=>tryClickBrand(b)} disabled={isLocked||isSigned}
+                style={{
+                  padding:"10px 11px",
+                  background:isSigned?"rgba(0,220,100,0.18)":available?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.02)",
+                  border:isSigned?"1.5px solid #00DC64":`1px solid ${available?"rgba(255,255,255,0.15)":"rgba(255,255,255,0.06)"}`,
+                  borderRadius:8,
+                  color:"#fff",
+                  cursor:isLocked||isSigned?"default":"pointer",
+                  textAlign:"left",
+                  opacity,
+                  transition:"all 0.2s",
+                }}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:3}}>
+                  <span style={{fontSize:14,fontWeight:900,color:b.color==="#FFFFFF"?"#fff":b.color,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",textShadow:b.color==="#000000"?"0 0 4px rgba(255,255,255,0.4)":"none"}}>{b.name}</span>
+                  {isSigned&&<span style={{fontSize:9,fontWeight:700,color:"#00DC64",letterSpacing:1.5}}>✓ SIGNED</span>}
+                </div>
+                <div style={{fontSize:10,color:"#bbb",lineHeight:1.4}}>
+                  {available?(
+                    <>{fmtMoney(b.bonus)} bonus · +{b.skillBonus} SP</>
+                  ):(
+                    <span style={{color:"#888",fontStyle:"italic"}}>Not available at this pick</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Signature modal */}
+      {pendingBrand&&(
+        <div onClick={()=>setPendingBrand(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:20,maxWidth:380,width:"100%",border:"1px solid rgba(255,215,0,0.35)"}}>
+            <div style={{textAlign:"center",marginBottom:14}}>
+              <div style={{fontSize:9,letterSpacing:3,color:"#FFD700",textTransform:"uppercase",marginBottom:4}}>Endorsement Contract</div>
+              <div style={{fontSize:24,fontWeight:900,color:pendingBrand.color==="#FFFFFF"?"#fff":pendingBrand.color,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",textShadow:pendingBrand.color==="#000000"?"0 0 6px rgba(255,255,255,0.5)":"none"}}>{pendingBrand.name}</div>
+              <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{fmtMoney(pendingBrand.bonus)} signing bonus · +{pendingBrand.skillBonus} skill points</div>
+            </div>
+            <div style={{fontSize:11,color:"#ccc",lineHeight:1.5,marginBottom:10,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,border:"1px dashed rgba(255,255,255,0.1)"}}>
+              I, the undersigned, hereby agree to wear <strong style={{color:"#fff"}}>{pendingBrand.name}</strong> footwear on the court and accept the terms of this endorsement contract.
+            </div>
+            <SignaturePad onChange={setHasInk}/>
+            <div style={{display:"flex",gap:8,marginTop:14}}>
+              <button onClick={()=>setPendingBrand(null)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                CANCEL
+              </button>
+              <button onClick={confirmSign} disabled={!hasInk} style={{flex:2,padding:"10px 0",background:hasInk?"#FFD700":"rgba(255,215,0,0.2)",border:"none",borderRadius:8,color:hasInk?"#000":"#666",cursor:hasInk?"pointer":"not-allowed",fontSize:13,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                CONFIRM ✓
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,toast}){
+function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,setPlayer,skillPoints,setSkillPoints,money,setMoney,signedShoeBrand,setSignedShoeBrand,toast}){
   // Reveal stages: black-out → "with the Xth pick" → team name → "selects..." → name + jersey
   const [stage,setStage]=useState("intro"); // intro → onClock → teamReveal → playerReveal → details
   const [pick,setPick]=useState(null);
@@ -2712,17 +2976,21 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
           </div>
         </div>
 
-        {/* Shoe deals — only Lottery picks get the big-brand interest */}
-        {pick<=14&&(
-          <div style={{background:"rgba(255,215,0,0.07)",border:"1px solid rgba(255,215,0,0.22)",borderRadius:12,padding:14,marginBottom:14}}>
-            <div style={{fontSize:10,color:GO,fontWeight:700,marginBottom:8,letterSpacing:3,textTransform:"uppercase"}}>Shoe Deal Offers</div>
-            <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
-              {["Nike","Adidas","Reebok","Puma","Converse","And1"].map(b=>(
-                <button key={b} onClick={()=>toast(b+" signed! 🔥",GO)} style={{padding:"7px 13px",background:"rgba(255,215,0,0.09)",border:"1px solid rgba(255,215,0,0.25)",borderRadius:8,color:GO,cursor:"pointer",fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}>{b}</button>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* Shoe deals — Lottery picks (top-14) see real brand offers. Below 14
+            still see the box, but with a "No offers yet" message. Once signed,
+            the chosen brand is locked in with a SIGNED badge. */}
+        <ShoeDealsBlock
+          pick={pick}
+          isLottery={pick<=14}
+          signedBrand={signedShoeBrand}
+          toast={toast}
+          onSign={(brand)=>{
+            setSignedShoeBrand&&setSignedShoeBrand(brand);
+            setMoney&&setMoney(m=>(m||0)+brand.bonus);
+            setSkillPoints&&setSkillPoints(p=>(p||0)+brand.skillBonus);
+            toast&&toast(`${brand.name} signed! ${fmtMoney(brand.bonus)} bonus + ${brand.skillBonus} SP`,"#FFD700");
+          }}
+        />
 
         {/* AC's Take — Austin Carr scout-voice blurb */}
         <div style={{background:"linear-gradient(135deg, rgba(232,135,58,0.12) 0%, rgba(0,0,0,0.4) 100%)",border:"1px solid rgba(232,135,58,0.35)",borderRadius:12,padding:14,marginBottom:14}}>
@@ -2864,6 +3132,11 @@ export default function App(){
   const [xferSel,setXferSel]=useState(null);
   const [skillPoints,setSkillPoints]=useState(100);
   const [intangs,setIntangs]=useState([]);
+  // Career money. Increased by shoe-deal signing bonuses, future contracts, etc.
+  const [money,setMoney]=useState(0);
+  // Which shoe brand the player signed with (full brand object or null).
+  // Locked in once selected — players sign with at most one brand.
+  const [signedShoeBrand,setSignedShoeBrand]=useState(null);
   // Whether a save exists in localStorage. Drives the "Resume Career" button
   // on the title screen. Refreshed when we save, clear, or load.
   const [hasSave,setHasSave]=useState(()=>loadSave()!==null);
@@ -2895,9 +3168,10 @@ export default function App(){
       agent, workoutPlayer, workoutDone, agentAttention,
       interviewDone, combineDone, combineScore, interviewScore,
       seasonResult, xferSel, skillPoints, intangs,
+      money, signedShoeBrand,
     });
     setHasSave(true);
-  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs]);
+  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs,money,signedShoeBrand]);
 
   // Restore a saved career into all the state slots, then navigate to the
   // screen they were on when they last played.
@@ -2922,6 +3196,8 @@ export default function App(){
     if(data.xferSel!==undefined) setXferSel(data.xferSel);
     if(data.skillPoints!==undefined) setSkillPoints(data.skillPoints);
     if(data.intangs) setIntangs(data.intangs);
+    if(data.money!==undefined) setMoney(data.money);
+    if(data.signedShoeBrand!==undefined) setSignedShoeBrand(data.signedShoeBrand);
     // Jump back to where they were. If the saved screen is a menu screen
     // (legacy saves from before the menu-screen guard was added), infer the
     // best resume point from the saved progress data — much better UX than
@@ -2984,6 +3260,7 @@ export default function App(){
     setCombineScore(null);setInterviewScore(null);
     setSeasonResult(null);setXferSel(null);
     setSkillPoints(100);setIntangs([]);
+    setMoney(0);setSignedShoeBrand(null);
     setScreen("bio");
   };
   // Background music using HTMLAudioElement — the same approach YouTube, Spotify Web,
@@ -3825,7 +4102,7 @@ export default function App(){
 
             {/* School emblem — varied shape & design per school.
                 Set school.logoUrl in COLLEGES data to use your own hosted image. */}
-            <div style={{margin:"0 auto 22px",animation:"signedPop 0.7s ease-out"}}>
+            <div style={{display:"flex",justifyContent:"center",margin:"0 auto 22px",animation:"signedPop 0.7s ease-out"}}>
               <TeamEmblem colors={colors} abbr={logo} name={school.name} size={200} logoUrl={school.logoUrl||school.colors?.logoUrl}/>
             </div>
 
@@ -3881,7 +4158,7 @@ export default function App(){
     season:(
       <div>
         <Hd sub={`${START_YEAR+year-1}-${String(START_YEAR+year).slice(2)} — Game Time`} title="SEASON"/>
-        <SeasonGame player={player} school={school} priorities={priorities} year={year} onEnd={(res)=>{
+        <SeasonGame player={player} school={school} priorities={priorities} year={year} starTier={starTier} onEnd={(res)=>{
           setSeasonResult(res);
           setPlayer(p=>{
             const ns={...p.skills};
@@ -4194,7 +4471,7 @@ export default function App(){
 
     draft:(
       <MenuFrame sub="Draft Night" title="THE CALL">
-        <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} toast={toast}/>
+        <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} money={money} setMoney={setMoney} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} toast={toast}/>
       </MenuFrame>
     ),
   };
