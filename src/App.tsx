@@ -228,13 +228,19 @@ const clamp = (v,mn,mx) => Math.max(mn,Math.min(mx,v));
 const rand = (mn,mx) => Math.floor(Math.random()*(mx-mn+1))+mn;
 
 function baseSkills(pos) {
-  const d={threePoint:45,midRange:48,finishing:48,handles:45,playmaking:45,perimDefense:45,postDefense:42,rebounding:42};
+  // Baseline — what everybody starts with before position adjustments
+  const d={threePoint:42,midRange:45,finishing:45,handles:42,playmaking:42,perimDefense:42,postDefense:42,rebounding:42};
+  // Each position has clear strengths (+15 to +22) and weaknesses (-8 to -15)
+  // so a freshly-built player feels like their archetype out of the box.
+  // Clamped to [30, 70] below — a 5★ build can push these toward 70 in the
+  // build screen with their 100 points; -15 weaknesses still bottom out at 30
+  // unless the player actively spends to lift them.
   const b={
-    PG:{handles:8,playmaking:10,threePoint:5},
-    SG:{threePoint:8,handles:5,midRange:5},
-    SF:{finishing:8,perimDefense:5,threePoint:3},
-    PF:{rebounding:10,postDefense:5,finishing:5},
-    C:{rebounding:15,postDefense:12,finishing:5,threePoint:-10,handles:-8},
+    PG:{handles:18, playmaking:20, threePoint:8,  rebounding:-8,  postDefense:-5},
+    SG:{threePoint:18, midRange:15, handles:8,    rebounding:-5,  postDefense:-5},
+    SF:{finishing:15, perimDefense:10, threePoint:8, midRange:5,  postDefense:-3},
+    PF:{rebounding:18, postDefense:15, finishing:10, threePoint:-10, handles:-8, playmaking:-5},
+    C: {rebounding:22, postDefense:20, finishing:13, threePoint:-15, handles:-15, playmaking:-10, midRange:-8},
   };
   const r={...d}; const bst=b[pos]||{};
   Object.keys(bst).forEach(k=>{r[k]=clamp(r[k]+bst[k],30,70);});
@@ -4493,7 +4499,7 @@ export default function App(){
         <div style={{marginBottom:14}}>
           <Lbl>Primary Position</Lbl>
           <div style={{display:"flex",gap:7}}>
-            {POSITIONS.map(pos=><button key={pos} onClick={()=>setPlayer(p=>({...p,position:pos}))} style={{flex:1,padding:"10px 0",background:player.position===pos?OR:"rgba(255,255,255,0.05)",border:`1px solid ${player.position===pos?OR:"rgba(255,255,255,0.1)"}`,borderRadius:8,color:player.position===pos?"#080c10":"#f0ede8",cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Barlow Condensed',sans-serif"}}>{pos}</button>)}
+            {POSITIONS.map(pos=><button key={pos} onClick={()=>setPlayer(p=>p.position===pos?p:({...p,position:pos,skills:defaultSkills(pos)}))} style={{flex:1,padding:"10px 0",background:player.position===pos?OR:"rgba(255,255,255,0.05)",border:`1px solid ${player.position===pos?OR:"rgba(255,255,255,0.1)"}`,borderRadius:8,color:player.position===pos?"#080c10":"#f0ede8",cursor:"pointer",fontWeight:700,fontSize:13,fontFamily:"'Barlow Condensed',sans-serif"}}>{pos}</button>)}
           </div>
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:14}}>
