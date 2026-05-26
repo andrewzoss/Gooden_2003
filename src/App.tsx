@@ -241,6 +241,16 @@ function baseSkills(pos) {
   return r;
 }
 
+// Position-based starting skill values, rounded to nearest 5 so the +5/-5
+// stepping in the build screen always lands on clean values. This is the
+// single source of truth for "what does a new PG/SG/SF/PF/C start with?" —
+// used by the initial player state, the wipe-and-start-new reset, and the
+// position-change useEffect in the build screen.
+function defaultSkills(pos){
+  const bs=baseSkills(pos);
+  return Object.fromEntries(Object.entries(bs).map(([k,v])=>[k,Math.round(v/5)*5]));
+}
+
 function calcOVR(skills, intangibles=[]) {
   const sv=Object.values(skills).reduce((a,b)=>a+b,0)/Object.keys(skills).length;
   const iv=intangibles.length*3;
@@ -3682,7 +3692,7 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
   const [screen,setScreen]=useState("loadscreen");
-  const [player,setPlayer]=useState({name:"",position:"SG",height:76,weight:210,hometown:"",skills:{},intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
+  const [player,setPlayer]=useState({name:"",position:"SG",height:76,weight:210,hometown:"",skills:defaultSkills("SG"),intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
   const [starTier,setStarTier]=useState(null);
   const [school,setSchool]=useState(null);
   const [priorities,setPriorities]=useState([]);
@@ -3852,7 +3862,7 @@ export default function App(){
   const wipeAndStartNew=()=>{
     clearSave();
     setHasSave(false);
-    setPlayer({name:"",position:"SG",height:76,weight:210,hometown:"",skills:{},intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
+    setPlayer({name:"",position:"SG",height:76,weight:210,hometown:"",skills:defaultSkills("SG"),intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
     setStarTier(null);setSchool(null);setPriorities([]);
     setYear(1);setAllYears([]);
     setAgent(null);setWorkoutPlayer(null);setWorkoutDone(false);
@@ -4132,12 +4142,12 @@ export default function App(){
   },[musicOn]);
 
   useEffect(()=>{
-    if(player.position){
-      const bs=baseSkills(player.position);
-      // Round to nearest 5 so the +5/-5 stepping always lands on clean values
-      const rounded=Object.fromEntries(Object.entries(bs).map(([k,v])=>[k,Math.round(v/5)*5]));
-      setPlayer(p=>({...p,skills:rounded}));
-    }
+    if(!player.position) return;
+    const current=player.skills||{};
+    // Only auto-populate when skills are empty. This handles the "new player"
+    // case without clobbering values from a loaded save or user adjustments.
+    if(Object.keys(current).length>0) return;
+    setPlayer(p=>({...p,skills:defaultSkills(player.position)}));
   },[player.position]);
 
   const toast=(msg,color=OR)=>{setNotif({msg,color});setTimeout(()=>setNotif(null),2200);};
