@@ -3229,9 +3229,9 @@ function buildDepthChart(player, teamName, seasonData){
   const data=seasonData?.[teamName];
   if(!data) return [];
   const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
-  const playerEntry={name:player.name||"You", position:player.position, ovr:playerOvr, ppg:0, isPlayer:true};
+  const playerEntry={name:player.name||"You", position:player.position, ovr:playerOvr, isPlayer:true};
   // Convert roster array to objects
-  const all=data.players.map(p=>({name:p[0], position:p[1], ovr:p[2], ppg:p[3], isPlayer:false}));
+  const all=data.players.map(p=>({name:p[0], position:p[1], ovr:p[2], isPlayer:false}));
   all.push(playerEntry);
   // Group by position, sort each group by OVR desc
   const byPos={};
@@ -3534,9 +3534,10 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
     setShowMentorPick(false);
   };
 
-  // Eligible mentors = veterans (OVR >= 75) on the team, NOT including the player.
+  // Eligible mentors = ALL teammates on the roster (NOT including the player).
+  // The veteran-restriction (OVR >= 75) was removed — any teammate can be picked.
   const data=seasonData[nbaTeam];
-  const mentorCandidates=data?data.players.filter(p=>p[2]>=75).map(p=>({name:p[0],pos:p[1],ovr:p[2]})):[];
+  const mentorCandidates=data?data.players.map(p=>({name:p[0],pos:p[1],ovr:p[2]})):[];
 
   return(
     <div>
