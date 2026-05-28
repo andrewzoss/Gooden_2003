@@ -3372,12 +3372,47 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   const gameIdx=Math.min(results.length,MINI_GAMES.length-1);
   const gameType=MINI_GAMES[gameIdx];
 
+  // Auto-simulate the entire 5-game stretch. Randomized but biased by the
+  // player's OVR — elite players get better simmed numbers, scrubs get worse.
+  // Goes through the same finalize() flow so SP awards and stat application
+  // are identical whether the user plays or sims.
+  const simStretch=()=>{
+    if(completedRef.current) return;
+    setPhase("playing"); // jumps past the intro so the "Calculating…" view shows
+    const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+    // skillFactor ranges roughly 0.45 (OVR 45) → 0.99 (OVR 99). Used to bias
+    // both made% and pts so a 90-OVR sim doesn't roll like a 55-OVR sim.
+    const skillFactor=Math.min(0.99,Math.max(0.45,ovr/100));
+    setResults(prev=>{
+      if(prev.length>=MINI_GAMES.length) return prev;
+      const fake=[];
+      for(let i=0;i<MINI_GAMES.length;i++){
+        const made=Math.random()<(0.40+skillFactor*0.40); // 0.58 - 0.80 made-rate
+        // pts distribution: 0 (miss) / 1 (made low) / 2 (made solid) / 3 (perfect)
+        let pts=0;
+        if(made){
+          const roll=Math.random();
+          if(roll<skillFactor*0.30) pts=3;
+          else if(roll<0.5+skillFactor*0.20) pts=2;
+          else pts=1;
+        }
+        fake.push({type:MINI_GAMES[i],made,pts,simmed:true});
+      }
+      finalize(fake);
+      return fake;
+    });
+  };
+
   if(phase==="intro") return(
     <div style={{textAlign:"center",padding:"20px 0"}}>
       <div style={{fontSize:11,letterSpacing:3,color:OR,marginBottom:10,textTransform:"uppercase"}}>Game Stretch</div>
       <div style={{fontSize:13,color:"#aaa",marginBottom:6,lineHeight:1.5}}>You'll play 5 key situations representing 41 games of the season.</div>
       <div style={{fontSize:12,color:"#888",marginBottom:18}}>Your stat line will be based on minutes ({minutes}/game), performance, and skill.</div>
-      <button onClick={()=>setPhase("playing")} style={{...btnS,width:"auto",padding:"12px 36px"}}>BEGIN STRETCH →</button>
+      <button onClick={()=>setPhase("playing")} style={{...btnS,width:"auto",padding:"12px 36px",marginBottom:10}}>BEGIN STRETCH →</button>
+      <div>
+        <button onClick={simStretch} style={{padding:"8px 18px",background:"transparent",border:"1px solid rgba(255,255,255,0.18)",borderRadius:8,color:"#aaa",cursor:"pointer",fontSize:11,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>⚡ SIM STRETCH</button>
+      </div>
+      <div style={{fontSize:10,color:"#666",marginTop:6,lineHeight:1.5}}>Sim auto-rolls results based on your OVR.<br/>Stats and SP still apply.</div>
     </div>
   );
   // `key` MUST be a JSX attribute, not part of spread props, or React ignores it
@@ -3425,7 +3460,7 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
 // ─── LEAGUE HUB ────────────────────────────────────────────────────────────────
 // The post-draft "home screen" — like the title menu, but with the team logo,
 // current W-L record, and 5 menu options.
-function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals, playoffsDone, go}){
+function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals, playoffsDone, skillPoints, go}){
   const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
@@ -3435,6 +3470,9 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   const projectedW=Math.round((season.w*gp)/82);
   const projectedL=gp-projectedW;
   const yearLabel=formatSeasonLabel(currentYear);
+  // Player's overall rating — shown as a badge so they can see the impact of
+  // skill-point spending at a glance.
+  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
   // Determine playoff eligibility — top 8 in each conference. With our data
   // ~50% of teams qualify. A team with ≥41 wins always makes it; below that,
   // we use the season record.
@@ -3449,46 +3487,102 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   else if(playoffsAvailable) {playLabel="PLAYOFFS";playSub="Season over — playoff run begins";}
   else if(playoffsDone) {playLabel="OFFSEASON";playSub="Season complete — start next year";}
   else if(regSeasonDone && !madePlayoffs) {playLabel="OFFSEASON";playSub="Missed the playoffs — start next year";}
+  // Live PPG/RPG/APG for the in-progress season — pulled from running totals.
+  const liveGp=nbaSeasonTotals.games||0;
+  const livePpg=liveGp>0?(nbaSeasonTotals.pts/liveGp).toFixed(1):null;
+  const liveRpg=liveGp>0?(nbaSeasonTotals.reb/liveGp).toFixed(1):null;
+  const liveApg=liveGp>0?(nbaSeasonTotals.ast/liveGp).toFixed(1):null;
   return(
     <div style={{padding:"4px 0 20px"}}>
-      {/* Team header — logo + record */}
+      {/* Team / season banner — anchored by the team's primary color */}
       <div style={{
-        background:`linear-gradient(135deg, ${teamData.p}44 0%, rgba(0,0,0,0.6) 80%)`,
-        border:`1px solid ${teamData.p}66`,
-        borderRadius:14, padding:"16px 18px", marginBottom:16,
-        display:"flex", alignItems:"center", gap:14
+        background:`linear-gradient(135deg, ${teamData.p}55 0%, rgba(0,0,0,0.7) 80%)`,
+        border:`1px solid ${teamData.p}88`,
+        borderRadius:14, padding:"14px 16px", marginBottom:12,
+        display:"flex", alignItems:"center", gap:14, position:"relative", overflow:"hidden"
       }}>
-        <TeamEmblem colors={{p:teamData.p,s:teamData.s}} abbr={teamData.abbr} name={nbaTeam} size={66} logoUrl={teamData.logoUrl}/>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",textTransform:"uppercase",marginBottom:2}}>{yearLabel} Season</div>
-          <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{nbaTeam}</div>
-          <div style={{fontSize:13,color:"#ddd",marginTop:3}}>
-            <span style={{color:GR,fontWeight:700}}>{projectedW}</span> – <span style={{color:RE,fontWeight:700}}>{projectedL}</span>
-            <span style={{color:"#666",marginLeft:8,fontSize:11}}>{gp}/82</span>
+        {/* Faint diagonal team-color streak for visual interest */}
+        <div style={{position:"absolute",top:-20,right:-30,width:120,height:140,background:`linear-gradient(135deg, ${teamData.s}22, transparent)`,transform:"rotate(15deg)",pointerEvents:"none"}}/>
+        <TeamEmblem colors={{p:teamData.p,s:teamData.s}} abbr={teamData.abbr} name={nbaTeam} size={62} logoUrl={teamData.logoUrl}/>
+        <div style={{flex:1,minWidth:0,position:"relative"}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#ddd",textTransform:"uppercase",marginBottom:2,fontWeight:700}}>{yearLabel} Season</div>
+          <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{nbaTeam}</div>
+          <div style={{fontSize:13,color:"#ddd",marginTop:4}}>
+            <span style={{color:GR,fontWeight:700}}>{projectedW}</span><span style={{color:"#666",margin:"0 4px"}}>–</span><span style={{color:RE,fontWeight:700}}>{projectedL}</span>
+            <span style={{color:"#888",marginLeft:8,fontSize:11}}>· {gp}/82</span>
           </div>
         </div>
+        {/* OVR badge */}
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"6px 10px",background:"rgba(0,0,0,0.45)",borderRadius:10,border:`1px solid ${ovr>=85?GR:ovr>=75?OR:"#666"}55`}}>
+          <div style={{fontSize:9,letterSpacing:1.5,color:"#888",fontWeight:700}}>OVR</div>
+          <div style={{fontSize:22,fontWeight:900,color:ovr>=85?GR:ovr>=75?OR:"#ddd",lineHeight:1}}>{ovr}</div>
+        </div>
       </div>
-      {/* Menu options */}
-      <div style={{display:"flex",flexDirection:"column",gap:10}}>
-        <button onClick={()=>go("nbaPlay")} style={{...btnS,padding:"14px 16px",textAlign:"left",position:"relative"}}>
-          <div style={{fontSize:16,fontWeight:900,letterSpacing:2}}>▶ {playLabel}</div>
-          {playSub&&<div style={{fontSize:11,fontWeight:400,color:"rgba(0,0,0,0.6)",marginTop:2,letterSpacing:0.5}}>{playSub}</div>}
+
+      {/* Quick stat strip — only shows mid-season when there's data to display */}
+      {liveGp>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:12,padding:"10px 8px",background:"rgba(255,255,255,0.03)",borderRadius:10,border:"1px solid rgba(255,255,255,0.06)"}}>
+          {[["PPG",livePpg],["RPG",liveRpg],["APG",liveApg]].map(([l,v])=>(
+            <div key={l} style={{textAlign:"center"}}>
+              <div style={{fontSize:9,letterSpacing:1.5,color:"#666",fontWeight:700}}>{l}</div>
+              <div style={{fontSize:18,fontWeight:900,color:OR,lineHeight:1.1}}>{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Menu options — PLAY hero card, then 5 menu rows */}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {/* PLAY — primary action, bigger and brighter */}
+        <button onClick={()=>go("nbaPlay")} style={{...btnS,padding:"15px 18px",textAlign:"left",position:"relative",fontSize:14,boxShadow:"0 2px 8px rgba(232,135,58,0.3)"}}>
+          <div style={{fontSize:18,fontWeight:900,letterSpacing:2}}>▶ {playLabel}</div>
+          {playSub&&<div style={{fontSize:11,fontWeight:600,color:"rgba(0,0,0,0.65)",marginTop:3,letterSpacing:0.5}}>{playSub}</div>}
         </button>
-        <button onClick={()=>go("nbaSkills")} style={{...ghostS,padding:"12px 16px",textAlign:"left"}}>
-          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>⚡ SKILLS</div>
-          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Spend skill points to improve your player</div>
+
+        {/* Skills — shows SP balance inline */}
+        <button onClick={()=>go("nbaSkills")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:`1px solid ${skillPoints>0?YE+"55":"rgba(255,255,255,0.08)"}`,borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:22,width:34,textAlign:"center"}}>⚡</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>SKILLS</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Train your player</div>
+          </div>
+          {skillPoints>0&&<div style={{padding:"3px 9px",background:YE,color:"#080c10",borderRadius:10,fontSize:11,fontWeight:900}}>{skillPoints} SP</div>}
         </button>
-        <button onClick={()=>go("nbaTeam")} style={{...ghostS,padding:"12px 16px",textAlign:"left"}}>
-          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>👥 TEAM</div>
-          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Roster, depth chart, mentor</div>
+
+        {/* Team */}
+        <button onClick={()=>go("nbaTeam")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:22,width:34,textAlign:"center"}}>👥</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>TEAM</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Roster, depth chart, mentor</div>
+          </div>
         </button>
-        <button onClick={()=>go("nbaBank")} style={{...ghostS,padding:"12px 16px",textAlign:"left",opacity:0.6}}>
-          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>💰 BANK</div>
-          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Coming soon</div>
+
+        {/* Agent — new screen for contract/trade requests */}
+        <button onClick={()=>go("nbaAgent")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:22,width:34,textAlign:"center"}}>📞</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>AGENT</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Contracts & trade requests</div>
+          </div>
         </button>
-        <button onClick={()=>go("nbaStats")} style={{...ghostS,padding:"12px 16px",textAlign:"left"}}>
-          <div style={{fontSize:15,fontWeight:900,letterSpacing:2}}>📊 STATS</div>
-          <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:2}}>Career stats — college & pros</div>
+
+        {/* Spend (formerly Bank) */}
+        <button onClick={()=>go("nbaSpend")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,opacity:0.7,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:22,width:34,textAlign:"center"}}>💰</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>SPEND</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Bankroll · coming soon</div>
+          </div>
+        </button>
+
+        {/* Stats */}
+        <button onClick={()=>go("nbaStats")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:22,width:34,textAlign:"center"}}>📊</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>STATS</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Career stats — college & pros</div>
+          </div>
         </button>
       </div>
     </div>
@@ -3496,7 +3590,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
 }
 
 // ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
-function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, go, toast}){
+function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, go, toast}){
   const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
@@ -3584,12 +3678,17 @@ function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaS
             fgm:prev.fgm+Math.round(stats.fg*0.18*stretchSize),
             fga:prev.fga+Math.round(0.18*100*stretchSize),
           }));
+          // Award SP based on stretch performance — totalPts maxes around 15
+          // (5 mini-games × 3 max pts each), so the formula gives 1-8 SP per
+          // stretch. Floors at 1 so showing up always earns something.
+          const spEarned=Math.max(1,Math.round(totalPts/2));
+          setSkillPoints&&setSkillPoints(p=>(p||0)+spEarned);
           if(isPlayoffRun){
             setPlayoffsDone(true);
-            toast&&toast(`Playoffs done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG`,YE);
+            toast&&toast(`Playoffs done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,YE);
           } else {
             setNbaGamesPlayed(g=>g+41);
-            toast&&toast(`Stretch done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG`,OR);
+            toast&&toast(`Stretch done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,OR);
           }
           go("leagueHub");
         }}
@@ -3604,6 +3703,9 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
   const skills=player.skills||{};
   // Use the global SKILLS list so labels & icons match the rest of the game.
   const SKILL_LIST=SKILLS;
+  // Intangibles the player picked during build/college — shown read-only on the
+  // skills page so the player can see their full profile in one place.
+  const playerIntangs=(player.intangibles||[]).map(id=>INTANGIBLES.find(t=>t.id===id)).filter(Boolean);
   const bumpSkill=(id)=>{
     if(skillPoints<=0) return toast&&toast("Out of skill points","#888");
     const cur=skills[id]||50;
@@ -3637,6 +3739,25 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
           );
         })}
       </div>
+
+      {/* Intangibles — picked at build time / earned during college. Read-only
+          on the skills page since they're won, not bought with SP. */}
+      <div style={{fontSize:10,letterSpacing:3,color:GO,textTransform:"uppercase",fontWeight:700,marginBottom:8,marginTop:4}}>Intangibles</div>
+      {playerIntangs.length===0?(
+        <div style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"12px 14px",fontSize:11,color:"#888",fontStyle:"italic",marginBottom:14,lineHeight:1.5}}>
+          No intangibles yet — earn them at the start of your career or through college breakthroughs.
+        </div>
+      ):(
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:14}}>
+          {playerIntangs.map(t=>(
+            <div key={t.id} style={{display:"flex",alignItems:"center",gap:6,padding:"7px 11px",background:"rgba(255,215,0,0.08)",border:"1px solid rgba(255,215,0,0.28)",borderRadius:20,fontSize:11,fontWeight:700,color:"#f0ede8"}}>
+              <span style={{fontSize:14}}>{t.icon}</span>
+              <span>{t.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
       <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
     </div>
   );
@@ -3757,18 +3878,192 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
   );
 }
 
-// ─── NBA BANK (coming soon) ────────────────────────────────────────────────────
-function NbaBankScreen({money, go}){
+// ─── NBA SPEND (coming soon) ───────────────────────────────────────────────────
+function NbaSpendScreen({money, go}){
   return(
     <div style={{textAlign:"center",padding:"30px 0"}}>
       <div style={{fontSize:48,marginBottom:8}}>💰</div>
-      <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:4}}>BANK</div>
+      <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:4}}>SPEND</div>
       <div style={{fontSize:13,color:"#aaa",marginBottom:6}}>Current balance</div>
       <div style={{fontSize:32,fontWeight:900,color:GR,marginBottom:24}}>{fmtMoney(money||0)}</div>
       <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:18,fontSize:12,color:"#888",lineHeight:1.6}}>
         Coming soon: contracts, endorsements, investments, charity, off-court spending.
       </div>
       <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+    </div>
+  );
+}
+
+// ─── NBA AGENT ─────────────────────────────────────────────────────────────────
+// Shows the player's signed agent and lets them request a contract extension
+// (placeholder for now) or a trade. Trade requests are gated by season state
+// and resolved with a chance based on player OVR × agent reputation.
+function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, go, toast}){
+  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const gp=nbaGamesPlayed||0;
+  // "Mid-season" = between stretches (gp >= 41 but < 82). "Offseason" = at the
+  // start of a year after at least one season has been played (gp == 0 and
+  // seasonsPlayed >= 1). Both windows allow trade requests.
+  const isMidSeason=gp>=41&&gp<82;
+  const isOffseason=gp===0&&seasonsPlayed>=1;
+  const tradeAvailable=isMidSeason||isOffseason;
+  const tradeWindowLabel=isMidSeason?"Mid-season trade deadline":isOffseason?"Offseason":gp===0?"Pre-season (no trades until mid-year)":"In-game (no trades during a stretch)";
+  const isElite=ovr>=90;
+
+  // Up to 3 preferred destinations (elite players only). The user toggles
+  // teams in/out; max 3 selected. Locked once they submit.
+  const [picks,setPicks]=useState([]);
+  // "result" cycles through pending → success/denied so the UI can render the
+  // outcome card and lock the screen until the user backs out.
+  const [result,setResult]=useState(null); // null | {success: boolean, newTeam?: string}
+
+  const togglePick=(team)=>{
+    setPicks(prev=>{
+      if(prev.includes(team)) return prev.filter(t=>t!==team);
+      if(prev.length>=3) return prev;
+      return [...prev,team];
+    });
+  };
+
+  // Compute the trade-success chance. Base scales by OVR tier; agent rep
+  // (0-10) adds up to ~33 percentage points on top. Sub-65 OVR players are
+  // effectively unmarketable.
+  const baseChance=ovr>=90?0.90:ovr>=80?0.70:ovr>=70?0.40:ovr>=65?0.20:0.05;
+  const agentBonus=(agent?.rep||5)/30;
+  const successChance=Math.min(0.98,baseChance+agentBonus);
+
+  const requestTrade=()=>{
+    if(!tradeAvailable){toast&&toast("No trade window open right now","#888");return;}
+    if(isElite&&picks.length===0){toast&&toast("Pick at least one preferred destination","#888");return;}
+    if(Math.random()<successChance){
+      const eligible=NBA_TEAMS.filter(t=>t!==nbaTeam);
+      let newTeam;
+      if(isElite&&picks.length>0){
+        // Trade goes to a randomly chosen preferred destination (excluding current team).
+        const validPicks=picks.filter(t=>t!==nbaTeam);
+        newTeam=validPicks.length>0?validPicks[rand(0,validPicks.length-1)]:eligible[rand(0,eligible.length-1)];
+      } else {
+        newTeam=eligible[rand(0,eligible.length-1)];
+      }
+      setNbaTeam&&setNbaTeam(newTeam);
+      // Trade = new team = new mentor relationship needed.
+      setNbaMentor&&setNbaMentor(null);
+      setResult({success:true,newTeam});
+      toast&&toast(`Traded to ${newTeam}!`,GR);
+    } else {
+      setResult({success:false});
+      toast&&toast("Trade request denied — no team made a serious offer","#888");
+    }
+  };
+
+  if(!agent){
+    return(
+      <div style={{textAlign:"center",padding:"30px 0"}}>
+        <div style={{fontSize:44,marginBottom:8}}>📞</div>
+        <div style={{fontSize:18,fontWeight:900,color:"#fff",marginBottom:6}}>NO AGENT SIGNED</div>
+        <div style={{fontSize:12,color:"#888",marginBottom:18,lineHeight:1.5}}>You don't have an agent on retainer.<br/>This screen unlocks once you sign with one.</div>
+        <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Representation</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>AGENT</div>
+      </div>
+
+      {/* Agent card — name, agency, rep badge */}
+      <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}55`,borderRadius:12,padding:"14px 16px",marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
+        <div style={{width:50,height:50,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, #b08800)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>👔</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1}}>{agent.name}</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:2}}>{agent.agency}</div>
+        </div>
+        <div style={{textAlign:"center",padding:"5px 9px",background:"rgba(0,0,0,0.4)",borderRadius:8,border:`1px solid ${agent.rep>=8?GR:agent.rep>=6?OR:"#666"}55`}}>
+          <div style={{fontSize:8,letterSpacing:1.5,color:"#888",fontWeight:700}}>REP</div>
+          <div style={{fontSize:18,fontWeight:900,color:agent.rep>=8?GR:agent.rep>=6?OR:"#ddd",lineHeight:1}}>{agent.rep}/10</div>
+        </div>
+      </div>
+
+      {/* If we have a result, show it and stop here */}
+      {result?(
+        <div style={{background:result.success?"rgba(0,220,100,0.08)":"rgba(232,64,64,0.08)",border:`1px solid ${result.success?GR:RE}55`,borderRadius:10,padding:14,marginBottom:14,textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:6}}>{result.success?"✅":"❌"}</div>
+          <div style={{fontSize:16,fontWeight:900,color:result.success?GR:RE,marginBottom:4}}>{result.success?"TRADE APPROVED":"REQUEST DENIED"}</div>
+          {result.success?(
+            <div style={{fontSize:12,color:"#ddd",lineHeight:1.5}}>You've been traded to the <span style={{color:"#fff",fontWeight:900}}>{result.newTeam}</span>.<br/>Mentor cleared — pick a new vet on your team page.</div>
+          ):(
+            <div style={{fontSize:12,color:"#aaa",lineHeight:1.5}}>{agent.name} couldn't drum up a serious offer.{ovr<70?" Keep grinding your skills — higher OVR opens more doors.":" Maybe wait for the next window."}</div>
+          )}
+          <button onClick={()=>go("leagueHub")} style={{...btnS,marginTop:14,padding:"10px 24px"}}>← Back to Hub</button>
+        </div>
+      ):(
+        <>
+          {/* Two action options */}
+          <div style={{fontSize:10,letterSpacing:3,color:"#aaa",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>Requests</div>
+
+          {/* Contract extension — placeholder */}
+          <button onClick={()=>toast&&toast("Contract extensions coming soon","#888")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,color:"#fff",cursor:"pointer",marginBottom:8,opacity:0.7,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:18,width:26,textAlign:"center"}}>📝</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:900,letterSpacing:1.5}}>REQUEST CONTRACT EXTENSION</div>
+                <div style={{fontSize:11,color:"#888",marginTop:1}}>Coming soon</div>
+              </div>
+            </div>
+          </button>
+
+          {/* Trade request */}
+          <button onClick={requestTrade} disabled={!tradeAvailable||(isElite&&picks.length===0)} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:tradeAvailable?"rgba(232,135,58,0.12)":"rgba(255,255,255,0.04)",border:`1px solid ${tradeAvailable?OR+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:tradeAvailable?"pointer":"not-allowed",marginBottom:8,opacity:tradeAvailable?1:0.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:18,width:26,textAlign:"center"}}>🔄</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:900,letterSpacing:1.5,color:tradeAvailable?OR:"#ddd"}}>REQUEST TRADE</div>
+                <div style={{fontSize:11,color:"#888",marginTop:1}}>{tradeWindowLabel}</div>
+              </div>
+              {tradeAvailable&&<div style={{fontSize:10,color:successChance>=0.7?GR:successChance>=0.4?OR:RE,fontWeight:900,letterSpacing:1}}>{Math.round(successChance*100)}%</div>}
+            </div>
+          </button>
+
+          {/* Elite-only team picker */}
+          {tradeAvailable&&isElite&&(
+            <div style={{background:"rgba(255,215,0,0.04)",border:`1px solid ${GO}33`,borderRadius:10,padding:"10px 12px",marginTop:6}}>
+              <div style={{fontSize:11,fontWeight:900,color:GO,letterSpacing:1.5,marginBottom:3}}>⭐ ELITE PERK · PREFERRED DESTINATIONS</div>
+              <div style={{fontSize:11,color:"#aaa",marginBottom:8,lineHeight:1.5}}>You're a 90+ OVR superstar — pick up to 3 teams. If your trade goes through, you'll land on one of them.</div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:6}}>
+                {NBA_TEAMS.filter(t=>t!==nbaTeam).map(t=>{
+                  const td=NBA_TEAM_DATA[t]||{p:"#444",s:"#888",abbr:"???"};
+                  const selected=picks.includes(t);
+                  return(
+                    <button key={t} onClick={()=>togglePick(t)} style={{padding:"5px 2px",background:selected?`linear-gradient(135deg, ${td.p}, ${td.p}88)`:"rgba(0,0,0,0.3)",border:`1px solid ${selected?td.s+"99":"rgba(255,255,255,0.08)"}`,borderRadius:5,color:selected?"#fff":"#aaa",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:selected?900:600,fontSize:10,letterSpacing:0.5}}>
+                      {td.abbr}
+                    </button>
+                  );
+                })}
+              </div>
+              <div style={{fontSize:10,color:"#666"}}>{picks.length}/3 selected{picks.length===0&&" — pick at least one"}</div>
+            </div>
+          )}
+
+          {/* Player overview — helps user understand their leverage */}
+          <div style={{marginTop:14,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:10,fontSize:11,color:"#aaa",lineHeight:1.6}}>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+              <span>Your OVR</span><span style={{color:ovr>=85?GR:ovr>=75?OR:"#ddd",fontWeight:700}}>{ovr}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+              <span>Agent rep</span><span style={{color:"#ddd",fontWeight:700}}>{agent.rep}/10</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between"}}>
+              <span>Trade chance</span><span style={{color:successChance>=0.7?GR:successChance>=0.4?OR:RE,fontWeight:700}}>{Math.round(successChance*100)}%</span>
+            </div>
+          </div>
+
+          <button onClick={()=>go("leagueHub")} style={{...ghostS,marginTop:14}}>← Back to Hub</button>
+        </>
+      )}
     </div>
   );
 }
@@ -4046,6 +4341,7 @@ export default function App(){
       const mike=buildMike({draftPick:3});
       setPlayer(mike); setNbaTeam("LA Lakers");
       setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); // Marcus Webb — top-tier rep 10 (matches lottery pick)
       setMoney(2000000); setSkillPoints(5); setNbaSeasons([]);
       setScreen("leagueHub");
       toast("Mike — Lottery Rookie loaded","#FFD700");
@@ -4055,6 +4351,7 @@ export default function App(){
       const mike=buildMike({draftPick:40});
       setPlayer(mike); setNbaTeam("Charlotte Bobcats");
       setSignedShoeBrand(null);
+      setAgent(AGENTS[3]); // Nia Collins — boutique rep 6, fits early-2nd
       setMoney(0); setSkillPoints(0); setNbaSeasons([]);
       setScreen("leagueHub");
       toast("Mike — 2nd Round Rookie loaded","#a88aff");
@@ -4064,6 +4361,7 @@ export default function App(){
       const mike=buildMike({draftPick:0,isUndrafted:true});
       setPlayer(mike); setNbaTeam("Cleveland Cavaliers");
       setSignedShoeBrand(null);
+      setAgent(AGENTS[4]); // Kevin Pratt — hungry rep 4, takes anyone
       setMoney(0); setSkillPoints(0); setNbaSeasons([]);
       setScreen("leagueHub");
       toast("Mike — Undrafted Rookie loaded","#ff5252");
@@ -4073,6 +4371,7 @@ export default function App(){
       const mike=buildMike({draftPick:8,elite:true});
       setPlayer(mike); setNbaTeam("Sacramento Kings");
       setSignedShoeBrand({id:"adidas",name:"Adidas",maxPick:10,bonus:2000000,skillBonus:5,color:"#FFFFFF",subtitle:"Top 10 picks only"});
+      setAgent(AGENTS[1]); // Diane Holloway — established rep 8
       setMoney(5000000); setSkillPoints(20);
       setNbaSeasons([
         {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
@@ -5444,13 +5743,13 @@ export default function App(){
     ),
 
     leagueHub:(
-      <MenuFrame sub="The Association" title={(nbaTeam||"NBA").toUpperCase()}>
-        <LeagueHub player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} nbaGamesPlayed={nbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} playoffsDone={playoffsDone} go={go}/>
+      <MenuFrame sub={`${player.position||"--"} · ${(nbaTeam||"FREE AGENT").toUpperCase()}`} title={(player.name||"PLAYER").toUpperCase()}>
+        <LeagueHub player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} nbaGamesPlayed={nbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} playoffsDone={playoffsDone} skillPoints={skillPoints} go={go}/>
       </MenuFrame>
     ),
     nbaPlay:(
       <MenuFrame sub={`${nbaTeam||"Team"} · Season`} title="GAMETIME">
-        <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} go={go} toast={toast}/>
+        <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaSkills:(
@@ -5463,9 +5762,14 @@ export default function App(){
         <NbaTeamScreen player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} nbaMentor={nbaMentor} setNbaMentor={setNbaMentor} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
       </MenuFrame>
     ),
-    nbaBank:(
-      <MenuFrame sub="Coming Soon" title="BANK">
-        <NbaBankScreen money={money} go={go}/>
+    nbaAgent:(
+      <MenuFrame sub="Representation" title="AGENT">
+        <NbaAgentScreen player={player} agent={agent} nbaTeam={nbaTeam} setNbaTeam={setNbaTeam} setNbaMentor={setNbaMentor} nbaGamesPlayed={nbaGamesPlayed} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaSpend:(
+      <MenuFrame sub="Coming Soon" title="SPEND">
+        <NbaSpendScreen money={money} go={go}/>
       </MenuFrame>
     ),
     nbaStats:(
