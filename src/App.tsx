@@ -253,6 +253,194 @@ function fmtMoney(n){
   return `$${n}`;
 }
 
+// ─── CONTRACTS ─────────────────────────────────────────────────────────────────
+// All rookie contracts are 4-year guaranteed (the user opted to remove options
+// for simplicity). The numbers here are based on the actual 2004 NBA rookie
+// scale, rounded to clean values. Year-over-year raises in the real scale are
+// ~8% — we just store the year-1 amount and apply 8% raises in `buildRookieContract`.
+// Picks 1-30 follow the scale; picks 31-60 + undrafted get the veteran minimum
+// ($385,277 in 2004), which we round to $400K.
+const ROOKIE_SCALE_2004 = {
+  // [pick]: year-1 salary (USD). Signing bonus is 80% of year-1 per the real CBA.
+  1:3700000, 2:3300000, 3:2950000, 4:2650000, 5:2400000,
+  6:2180000, 7:2000000, 8:1840000, 9:1700000, 10:1580000,
+  11:1480000, 12:1390000, 13:1310000, 14:1240000,
+  15:1180000, 16:1130000, 17:1090000, 18:1050000, 19:1010000, 20:980000,
+  21:950000, 22:920000, 23:895000, 24:870000, 25:845000,
+  26:820000, 27:800000, 28:780000, 29:760000, 30:740000,
+};
+const VETERAN_MINIMUM_2004 = 400000;     // Rounded — actual league min for 0 years exp
+const ROOKIE_RAISE = 0.08;               // 8% annual raise per real rookie scale
+const ROOKIE_SIGNING_BONUS_PCT = 0.80;   // Signing bonus = 80% of year-1 salary
+
+// Historical league salary cap by NBA year (the season-starting year, so 2004
+// = 2004-05 season). Values rounded to nearest $100K from real NBA data. We
+// interpolate for any year not listed; for years past 2023 we project +5%/yr.
+const SALARY_CAP_HISTORY = {
+  2004:43_840000, 2005:49_500000, 2006:53_135000, 2007:55_630000,
+  2008:58_680000, 2009:57_700000, 2010:58_044000, 2011:58_044000,
+  2012:58_044000, 2013:58_679000, 2014:63_065000, 2015:70_000000,
+  2016:94_143000, 2017:99_093000, 2018:101_869000, 2019:109_140000,
+  2020:109_140000, 2021:112_414000, 2022:123_655000, 2023:136_021000,
+};
+function getSalaryCap(year){
+  if(SALARY_CAP_HISTORY[year]) return SALARY_CAP_HISTORY[year];
+  // Years past the table: project from 2023 at +5%/yr.
+  if(year>2023){
+    const years=year-2023;
+    return Math.round(SALARY_CAP_HISTORY[2023]*Math.pow(1.05,years));
+  }
+  // Years before 2004 shouldn't happen (NBA_START_YEAR is 2004), but fall back
+  // to the 2004 cap just in case.
+  return SALARY_CAP_HISTORY[2004];
+}
+
+// Max salary by service time, per real NBA rules:
+//   0-6 years experience → 25% of cap
+//   7-9 years           → 30% of cap
+//   10+ years           → 35% of cap
+function getMaxSalary(year, yearsInLeague){
+  const cap=getSalaryCap(year);
+  const pct=yearsInLeague>=10?0.35:yearsInLeague>=7?0.30:0.25;
+  return Math.round(cap*pct);
+}
+
+// Build a rookie contract object based on draft pick. Stored on the player as
+// player.contract once they sign. Shape:
+//   { signedYear, years, totalValue, signingBonus, salaries: [yr1,yr2,yr3,yr4], team }
+function buildRookieContract(pick, signedYear, team, isUndrafted=false){
+  const baseY1 = isUndrafted||pick===0||pick>30
+    ? VETERAN_MINIMUM_2004
+    : (ROOKIE_SCALE_2004[pick]||VETERAN_MINIMUM_2004);
+  // 4 years, each year +8% over the prior
+  const salaries=[];
+  let s=baseY1;
+  for(let i=0;i<4;i++){ salaries.push(Math.round(s)); s=s*(1+ROOKIE_RAISE); }
+  const totalValue=salaries.reduce((a,b)=>a+b,0);
+  // Signing bonus only for drafted players on the rookie scale (2nd round and
+  // undrafted get base minimum with no signing bonus).
+  const signingBonus = isUndrafted||pick===0||pick>30
+    ? 0
+    : Math.round(baseY1*ROOKIE_SIGNING_BONUS_PCT);
+  return {
+    type:"rookie",
+    signedYear, years:4, salaries,
+    totalValue, signingBonus, team,
+  };
+}
+
+// How many years remain on the contract given the current NBA year. Returns 0
+// if expired (free agent), or null if no contract at all.
+function contractRemainingYears(contract, currentYear){
+  if(!contract) return null;
+  const elapsed=currentYear-contract.signedYear;
+  return Math.max(0,contract.years-elapsed);
+}
+
+// Get the current year's salary from the contract's salary array. Returns 0
+// if expired or missing.
+function currentYearSalary(contract, currentYear){
+  if(!contract) return 0;
+  const idx=currentYear-contract.signedYear;
+  if(idx<0||idx>=contract.salaries.length) return 0;
+  return contract.salaries[idx];
+}
+
+// Format a contract for inline display: "4yr · $20.2M total · $5.0M avg"
+function formatContractSummary(contract){
+  if(!contract) return "No contract";
+  const avg=contract.totalValue/contract.years;
+  return `${contract.years}yr · ${fmtMoney(contract.totalValue)} total · ${fmtMoney(Math.round(avg))} avg`;
+}
+
+// ─── FREE AGENCY ───────────────────────────────────────────────────────────────
+// Build a free-agent offer for a given team. Mirrors the extension formula but
+// per-team appreciation varies (±15% multiplier) so offers feel different.
+// Length: 2-4 yrs scaled by OVR — better players land longer deals.
+function buildFAOffer(team, ovr, year, yearsInLeague, appreciation=1.0){
+  const max=getMaxSalary(year, yearsInLeague);
+  const pct=ovr>=95?1.00:ovr>=90?0.90:ovr>=85?0.70:ovr>=80?0.50:ovr>=75?0.30:ovr>=65?0.18:0.10;
+  const baseY1=Math.max(VETERAN_MINIMUM_2004, Math.round(max*pct*appreciation));
+  const years=ovr>=85?4:ovr>=75?3:2;
+  const salaries=[]; let s=baseY1;
+  for(let i=0;i<years;i++){ salaries.push(Math.round(s)); s=s*1.05; } // 5% raises on FA deals
+  return {
+    type:"free-agent", signedYear:year, years, salaries,
+    totalValue:salaries.reduce((a,b)=>a+b,0),
+    signingBonus:Math.round(baseY1*0.10),
+    team,
+  };
+}
+
+// Build a veteran-minimum offer (the safety-net offer). 1-year deal, no
+// signing bonus. Used for sub-65 OVR or pre-35 retirement safety net.
+function buildVetMinOffer(team, year){
+  return {
+    type:"vet-min", signedYear:year, years:1, salaries:[VETERAN_MINIMUM_2004],
+    totalValue:VETERAN_MINIMUM_2004, signingBonus:0, team,
+  };
+}
+
+// Does a team have positional need for a player at given position+OVR?
+// Looks at the team's current top player at that position — if their OVR is
+// within 4 of the player's OVR (or below it), there's room.
+function teamHasNeedAt(teamRosterKey, position, playerOvr, seasonData){
+  const data=seasonData?.[teamRosterKey];
+  if(!data) return false;
+  const samePos=data.players.filter(p=>p[1]===position);
+  if(samePos.length===0) return true; // no one at the position — definitely need
+  const topAtPos=Math.max(...samePos.map(p=>p[2]));
+  return topAtPos <= playerOvr + 4; // need exists unless their starter is clearly better
+}
+
+// Generate the full set of FA offers for the player.
+//   - Current team always offers (loyalty).
+//   - All other teams with positional need offer.
+//   - If no team would otherwise offer AND player is under 35 OR OVR >= 65,
+//     fall back to a veteran-minimum offer from a random team (safety net).
+//   - If 35+ and OVR < 65 and no organic offers, return [] (retirement).
+// Returns a sorted-by-totalValue-desc array of offer objects.
+function buildFAOffers(player, currentTeam, currentYear, seasonsPlayed, age){
+  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const seasonData=getNbaSeasonData(currentYear).data;
+  const offers=[];
+  // Current team — always offers (slight loyalty bump, +5% appreciation)
+  if(currentTeam){
+    const id=getTeamIdentity(currentTeam,currentYear);
+    offers.push({...buildFAOffer(currentTeam,ovr,currentYear,seasonsPlayed,1.05), isCurrentTeam:true, displayName:id.name});
+  }
+  // Other teams with positional need
+  for(const team of NBA_TEAMS){
+    if(team===currentTeam) continue;
+    const id=getTeamIdentity(team,currentYear);
+    if(teamHasNeedAt(id.rosterKey, player.position||"SG", ovr, seasonData)){
+      // Random appreciation 0.85-1.15 — some teams value you more than others
+      const appreciation=0.85+Math.random()*0.30;
+      offers.push({...buildFAOffer(team,ovr,currentYear,seasonsPlayed,appreciation), displayName:id.name});
+    }
+  }
+  // Safety net: if no offers AND (age < 35 OR ovr >= 65), inject a vet-min
+  if(offers.length===0 && (age<35 || ovr>=65)){
+    // Pick a random team that doesn't have a stacked roster at the position
+    const eligible=NBA_TEAMS.filter(t=>t!==currentTeam);
+    const randomTeam=eligible[Math.floor(Math.random()*eligible.length)];
+    const id=getTeamIdentity(randomTeam,currentYear);
+    offers.push({...buildVetMinOffer(randomTeam,currentYear), displayName:id.name, isVetMin:true});
+  }
+  return offers.sort((a,b)=>b.totalValue-a.totalValue);
+}
+
+// OVR threshold for which agents will sign you as a free agent (for the
+// "fire your agent → pick a new one" flow). Higher-rep agents only take
+// established players.
+function agentMinOVR(rep){
+  if(rep>=10) return 85;
+  if(rep>=8) return 75;
+  if(rep>=7) return 70;
+  if(rep>=6) return 65;
+  return 0; // rep 4-5 takes anyone
+}
+
 // ─── NBA ROSTER DATA ─────────────────────────────────────────────────────────
 // Per-season rosters and records now live in `src/data/nbaRosters.ts`, keyed
 // by season-start year (2003 = 2003-04 season, 2004 = 2004-05, etc.).
@@ -2739,6 +2927,105 @@ function ShoeDealsBlock({pick, isLottery, onSign, signedBrand, toast}){
   );
 }
 
+// ─── CONTRACT OFFER BLOCK ──────────────────────────────────────────────────────
+// Post-draft contract signing UI. Shows the rookie deal year-by-year, signing
+// bonus, and a SIGN button that opens a signature modal (mirrors the shoe-deal
+// flow for visual consistency). Once signed, it locks into a "SIGNED" card.
+function ContractOfferBlock({pick, isUndrafted, signedYear, team, signedContract, onSign}){
+  const [pending,setPending]=useState(false);
+  const [hasInk,setHasInk]=useState(false);
+  // Build the offer object on render — the data is deterministic by pick.
+  const offer=buildRookieContract(pick||0, signedYear, team, isUndrafted);
+  const avg=offer.totalValue/offer.years;
+  if(signedContract){
+    // Compact "signed" card — same vibe as a signed shoe deal
+    return(
+      <div style={{background:"rgba(0,220,100,0.08)",border:`1px solid ${GR}55`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+          <div>
+            <div style={{fontSize:9,letterSpacing:2,color:GR,fontWeight:700,marginBottom:1}}>✓ ROOKIE CONTRACT SIGNED</div>
+            <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{formatContractSummary(signedContract)}</div>
+          </div>
+          {signedContract.signingBonus>0&&(
+            <div style={{textAlign:"right"}}>
+              <div style={{fontSize:9,color:"#888",letterSpacing:1.5,fontWeight:700}}>SIGNING BONUS</div>
+              <div style={{fontSize:14,fontWeight:900,color:YE}}>{fmtMoney(signedContract.signingBonus)}</div>
+            </div>
+          )}
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:`repeat(${signedContract.salaries.length},1fr)`,gap:4,marginTop:8,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+          {signedContract.salaries.map((s,i)=>(
+            <div key={i} style={{textAlign:"center"}}>
+              <div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>YR {i+1}</div>
+              <div style={{fontSize:11,color:"#ddd",fontWeight:700}}>{fmtMoney(s)}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  return(
+    <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+        <div style={{fontSize:11,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase"}}>📄 Rookie Contract Offer</div>
+        <div style={{fontSize:10,color:"#aaa"}}>{isUndrafted||pick>30?"Veteran Minimum":"NBA Rookie Scale"}</div>
+      </div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1}}>{fmtMoney(offer.totalValue)}</div>
+          <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{offer.years} years · {fmtMoney(Math.round(avg))} avg</div>
+        </div>
+        {offer.signingBonus>0&&(
+          <div style={{textAlign:"right",padding:"5px 9px",background:"rgba(0,0,0,0.35)",borderRadius:7}}>
+            <div style={{fontSize:8,color:"#888",letterSpacing:1,fontWeight:700}}>SIGNING BONUS</div>
+            <div style={{fontSize:14,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(offer.signingBonus)}</div>
+          </div>
+        )}
+      </div>
+      {/* Year-by-year breakdown */}
+      <div style={{display:"grid",gridTemplateColumns:`repeat(${offer.salaries.length},1fr)`,gap:4,marginBottom:10,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+        {offer.salaries.map((s,i)=>(
+          <div key={i} style={{textAlign:"center"}}>
+            <div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>YR {i+1}</div>
+            <div style={{fontSize:11,color:"#ddd",fontWeight:700}}>{fmtMoney(s)}</div>
+          </div>
+        ))}
+      </div>
+      <button onClick={()=>{setPending(true);setHasInk(false);}} style={{...btnS,width:"100%",padding:"10px 0",fontSize:13}}>
+        SIGN CONTRACT →
+      </button>
+
+      {pending&&(
+        <div onClick={()=>setPending(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+          <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:20,maxWidth:380,width:"100%",border:`1px solid ${GO}55`}}>
+            <div style={{textAlign:"center",marginBottom:14}}>
+              <div style={{fontSize:9,letterSpacing:3,color:GO,textTransform:"uppercase",marginBottom:4}}>NBA Standard Player Contract</div>
+              <div style={{fontSize:22,fontWeight:900,color:"#fff",letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase"}}>{team||"NBA Team"}</div>
+              <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{offer.years} years · {fmtMoney(offer.totalValue)} total{offer.signingBonus>0?` · ${fmtMoney(offer.signingBonus)} signing bonus`:""}</div>
+            </div>
+            <div style={{fontSize:11,color:"#ccc",lineHeight:1.5,marginBottom:10,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,border:"1px dashed rgba(255,255,255,0.1)"}}>
+              I, the undersigned, hereby agree to play professional basketball for the <strong style={{color:"#fff"}}>{team||"team"}</strong> for the term of this agreement under the NBA Standard Player Contract.
+            </div>
+            <SignaturePad onChange={setHasInk}/>
+            <div style={{display:"flex",gap:8,marginTop:14}}>
+              <button onClick={()=>setPending(false)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                CANCEL
+              </button>
+              <button onClick={()=>{
+                if(!hasInk) return;
+                onSign(offer);
+                setPending(false);
+              }} disabled={!hasInk} style={{flex:2,padding:"10px 0",background:hasInk?btnS.background:"rgba(255,255,255,0.06)",color:hasInk?"#080c10":"#666",border:"none",borderRadius:8,cursor:hasInk?"pointer":"not-allowed",fontSize:12,fontWeight:900,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                {hasInk?"SIGN":"SIGN YOUR NAME"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
 function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,setPlayer,skillPoints,setSkillPoints,money,setMoney,signedShoeBrand,setSignedShoeBrand,setNbaTeam,go,toast,initialStage,initialPick,initialTeam}){
   // Reveal stages: black-out → "with the Xth pick" → team name → "selects..." → name + jersey
@@ -3020,7 +3307,11 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
                 <button key={t} onClick={()=>{
                   setNbaTeam&&setNbaTeam(t);
                   setSkillPoints&&setSkillPoints(signedShoeBrand?.skillBonus||0);
-                  setPlayer&&setPlayer(p=>({...p,draftPick:0,isUndrafted:true}));
+                  // Auto-sign vet-min contract for undrafted players — there's no
+                  // negotiation, just the league minimum. Build it now so the new
+                  // team is on the contract.
+                  const contract=buildRookieContract(0,NBA_START_YEAR,t,true);
+                  setPlayer&&setPlayer(p=>({...p,draftPick:0,isUndrafted:true,contract}));
                   // First NBA entry → Cousin Kerry welcome. The kerryWelcome
                   // screen sets metKerry=true and forwards to leagueHub.
                   go&&go("kerryWelcome");
@@ -3031,7 +3322,7 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
               );
             })}
           </div>
-          <div style={{background:"rgba(0,0,0,0.3)",borderRadius:10,padding:10,fontSize:11,color:"#888",lineHeight:1.4}}>Undrafted players sit at the end of the bench. Earn your minutes.</div>
+          <div style={{background:"rgba(0,0,0,0.3)",borderRadius:10,padding:10,fontSize:11,color:"#888",lineHeight:1.4}}>Undrafted players sit at the end of the bench. Earn your minutes.<br/><span style={{color:"#aaa"}}>Auto-signed to a 4-yr veteran-minimum deal ({fmtMoney(buildRookieContract(0,NBA_START_YEAR,"",true).totalValue)} total) with the team you pick.</span></div>
         </div>
       );
     }
@@ -3102,6 +3393,21 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
           }}
         />
 
+        {/* Rookie contract — separate from shoe deal, but flows the same way.
+            Must be signed before WELCOME TO THE LEAGUE is enabled. */}
+        <ContractOfferBlock
+          pick={pick}
+          isUndrafted={false}
+          signedYear={NBA_START_YEAR}
+          team={team}
+          signedContract={player.contract}
+          onSign={(contract)=>{
+            setPlayer&&setPlayer(p=>({...p,contract}));
+            setMoney&&setMoney(m=>(m||0)+contract.signingBonus);
+            toast&&toast(`Contract signed! ${formatContractSummary(contract)}`,GR);
+          }}
+        />
+
         {/* AC's Take — Austin Carr scout-voice blurb */}
         <div style={{background:"linear-gradient(135deg, rgba(232,135,58,0.12) 0%, rgba(0,0,0,0.4) 100%)",border:"1px solid rgba(232,135,58,0.35)",borderRadius:12,padding:14,marginBottom:14}}>
           <div style={{display:"flex",alignItems:"flex-start",gap:12,marginBottom:10}}>
@@ -3163,8 +3469,10 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
           </div>
         )}
 
-        {/* Continue to the NBA hub — captures the team affiliation. */}
+        {/* Continue to the NBA hub — captures the team affiliation. Locked
+            until the player signs their rookie contract. */}
         <button onClick={()=>{
+          if(!player.contract){toast&&toast("Sign your rookie contract first","#888");return;}
           setNbaTeam&&setNbaTeam(team);
           // Reset skill points to only the shoe-deal bonus (clears the 100-pt college pool).
           setSkillPoints&&setSkillPoints(signedShoeBrand?.skillBonus||0);
@@ -3173,8 +3481,8 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
           // First NBA entry → Cousin Kerry welcome. The kerryWelcome screen
           // sets metKerry=true and forwards to leagueHub.
           go&&go("kerryWelcome");
-        }} style={{...btnS,fontSize:16,padding:14,marginTop:8}}>
-          WELCOME TO THE LEAGUE →
+        }} disabled={!player.contract} style={{...btnS,fontSize:16,padding:14,marginTop:8,opacity:player.contract?1:0.45,cursor:player.contract?"pointer":"not-allowed"}}>
+          {player.contract?"WELCOME TO THE LEAGUE →":"SIGN CONTRACT TO CONTINUE"}
         </button>
       </div>
     );
@@ -3686,7 +3994,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
 }
 
 // ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
-function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, go, toast}){
+function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, go, toast}){
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const id=getTeamIdentity(nbaTeam,currentYear);
@@ -3742,11 +4050,28 @@ function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaS
             apg:totals.games>0?+(totals.ast/totals.games).toFixed(1):0,
             fg:totals.fga>0?Math.round((totals.fgm/totals.fga)*100):0,
           };
+          // Pay this year's salary into the bank — happens once per season at
+          // the end-of-year transition. Free agents (no contract) earn nothing.
+          const paycheck=player.contract?currentYearSalary(player.contract,currentYear):0;
+          if(paycheck>0&&setMoney){
+            setMoney(m=>(m||0)+paycheck);
+            toast&&toast(`Paycheck deposited: ${fmtMoney(paycheck)}`,GR);
+          }
           setNbaSeasons(prev=>[...prev,seasonEntry]);
           setNbaGamesPlayed(0);
           setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
           setPlayoffsDone(false);
-          go("leagueHub");
+          // Did this season exhaust the contract? After the push above,
+          // seasonsPlayed is going to be (seasonsPlayed + 1) on next render.
+          // That means currentYear advances by 1 too. Check whether the
+          // upcoming year would put us past the contract's last year.
+          const nextYear=currentYear+1;
+          const expired=!player.contract || contractRemainingYears(player.contract,nextYear)===0;
+          if(expired){
+            go("freeAgency");
+          } else {
+            go("leagueHub");
+          }
         }} style={{...btnS,padding:"12px 32px"}}>NEXT SEASON →</button>
       </div>
     );
@@ -3986,18 +4311,108 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
 }
 
 // ─── NBA SPEND (coming soon) ───────────────────────────────────────────────────
-function NbaSpendScreen({money, go}){
+function NbaSpendScreen({money, player, nbaSeasons, go}){
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed;
+  const contract=player?.contract;
+  const yearSalary=contract?currentYearSalary(contract,currentYear):0;
+  const remainingYears=contract?contractRemainingYears(contract,currentYear):null;
+  // Remaining contract value = sum of salaries from this year forward.
+  const remainingValue=contract?contract.salaries.slice(currentYear-contract.signedYear).reduce((a,b)=>a+b,0):0;
   return(
     <div>
       <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
-      <div style={{textAlign:"center",padding:"30px 0"}}>
-        <div style={{fontSize:48,marginBottom:8}}>💰</div>
-        <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:4}}>SPEND</div>
-        <div style={{fontSize:13,color:"#aaa",marginBottom:6}}>Current balance</div>
-        <div style={{fontSize:32,fontWeight:900,color:GR,marginBottom:24}}>{fmtMoney(money||0)}</div>
-        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:18,fontSize:12,color:"#888",lineHeight:1.6}}>
-          Coming soon: contracts, endorsements, investments, charity, off-court spending.
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Bank Account</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SPEND</div>
+      </div>
+
+      {/* Big balance hero */}
+      <div style={{background:"linear-gradient(135deg, rgba(0,220,100,0.12) 0%, rgba(0,0,0,0.3) 100%)",border:`1px solid ${GR}55`,borderRadius:14,padding:"18px 16px",marginBottom:14,textAlign:"center"}}>
+        <div style={{fontSize:10,letterSpacing:3,color:GR,fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Current Balance</div>
+        <div style={{fontSize:36,fontWeight:900,color:"#fff",lineHeight:1,letterSpacing:1}}>{fmtMoney(money||0)}</div>
+        {yearSalary>0&&(
+          <div style={{fontSize:11,color:"#aaa",marginTop:8,letterSpacing:1}}>
+            {formatSeasonLabel(currentYear)} salary: <span style={{color:YE,fontWeight:900}}>{fmtMoney(yearSalary)}</span> <span style={{color:"#666"}}>· paid at end of season</span>
+          </div>
+        )}
+      </div>
+
+      {/* Contract snapshot — quick stats so the player understands their earning power */}
+      {contract&&(
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase",marginBottom:8}}>Contract Snapshot</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div>
+              <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>YEARS REMAINING</div>
+              <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1}}>{remainingYears}<span style={{fontSize:11,color:"#888",fontWeight:600,marginLeft:4}}>of {contract.years}</span></div>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>REMAINING VALUE</div>
+              <div style={{fontSize:18,fontWeight:900,color:GR,lineHeight:1.1}}>{fmtMoney(remainingValue)}</div>
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Coming-soon placeholder for the spending menu */}
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"12px 14px",fontSize:11,color:"#888",lineHeight:1.6}}>
+        <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Coming Soon</div>
+        Cars, homes, charity, investments, family support — off-court spending opens up in a future update.
+      </div>
+    </div>
+  );
+}
+
+// ─── AGENT PICKER MODAL ────────────────────────────────────────────────────────
+// Full-screen overlay listing all 5 agents. Each agent's row shows their rep,
+// agency, and whether the player qualifies for them (OVR-gated). Tapping a
+// qualified agent signs them. The current agent is marked and disabled — no
+// re-signing with the one you already have.
+function AgentPickerModal({ovr, currentAgent, onClose, onPick}){
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:430,width:"100%",maxHeight:"88vh",overflowY:"auto",border:`1px solid ${GO}55`}}>
+        <div style={{textAlign:"center",marginBottom:12}}>
+          <div style={{fontSize:9,letterSpacing:3,color:GO,textTransform:"uppercase",fontWeight:700,marginBottom:3}}>Free Agency · Representation</div>
+          <div style={{fontSize:20,fontWeight:900,color:"#fff",letterSpacing:0.5}}>HIRE AN AGENT</div>
+          <div style={{fontSize:11,color:"#888",marginTop:4}}>Your OVR: <span style={{color:OR,fontWeight:900}}>{ovr}</span></div>
+        </div>
+        {AGENTS.map(a=>{
+          const minOVR=agentMinOVR(a.rep);
+          const qualifies=ovr>=minOVR;
+          const isCurrent=currentAgent&&currentAgent.id===a.id;
+          const repColor=a.rep>=8?GR:a.rep>=6?OR:"#888";
+          return(
+            <button key={a.id} onClick={()=>{if(qualifies&&!isCurrent) onPick(a);}} disabled={!qualifies||isCurrent} style={{
+              display:"block",width:"100%",textAlign:"left",padding:"11px 13px",marginBottom:6,
+              background:isCurrent?"rgba(0,220,100,0.10)":qualifies?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.02)",
+              border:`1px solid ${isCurrent?GR+"55":qualifies?repColor+"44":"rgba(255,255,255,0.06)"}`,
+              borderRadius:8,color:"#fff",cursor:qualifies&&!isCurrent?"pointer":"not-allowed",
+              fontFamily:"'Barlow Condensed',sans-serif",opacity:qualifies?1:0.55
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
+                <div style={{width:34,height:34,borderRadius:"50%",background:`linear-gradient(135deg, ${repColor}, ${repColor}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>👔</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>
+                    {a.name}{isCurrent&&<span style={{fontSize:9,color:GR,marginLeft:6,letterSpacing:1}}>CURRENT</span>}
+                  </div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:1}}>{a.agency}</div>
+                </div>
+                <div style={{textAlign:"center",padding:"3px 7px",background:"rgba(0,0,0,0.4)",borderRadius:6}}>
+                  <div style={{fontSize:7,letterSpacing:1,color:"#888",fontWeight:700}}>REP</div>
+                  <div style={{fontSize:14,fontWeight:900,color:repColor,lineHeight:1}}>{a.rep}/10</div>
+                </div>
+              </div>
+              <div style={{fontSize:10,color:qualifies?"#aaa":"#666",lineHeight:1.4}}>
+                {qualifies
+                  ? (minOVR>0?`Requires OVR ${minOVR}+ ✓`:"Takes all clients")
+                  : `Requires OVR ${minOVR}+ — you're at ${ovr}`}
+              </div>
+            </button>
+          );
+        })}
+        <button onClick={onClose} style={{...ghostS,marginTop:8,padding:"8px 0",width:"100%",fontSize:12}}>CANCEL</button>
       </div>
     </div>
   );
@@ -4005,13 +4420,26 @@ function NbaSpendScreen({money, go}){
 
 // ─── NBA AGENT ─────────────────────────────────────────────────────────────────
 // Shows the player's signed agent and lets them request a contract extension
-// (placeholder for now) or a trade. Trade requests are gated by season state
-// and resolved with a chance based on player OVR × agent reputation.
-function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, go, toast}){
+// or a trade. Both gated by season state + resolved with chance based on
+// player OVR × agent reputation. Extension creates a new 4-year deal that
+// stacks onto the player's contract slot.
+function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, go, toast}){
   const ovr=calcOVR(player.skills||{},player.intangibles||[]);
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed; // used by getTeamIdentity for the picker
   const gp=nbaGamesPlayed||0;
+  // Whether the agent-picker modal is open. Triggered by the Fire Agent
+  // button — shows all agents the player qualifies for (by OVR threshold)
+  // so they can re-sign with a better one as they level up.
+  const [showAgentPicker,setShowAgentPicker]=useState(false);
+  // Contract info — feeds the new Contract card and gates the renegotiation UI
+  // (renegotiation arrives in Batch 4; for now the card is read-only).
+  const contract=player.contract;
+  const remainingYears=contract?contractRemainingYears(contract,currentYear):null;
+  const yearSalary=contract?currentYearSalary(contract,currentYear):0;
+  // Extension eligibility — only when exactly 1 year remains on the deal.
+  // This is the "contract year" framing real NBA players talk about.
+  const extensionEligible=contract&&remainingYears===1;
   // "Mid-season" = between stretches (gp >= 41 but < 82). "Offseason" = at the
   // start of a year after at least one season has been played (gp == 0 and
   // seasonsPlayed >= 1). Both windows allow trade requests.
@@ -4025,8 +4453,10 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
   // teams in/out; max 3 selected. Locked once they submit.
   const [picks,setPicks]=useState([]);
   // "result" cycles through pending → success/denied so the UI can render the
-  // outcome card and lock the screen until the user backs out.
-  const [result,setResult]=useState(null); // null | {success: boolean, newTeam?: string}
+  // outcome card and lock the screen until the user backs out. Holds either a
+  // trade result {kind:"trade", success, newTeam} or an extension result
+  // {kind:"extension", success, newContract}.
+  const [result,setResult]=useState(null);
 
   const togglePick=(team)=>{
     setPicks(prev=>{
@@ -4042,6 +4472,58 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
   const baseChance=ovr>=90?0.90:ovr>=80?0.70:ovr>=70?0.40:ovr>=65?0.20:0.05;
   const agentBonus=(agent?.rep||5)/30;
   const successChance=Math.min(0.98,baseChance+agentBonus);
+  // Extension chance is slightly more generous — the team already knows you
+  // and there's no other GM to convince. Use a small +10% nudge.
+  const extensionChance=Math.min(0.98,baseChance+0.10+agentBonus);
+
+  // Calculate what an extension offer would look like at the player's current
+  // OVR tier. The new deal starts the year AFTER the current contract ends.
+  // Year-1 salary is a fraction of the salary cap that scales with OVR, capped
+  // by the league max for the player's service time:
+  //   95+ OVR → max contract (35% / 30% / 25% depending on years served)
+  //   90-94  → 90% of max
+  //   85-89  → 70% of max
+  //   80-84  → 50% of max
+  //   75-79  → 30% of max
+  //   65-74  → 18% of max
+  //   <65    → 10% of max
+  // Then 4 years with 8% annual raises (matching the rookie scale pattern).
+  // Signing bonus = 15% of year-1 salary, rounded.
+  const buildExtensionOffer=()=>{
+    if(!extensionEligible) return null;
+    // Extension starts the year AFTER the current deal ends.
+    const newSignedYear=contract.signedYear+contract.years;
+    const yearsInLeague=seasonsPlayed; // service time at the time of signing
+    const max=getMaxSalary(newSignedYear,yearsInLeague);
+    const pct=ovr>=95?1.00:ovr>=90?0.90:ovr>=85?0.70:ovr>=80?0.50:ovr>=75?0.30:ovr>=65?0.18:0.10;
+    const baseY1=Math.round(max*pct);
+    const salaries=[]; let s=baseY1;
+    for(let i=0;i<4;i++){ salaries.push(Math.round(s)); s=s*1.08; }
+    return {
+      type:"extension", signedYear:newSignedYear, years:4, salaries,
+      totalValue:salaries.reduce((a,b)=>a+b,0),
+      signingBonus:Math.round(baseY1*0.15),
+      team:nbaTeam,
+    };
+  };
+  const extensionOffer=buildExtensionOffer();
+
+  const requestExtension=()=>{
+    if(!extensionEligible){toast&&toast("Extensions only available with 1 year remaining","#888");return;}
+    if(!extensionOffer) return;
+    if(Math.random()<extensionChance){
+      // Append the new deal as the active contract. Add signing bonus to bank
+      // immediately. The new deal supersedes the current one — but the player
+      // still gets paid their final year of the old deal through normal
+      // season-end payouts.
+      setPlayer(p=>({...p,contract:extensionOffer}));
+      setResult({kind:"extension",success:true,newContract:extensionOffer});
+      toast&&toast(`Extension signed! ${formatContractSummary(extensionOffer)}`,GR);
+    } else {
+      setResult({kind:"extension",success:false});
+      toast&&toast(`${agent.name} couldn't get an offer in your range`,"#888");
+    }
+  };
 
   const requestTrade=()=>{
     if(!tradeAvailable){toast&&toast("No trade window open right now","#888");return;}
@@ -4059,10 +4541,10 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
       setNbaTeam&&setNbaTeam(newTeam);
       // Trade = new team = new mentor relationship needed.
       setNbaMentor&&setNbaMentor(null);
-      setResult({success:true,newTeam});
+      setResult({kind:"trade",success:true,newTeam});
       toast&&toast(`Traded to ${getTeamIdentity(newTeam,currentYear).name}!`,GR);
     } else {
-      setResult({success:false});
+      setResult({kind:"trade",success:false});
       toast&&toast("Trade request denied — no team made a serious offer","#888");
     }
   };
@@ -4071,11 +4553,24 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
     return(
       <div>
         <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
-        <div style={{textAlign:"center",padding:"30px 0"}}>
+        <div style={{textAlign:"center",padding:"30px 0 18px"}}>
           <div style={{fontSize:44,marginBottom:8}}>📞</div>
           <div style={{fontSize:18,fontWeight:900,color:"#fff",marginBottom:6}}>NO AGENT SIGNED</div>
-          <div style={{fontSize:12,color:"#888",marginBottom:18,lineHeight:1.5}}>You don't have an agent on retainer.<br/>This screen unlocks once you sign with one.</div>
+          <div style={{fontSize:12,color:"#888",marginBottom:18,lineHeight:1.5}}>You're between agents. Sign one to unlock trade and extension requests.</div>
+          <button onClick={()=>setShowAgentPicker(true)} style={{...btnS,padding:"10px 20px"}}>HIRE AN AGENT →</button>
         </div>
+        {showAgentPicker&&(
+          <AgentPickerModal
+            ovr={ovr}
+            currentAgent={null}
+            onClose={()=>setShowAgentPicker(false)}
+            onPick={(a)=>{
+              setAgent(a);
+              setShowAgentPicker(false);
+              toast&&toast(`Signed with ${a.name}`,GR);
+            }}
+          />
+        )}
       </div>
     );
   }
@@ -4089,7 +4584,7 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
       </div>
 
       {/* Agent card — name, agency, rep badge */}
-      <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}55`,borderRadius:12,padding:"14px 16px",marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
+      <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}55`,borderRadius:12,padding:"14px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:14}}>
         <div style={{width:50,height:50,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, #b08800)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0}}>👔</div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1}}>{agent.name}</div>
@@ -4100,16 +4595,93 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
           <div style={{fontSize:18,fontWeight:900,color:agent.rep>=8?GR:agent.rep>=6?OR:"#ddd",lineHeight:1}}>{agent.rep}/10</div>
         </div>
       </div>
+      {/* Fire / change agent — small link under the agent card so it doesn't
+          dominate the screen. The picker modal handles OVR-tier eligibility. */}
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:14}}>
+        <button onClick={()=>setShowAgentPicker(true)} style={{padding:"4px 10px",background:"transparent",border:"1px solid rgba(255,255,255,0.12)",borderRadius:5,color:"#888",cursor:"pointer",fontSize:10,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          🔁 CHANGE AGENT
+        </button>
+      </div>
+      {showAgentPicker&&(
+        <AgentPickerModal
+          ovr={ovr}
+          currentAgent={agent}
+          onClose={()=>setShowAgentPicker(false)}
+          onPick={(a)=>{
+            setAgent(a);
+            setShowAgentPicker(false);
+            toast&&toast(`Now repped by ${a.name}`,GR);
+          }}
+        />
+      )}
+
+      {/* Current contract card — shows the active deal in a compact green
+          panel. Year-by-year salaries highlight the current year. If the
+          player has no contract (shouldn't happen post-draft), shows a small
+          "no contract on file" notice instead. Renegotiation request lives
+          here once Batch 4 ships. */}
+      {contract?(
+        <div style={{background:"rgba(0,220,100,0.06)",border:`1px solid ${GR}44`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+            <div style={{fontSize:10,letterSpacing:2,color:GR,fontWeight:700,textTransform:"uppercase"}}>📄 Current Contract</div>
+            <div style={{fontSize:10,color:"#aaa"}}>{remainingYears>0?`${remainingYears} yr${remainingYears===1?"":"s"} remaining`:"Expires after this season"}</div>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <div>
+              <div style={{fontSize:17,fontWeight:900,color:"#fff",lineHeight:1}}>{fmtMoney(contract.totalValue)}</div>
+              <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{contract.years}-year deal · {contract.type==="rookie"?"Rookie scale":contract.type==="extension"?"Extension":"Free agency"}</div>
+            </div>
+            <div style={{textAlign:"right",padding:"5px 9px",background:"rgba(0,0,0,0.35)",borderRadius:7}}>
+              <div style={{fontSize:8,color:"#888",letterSpacing:1,fontWeight:700}}>{formatSeasonLabel(currentYear).split(" ")[0]} SALARY</div>
+              <div style={{fontSize:14,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(yearSalary)}</div>
+            </div>
+          </div>
+          {/* Year-by-year breakdown with current year highlighted */}
+          <div style={{display:"grid",gridTemplateColumns:`repeat(${contract.salaries.length},1fr)`,gap:4,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+            {contract.salaries.map((s,i)=>{
+              const yearIdx=currentYear-contract.signedYear;
+              const isCurrent=i===yearIdx;
+              const isPast=i<yearIdx;
+              return(
+                <div key={i} style={{textAlign:"center",padding:"4px 2px",borderRadius:4,background:isCurrent?"rgba(255,215,0,0.12)":"transparent"}}>
+                  <div style={{fontSize:8,color:isCurrent?YE:isPast?"#555":"#666",letterSpacing:1,fontWeight:700}}>YR {i+1}{isCurrent?" •":""}</div>
+                  <div style={{fontSize:11,color:isCurrent?YE:isPast?"#555":"#ddd",fontWeight:700,textDecoration:isPast?"line-through":"none"}}>{fmtMoney(s)}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ):(
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#888",fontStyle:"italic"}}>
+          No contract on file — you're a free agent.
+        </div>
+      )}
 
       {/* If we have a result, show it and stop here */}
       {result?(
         <div style={{background:result.success?"rgba(0,220,100,0.08)":"rgba(232,64,64,0.08)",border:`1px solid ${result.success?GR:RE}55`,borderRadius:10,padding:14,marginBottom:14,textAlign:"center"}}>
           <div style={{fontSize:32,marginBottom:6}}>{result.success?"✅":"❌"}</div>
-          <div style={{fontSize:16,fontWeight:900,color:result.success?GR:RE,marginBottom:4}}>{result.success?"TRADE APPROVED":"REQUEST DENIED"}</div>
-          {result.success?(
+          <div style={{fontSize:16,fontWeight:900,color:result.success?GR:RE,marginBottom:4}}>
+            {result.kind==="extension"
+              ? (result.success?"EXTENSION SIGNED":"REQUEST DENIED")
+              : (result.success?"TRADE APPROVED":"REQUEST DENIED")}
+          </div>
+          {/* Trade outcomes */}
+          {result.kind==="trade"&&result.success&&(
             <div style={{fontSize:12,color:"#ddd",lineHeight:1.5}}>You've been traded to the <span style={{color:"#fff",fontWeight:900}}>{getTeamIdentity(result.newTeam,currentYear).name}</span>.<br/>Mentor cleared — pick a new vet on your team page.</div>
-          ):(
+          )}
+          {result.kind==="trade"&&!result.success&&(
             <div style={{fontSize:12,color:"#aaa",lineHeight:1.5}}>{agent.name} couldn't drum up a serious offer.{ovr<70?" Keep grinding your skills — higher OVR opens more doors.":" Maybe wait for the next window."}</div>
+          )}
+          {/* Extension outcomes */}
+          {result.kind==="extension"&&result.success&&result.newContract&&(
+            <div style={{fontSize:12,color:"#ddd",lineHeight:1.5}}>
+              {agent.name} got you a <span style={{color:"#fff",fontWeight:900}}>{result.newContract.years}-year extension</span> at <span style={{color:YE,fontWeight:900}}>{fmtMoney(result.newContract.totalValue)}</span> total.<br/>
+              Kicks in after this season ends.
+            </div>
+          )}
+          {result.kind==="extension"&&!result.success&&(
+            <div style={{fontSize:12,color:"#aaa",lineHeight:1.5}}>{agent.name} couldn't get an offer in your range.{ovr<70?" Higher OVR opens richer deals.":" The team isn't ready to commit at that number."}</div>
           )}
           <button onClick={()=>go("leagueHub")} style={{...btnS,marginTop:14,padding:"10px 24px"}}>← Back to Hub</button>
         </div>
@@ -4118,14 +4690,22 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
           {/* Two action options */}
           <div style={{fontSize:10,letterSpacing:3,color:"#aaa",textTransform:"uppercase",fontWeight:700,marginBottom:8}}>Requests</div>
 
-          {/* Contract extension — placeholder */}
-          <button onClick={()=>toast&&toast("Contract extensions coming soon","#888")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,color:"#fff",cursor:"pointer",marginBottom:8,opacity:0.7,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          {/* Contract extension — gated by 1 year remaining on current deal.
+              Disabled state explains why. */}
+          <button onClick={requestExtension} disabled={!extensionEligible} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:extensionEligible?"rgba(255,215,0,0.10)":"rgba(255,255,255,0.04)",border:`1px solid ${extensionEligible?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:extensionEligible?"pointer":"not-allowed",marginBottom:8,opacity:extensionEligible?1:0.55,fontFamily:"'Barlow Condensed',sans-serif"}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               <div style={{fontSize:18,width:26,textAlign:"center"}}>📝</div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:14,fontWeight:900,letterSpacing:1.5}}>REQUEST CONTRACT EXTENSION</div>
-                <div style={{fontSize:11,color:"#888",marginTop:1}}>Coming soon</div>
+                <div style={{fontSize:14,fontWeight:900,letterSpacing:1.5,color:extensionEligible?GO:"#ddd"}}>REQUEST CONTRACT EXTENSION</div>
+                <div style={{fontSize:11,color:"#888",marginTop:1}}>
+                  {extensionEligible
+                    ? (extensionOffer?`Target: ${formatContractSummary(extensionOffer)}`:"Ready")
+                    : remainingYears===null?"No contract on file"
+                    : remainingYears===0?"Contract has expired"
+                    : `Available with 1 year remaining (${remainingYears} now)`}
+                </div>
               </div>
+              {extensionEligible&&<div style={{fontSize:10,color:extensionChance>=0.7?GR:extensionChance>=0.4?OR:RE,fontWeight:900,letterSpacing:1}}>{Math.round(extensionChance*100)}%</div>}
             </div>
           </button>
 
@@ -4175,11 +4755,136 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
             <div style={{display:"flex",justifyContent:"space-between"}}>
               <span>Trade chance</span><span style={{color:successChance>=0.7?GR:successChance>=0.4?OR:RE,fontWeight:700}}>{Math.round(successChance*100)}%</span>
             </div>
+            {extensionEligible&&(
+              <div style={{display:"flex",justifyContent:"space-between",marginTop:3,paddingTop:3,borderTop:"1px dashed rgba(255,255,255,0.08)"}}>
+                <span>Extension chance</span><span style={{color:extensionChance>=0.7?GR:extensionChance>=0.4?OR:RE,fontWeight:700}}>{Math.round(extensionChance*100)}%</span>
+              </div>
+            )}
           </div>
 
           <button onClick={()=>go("leagueHub")} style={{...ghostS,marginTop:14}}>← Back to Hub</button>
         </>
       )}
+    </div>
+  );
+}
+
+// ─── FREE AGENCY ───────────────────────────────────────────────────────────────
+// Shown automatically when the player's contract expires at the offseason
+// transition. Lists all the offers — current team always offers a re-up, plus
+// any team with positional need. Player picks one to sign. If no team makes a
+// real offer AND the player is 35+ with low OVR, sends them to retirement.
+function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor, nbaSeasons, allYears, setMoney, agent, go, goToHub, toast}){
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed;
+  const age=calcAge(allYears,nbaSeasons);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  // Generate offers on mount. Stored in state so re-renders don't re-roll
+  // the random appreciation values mid-decision.
+  const [offers,setOffers]=useState(()=>buildFAOffers(player,nbaTeam,currentYear,seasonsPlayed,age));
+  const [selected,setSelected]=useState(null);
+
+  const signOffer=(offer)=>{
+    setPlayer(p=>({...p,contract:offer}));
+    setMoney&&setMoney(m=>(m||0)+offer.signingBonus);
+    if(offer.team!==nbaTeam){
+      setNbaTeam&&setNbaTeam(offer.team);
+      setNbaMentor&&setNbaMentor(null); // new team = mentor reset
+    }
+    toast&&toast(`Signed with ${getTeamIdentity(offer.team,currentYear).name}!`,GR);
+    // Bypass the go() FA interceptor — setPlayer is async, so player.contract
+    // is still stale when this fires. setScreen direct via goToHub avoids it.
+    goToHub();
+  };
+
+  // No offers AND old enough + low OVR → retirement path
+  if(offers.length===0){
+    return(
+      <div style={{textAlign:"center",padding:"30px 0"}}>
+        <div style={{fontSize:52,marginBottom:10}}>🏁</div>
+        <div style={{fontSize:28,fontWeight:900,color:OR,marginBottom:6,letterSpacing:1}}>END OF THE ROAD</div>
+        <div style={{fontSize:13,color:"#aaa",marginBottom:18,lineHeight:1.5,padding:"0 14px"}}>
+          The phones aren't ringing. At {age} years old with a {ovr} OVR, no team wants to take a flier.<br/>
+          <span style={{color:"#888",fontSize:12}}>Time to hang up the sneakers.</span>
+        </div>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:14,marginBottom:18,textAlign:"left"}}>
+          <div style={{fontSize:10,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:6}}>Career Summary</div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#ddd",marginBottom:3}}><span>Seasons</span><span style={{fontWeight:700}}>{seasonsPlayed}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#ddd",marginBottom:3}}><span>Final OVR</span><span style={{fontWeight:700}}>{ovr}</span></div>
+          <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#ddd"}}><span>Age</span><span style={{fontWeight:700}}>{age}</span></div>
+        </div>
+        <button onClick={()=>{
+          // Stamp the player as retired so save logic can flag them on the
+          // title screen. Career stats remain visible via the Stats screen.
+          setPlayer(p=>({...p,retired:true,contract:null}));
+          go("title");
+        }} style={{...btnS,padding:"12px 28px"}}>RETIRE FROM THE NBA →</button>
+      </div>
+    );
+  }
+
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>{formatSeasonLabel(currentYear)} Offseason</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>FREE AGENCY</div>
+        <div style={{fontSize:12,color:"#aaa",marginTop:4}}>{offers.length} offer{offers.length===1?"":"s"} on the table · Pick one to sign</div>
+      </div>
+
+      {agent&&(
+        <div style={{background:"rgba(255,215,0,0.05)",border:`1px solid ${GO}33`,borderRadius:10,padding:"8px 12px",marginBottom:12,fontSize:11,color:"#aaa",lineHeight:1.4}}>
+          <span style={{color:GO,fontWeight:700}}>{agent.name}</span> negotiated {offers.length} offer{offers.length===1?"":"s"} on your behalf. Higher rep + higher OVR = more options.
+        </div>
+      )}
+
+      {offers.map((offer,i)=>{
+        const id=getTeamIdentity(offer.team,currentYear);
+        const isSelected=selected===i;
+        const avg=offer.totalValue/offer.years;
+        return(
+          <button key={i} onClick={()=>setSelected(i)} style={{
+            display:"block",width:"100%",textAlign:"left",padding:"12px 14px",marginBottom:8,
+            background:isSelected?`linear-gradient(135deg, ${id.p}33 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",
+            border:`1.5px solid ${isSelected?id.s:offer.isCurrentTeam?GR+"55":"rgba(255,255,255,0.10)"}`,
+            borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"
+          }}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,flex:1,minWidth:0}}>
+                <div style={{width:34,height:34,borderRadius:"50%",background:`linear-gradient(135deg, ${id.p}, ${id.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.2)"}}>{id.abbr}</div>
+                <div style={{minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                    {id.name}{offer.isCurrentTeam&&<span style={{fontSize:9,color:GR,marginLeft:6,letterSpacing:1}}>RE-UP</span>}
+                    {offer.isVetMin&&<span style={{fontSize:9,color:"#888",marginLeft:6,letterSpacing:1}}>VET MIN</span>}
+                  </div>
+                  <div style={{fontSize:10,color:"#888",marginTop:1}}>{offer.years}yr · {fmtMoney(Math.round(avg))} avg{offer.signingBonus>0?` · ${fmtMoney(offer.signingBonus)} bonus`:""}</div>
+                </div>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <div style={{fontSize:9,letterSpacing:1,color:"#888",fontWeight:700}}>TOTAL</div>
+                <div style={{fontSize:15,fontWeight:900,color:YE,lineHeight:1}}>{fmtMoney(offer.totalValue)}</div>
+              </div>
+            </div>
+            {/* Year-by-year breakdown (only show when selected to keep cards compact) */}
+            {isSelected&&(
+              <div style={{display:"grid",gridTemplateColumns:`repeat(${offer.salaries.length},1fr)`,gap:4,paddingTop:8,marginTop:4,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+                {offer.salaries.map((s,j)=>(
+                  <div key={j} style={{textAlign:"center"}}>
+                    <div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>YR {j+1}</div>
+                    <div style={{fontSize:11,color:"#ddd",fontWeight:700}}>{fmtMoney(s)}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </button>
+        );
+      })}
+
+      <button onClick={()=>{
+        if(selected===null){toast&&toast("Tap an offer to select it first","#888");return;}
+        signOffer(offers[selected]);
+      }} disabled={selected===null} style={{...btnS,padding:14,marginTop:6,fontSize:15,opacity:selected!==null?1:0.45,cursor:selected!==null?"pointer":"not-allowed"}}>
+        {selected!==null?`SIGN WITH ${getTeamIdentity(offers[selected].team,currentYear).name.toUpperCase()} →`:"SELECT AN OFFER"}
+      </button>
     </div>
   );
 }
@@ -4518,6 +5223,14 @@ export default function App(){
       // Push elite skills well past the +15 bump for a genuine 90+ OVR.
       mike.skills={threePoint:90,midRange:92,finishing:90,handles:88,playmaking:85,perimDefense:86,postDefense:78,rebounding:82};
       mike.intangibles=["highIQ","confident","clutch"];
+      // Year 5, in the FINAL year of a 4-year extension signed at end of
+      // rookie deal. Remaining = 1, so the renegotiation button is hot.
+      mike.contract={
+        type:"extension", signedYear:NBA_START_YEAR+1, years:4,
+        salaries:[14000000,15120000,16329600,17636000],
+        totalValue:63085600, signingBonus:5000000,
+        team:"Sacramento Kings",
+      };
       setPlayer(mike); setNbaTeam("Sacramento Kings");
       setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
       setAgent(AGENTS[0]); // Marcus Webb, rep 10 — superstar rep
@@ -4530,6 +5243,51 @@ export default function App(){
       ]);
       setScreen("leagueHub");
       toast("Mike — League Star (90+ OVR) loaded","#00dc64");
+    }
+    else if(preset==="freeAgent"){
+      // FREE AGENCY — year 5 with an expired contract. Lands them directly on
+      // the freeAgency screen so we can verify offers from current team + need-
+      // matched teams. Solid OVR (~82) so they get real offers, not just vet-min.
+      const mike=buildMike({draftPick:8,elite:true});
+      mike.skills={threePoint:82,midRange:85,finishing:84,handles:80,playmaking:78,perimDefense:78,postDefense:72,rebounding:76};
+      mike.intangibles=["highIQ","confident"];
+      // Contract that just ended — signed in 2004 for 4 years, expired end of 2007-08.
+      mike.contract={
+        type:"rookie", signedYear:NBA_START_YEAR, years:4,
+        salaries:[1840000,1987200,2146176,2317870],
+        totalValue:8291246, signingBonus:1472000,
+        team:"Sacramento Kings",
+      };
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"reebok",name:"Reebok",maxPick:14,bonus:1000000,skillBonus:5,color:"#DA1A32",subtitle:"Top 14 (lottery)"});
+      setAgent(AGENTS[1]); setMoney(8000000); setSkillPoints(15);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:9.4,rpg:3.1,apg:2.5,fg:45},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:12.6,rpg:4.0,apg:3.2,fg:47},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:16.1,rpg:4.6,apg:3.9,fg:48},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:18.8,rpg:5.0,apg:4.2,fg:49},
+      ]);
+      setScreen("freeAgency");
+      toast("Mike — Free Agent loaded","#FFD700");
+    }
+    else if(preset==="retirementCheck"){
+      // END-OF-CAREER — 36 years old, ~58 OVR, no contract. Should produce zero
+      // organic offers AND fail the safety-net check (age>=35, ovr<65) → routes
+      // to the retirement screen.
+      const mike=buildMike({draftPick:8});
+      mike.skills={threePoint:60,midRange:58,finishing:55,handles:56,playmaking:54,perimDefense:55,postDefense:48,rebounding:52};
+      mike.intangibles=["veteran"];
+      // 18 NBA seasons logged → age 36 (18+18 college base age). Contract expired.
+      mike.contract=null;
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setAgent(AGENTS[4]); setMoney(45000000); setSkillPoints(0);
+      const decline=[];
+      for(let y=0;y<18;y++){
+        decline.push({year:formatSeasonLabel(NBA_START_YEAR+y),team:"Sacramento Kings",teamRecord:"40-42",madePlayoffs:y<10,gp:70,ppg:Math.max(2,18-y),rpg:3.5,apg:3.0,fg:44});
+      }
+      setNbaSeasons(decline);
+      setScreen("freeAgency");
+      toast("Mike — Retirement Check loaded","#888");
     }
   };
 
@@ -4555,6 +5313,11 @@ export default function App(){
   // reverse order and picks the latest step the player has reached.
   function inferCareerScreen(data){
     if(!data) return "bio";
+    // Retired careers are read-only — drop them into the stats screen so they
+    // can review their final career numbers without seeing dead-end UI.
+    if(data.player?.retired){
+      return "nbaStats";
+    }
     // Made it to the NBA — leagueHub is the home base from here on.
     if(data.nbaTeam){
       return "leagueHub";
@@ -4886,12 +5649,24 @@ export default function App(){
 
   const toast=(msg,color=OR)=>{setNotif({msg,color});setTimeout(()=>setNotif(null),2200);};
   // Navigation helper. Intercepts the first-ever entry to leagueHub so the
-  // Cousin Kerry cameo fires, even if a player closed the tab mid-cameo and
-  // resumed (in which case inferCareerScreen sends them straight to leagueHub).
+  // Cousin Kerry cameo fires (even if a player closed the tab mid-cameo and
+  // resumed). Also intercepts when the player has an expired contract — they
+  // need to handle free agency before going back to the hub.
   const go=(s)=>{
     if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.metKerry&&!testingMode){
       setScreen("kerryWelcome");
       return;
+    }
+    // FA gate: if player is in the NBA, not testing, not retired, and has no
+    // valid contract (expired or missing entirely), force them through FA
+    // before the hub. The expired check is the post-Kerry common path.
+    if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.retired&&!testingMode){
+      const yr=NBA_START_YEAR+(nbaSeasons?.length||0);
+      const needsFA=!player.contract||contractRemainingYears(player.contract,yr)===0;
+      if(needsFA){
+        setScreen("freeAgency");
+        return;
+      }
     }
     setScreen(s);
   };
@@ -5092,9 +5867,21 @@ export default function App(){
         </button>
 
         {/* Stage 3 — established star */}
-        <button onClick={()=>jumpToTesting("leagueStar")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+        <button onClick={()=>jumpToTesting("leagueStar")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:14,fontWeight:900}}>🌟 IN THE LEAGUE · 90 OVR</div>
           <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Year 5 vet · Kings · Elite skills · Trade picker unlocked</div>
+        </button>
+
+        {/* Stage 4 — free agency */}
+        <button onClick={()=>jumpToTesting("freeAgent")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GO} 0%, #b08800 100%)`,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>💼 FREE AGENT</div>
+          <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Rookie deal expired · ~82 OVR · Multi-team offers</div>
+        </button>
+
+        {/* Stage 5 — retirement check */}
+        <button onClick={()=>jumpToTesting("retirementCheck")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:"linear-gradient(135deg, #444 0%, #1a1a1a 100%)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900,color:"#aaa"}}>🏁 END OF CAREER</div>
+          <div style={{fontSize:10,color:"#888",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Age 36 · ~55 OVR · Should trigger retirement</div>
         </button>
 
         <div style={{fontSize:11,color:"#888",lineHeight:1.5,padding:"10px 12px",background:"rgba(0,0,0,0.25)",borderRadius:8,marginBottom:14}}>
@@ -5902,7 +6689,7 @@ export default function App(){
     ),
     nbaPlay:(
       <MenuFrame sub={`${nbaTeam?getTeamIdentity(nbaTeam,NBA_START_YEAR+nbaSeasons.length).name:"Team"} · Season`} title="GAMETIME">
-        <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
+        <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaSkills:(
@@ -5917,12 +6704,17 @@ export default function App(){
     ),
     nbaAgent:(
       <MenuFrame sub="Representation" title="AGENT">
-        <NbaAgentScreen player={player} agent={agent} nbaTeam={nbaTeam} setNbaTeam={setNbaTeam} setNbaMentor={setNbaMentor} nbaGamesPlayed={nbaGamesPlayed} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+        <NbaAgentScreen player={player} setPlayer={setPlayer} agent={agent} setAgent={setAgent} nbaTeam={nbaTeam} setNbaTeam={setNbaTeam} setNbaMentor={setNbaMentor} nbaGamesPlayed={nbaGamesPlayed} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    freeAgency:(
+      <MenuFrame sub="Offseason" title="FREE AGENT">
+        <FreeAgencyScreen player={player} setPlayer={setPlayer} nbaTeam={nbaTeam} setNbaTeam={setNbaTeam} setNbaMentor={setNbaMentor} nbaSeasons={nbaSeasons} allYears={allYears} setMoney={setMoney} agent={agent} go={go} goToHub={()=>setScreen("leagueHub")} toast={toast}/>
       </MenuFrame>
     ),
     nbaSpend:(
-      <MenuFrame sub="Coming Soon" title="SPEND">
-        <NbaSpendScreen money={money} go={go}/>
+      <MenuFrame sub="Bank Account" title="SPEND">
+        <NbaSpendScreen money={money} player={player} nbaSeasons={nbaSeasons} go={go}/>
       </MenuFrame>
     ),
     nbaStats:(
