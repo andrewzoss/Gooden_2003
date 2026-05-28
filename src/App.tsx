@@ -377,6 +377,7 @@ const GOODEN_PIC_DATA_URL = "/gooden.webp";
 // In a Vite/CRA/Next setup, place "nba_live_2003_soundtrack.mp3" in your /public folder.
 // Override this constant if your file is hosted elsewhere.
 const AC_CARR_DATA_URL = "/ac-carr.webp";
+const KERRY_KITTLES_URL = "/kerry-kittles.webp"; // Cousin Kerry — welcome-to-the-league cameo
 const MUSIC_SRC = "/soundtrack.mp3";
 // Silent 1×1 MP4 with a (silent) audio track — used to flip iOS Safari out of
 // silent-switch-mute mode so the actual music plays even when the ringer is off.
@@ -2972,7 +2973,9 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
                   setNbaTeam&&setNbaTeam(t);
                   setSkillPoints&&setSkillPoints(signedShoeBrand?.skillBonus||0);
                   setPlayer&&setPlayer(p=>({...p,draftPick:0,isUndrafted:true}));
-                  go&&go("leagueHub");
+                  // First NBA entry → Cousin Kerry welcome. The kerryWelcome
+                  // screen sets metKerry=true and forwards to leagueHub.
+                  go&&go("kerryWelcome");
                 }} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 4px",background:`linear-gradient(135deg, ${td.p} 0%, #000 140%)`,border:`1px solid ${td.s}66`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
                   <div style={{fontSize:14,fontWeight:900,letterSpacing:1}}>{td.abbr}</div>
                   <div style={{fontSize:9,color:"rgba(255,255,255,0.85)",lineHeight:1.1,minHeight:22}}>{t}</div>
@@ -3119,7 +3122,9 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
           setSkillPoints&&setSkillPoints(signedShoeBrand?.skillBonus||0);
           // Persist draft status on the player so minutes/role logic can use it later.
           setPlayer&&setPlayer(p=>({...p,draftPick:pick,isUndrafted:false}));
-          go&&go("leagueHub");
+          // First NBA entry → Cousin Kerry welcome. The kerryWelcome screen
+          // sets metKerry=true and forwards to leagueHub.
+          go&&go("kerryWelcome");
         }} style={{...btnS,fontSize:16,padding:14,marginTop:8}}>
           WELCOME TO THE LEAGUE →
         </button>
@@ -3142,7 +3147,7 @@ const SAVE_VERSION = 1;
 // the user can visit at any time. We don't save them as the "resume to"
 // destination, otherwise hitting "Resume Career" from the title would just
 // return you to the title.
-const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing"]);
+const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing","kerryWelcome"]);
 
 // Read a save from localStorage. Returns null if missing, malformed, or from
 // an incompatible version.
@@ -3453,6 +3458,42 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── KERRY KITTLES WELCOME ─────────────────────────────────────────────────────
+// One-time cameo that fires the first time the player enters the NBA hub.
+// Gated by a `metKerry` flag on the player so it never replays on later visits.
+function KerryKittlesWelcome({onContinue}){
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      {/* Hero portrait — soft frame, team-color accent ring */}
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{display:"inline-block",position:"relative",padding:4,background:`linear-gradient(135deg, ${OR}, ${YE})`,borderRadius:14,boxShadow:"0 4px 20px rgba(232,135,58,0.4)"}}>
+          <img src={KERRY_KITTLES_URL} alt="Kerry Kittles" style={{display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",borderRadius:11,background:"#1a0a04"}}/>
+        </div>
+        <div style={{fontSize:10,letterSpacing:3,color:YE,marginTop:10,textTransform:"uppercase",fontWeight:700}}>NBA Veteran · Your Cousin</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff",marginTop:2,letterSpacing:0.5}}>KERRY KITTLES</div>
+      </div>
+
+      {/* The monologue */}
+      <div style={{background:"rgba(0,0,0,0.45)",border:`1px solid ${OR}55`,borderRadius:12,padding:"14px 16px",marginBottom:14,position:"relative"}}>
+        {/* Quote-mark accent in corner */}
+        <div style={{position:"absolute",top:4,left:8,fontSize:36,color:OR,opacity:0.25,lineHeight:1,fontFamily:"Georgia,serif"}}>“</div>
+        <div style={{fontSize:13,color:"#f0ede8",lineHeight:1.6,position:"relative",paddingLeft:6}}>
+          What up cuz? It's me, your canonical cousin and 5th place Rookie of The Year vote getter, <span style={{color:OR,fontWeight:700}}>Kerry Kittles</span>. Can't believe you finally made it to the league! We've been talking about this moment since we were kids, because I am your cousin, as is canon. I'm here to show you the ropes.
+          <br/><br/>
+          On the next page you'll see your home base for your NBA career. You'll be able to play games or sim in half season increments, as well as upgrade your player, work with your agent, see your stats, and buy stuff with that first NBA paycheck you just got. Maybe even buy yourself one of those cool new <span style={{color:"#e20074",fontWeight:700}}>Nokia 7610s</span> on T-Mobile, Get More.
+        </div>
+      </div>
+
+      {/* Sponsor tag — small, T-Mobile magenta */}
+      <div style={{textAlign:"center",fontSize:9,color:"#888",letterSpacing:2,marginBottom:14,textTransform:"uppercase"}}>
+        Kerry Kittles brought to you by <span style={{color:"#e20074",fontWeight:900}}>T·Mobile</span> <span style={{color:"#aaa"}}>· Get More</span>
+      </div>
+
+      <button onClick={onContinue} style={{...btnS,fontSize:15,padding:"14px 16px",width:"100%"}}>GOT IT, COUSIN →</button>
     </div>
   );
 }
@@ -4170,6 +4211,9 @@ function buildMike(opts={}){
     intangibles:["highIQ","confident"],
     draftPick:opts.draftPick,
     isUndrafted:opts.isUndrafted||false,
+    // Skip the Cousin Kerry cameo by default in testing — set opts.metKerry
+    // false explicitly on the dedicated Kerry test preset.
+    metKerry:opts.metKerry!==false,
     appearance:{
       skin:"#4A2912",hair:"Low Cut",beard:"Clean",
       headband:"None",headbandColor:"Black",jerseyNumber:23,
@@ -4279,6 +4323,12 @@ export default function App(){
       if(migrated.draftPick===undefined&&data.nbaTeam){
         migrated.draftPick=1;
         migrated.isUndrafted=false;
+      }
+      // Existing NBA careers shouldn't get surprised by the new Cousin Kerry
+      // cameo — they already entered the league. Only fresh draft transitions
+      // should trigger it.
+      if(migrated.metKerry===undefined&&data.nbaTeam){
+        migrated.metKerry=true;
       }
       setPlayer(migrated);
     }
@@ -4391,6 +4441,17 @@ export default function App(){
       setNbaTeam(null); setSkillPoints(0);
       setScreen("season");
       toast("Mike — College Freshman at Duke loaded","#e8873a");
+    }
+    else if(preset==="kerry"){
+      // Drops directly into the Cousin Kerry welcome cameo so we can verify it
+      // renders without playing through the full draft flow.
+      const mike=buildMike({draftPick:3,metKerry:false});
+      setPlayer(mike); setNbaTeam("New Jersey Nets"); // Kerry's actual team
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]);
+      setMoney(2000000); setSkillPoints(5); setNbaSeasons([]);
+      setScreen("kerryWelcome");
+      toast("Mike — Cousin Kerry preview","#e20074");
     }
   };
 
@@ -4745,7 +4806,16 @@ export default function App(){
   },[player.position]);
 
   const toast=(msg,color=OR)=>{setNotif({msg,color});setTimeout(()=>setNotif(null),2200);};
-  const go=(s)=>setScreen(s);
+  // Navigation helper. Intercepts the first-ever entry to leagueHub so the
+  // Cousin Kerry cameo fires, even if a player closed the tab mid-cameo and
+  // resumed (in which case inferCareerScreen sends them straight to leagueHub).
+  const go=(s)=>{
+    if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.metKerry&&!testingMode){
+      setScreen("kerryWelcome");
+      return;
+    }
+    setScreen(s);
+  };
   const ovr=calcOVR(player.skills||{},player.intangibles||[]);
   const allSkills=SKILLS;
   const allOpts=SKILLS;
@@ -4952,9 +5022,16 @@ export default function App(){
 
         <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginTop:14,marginBottom:8}}>Pre-NBA</div>
 
-        <button onClick={()=>jumpToTesting("college")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:"rgba(255,255,255,0.05)",border:`1px solid ${OR}55`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+        <button onClick={()=>jumpToTesting("college")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:"rgba(255,255,255,0.05)",border:`1px solid ${OR}55`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:14,fontWeight:900,color:OR}}>🎓 COLLEGE FRESHMAN</div>
           <div style={{fontSize:10,color:"#aaa",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Duke · 4-star recruit · Year 1 · Skills 65-75</div>
+        </button>
+
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginTop:14,marginBottom:8}}>Cameos</div>
+
+        <button onClick={()=>jumpToTesting("kerry")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:"linear-gradient(135deg, #e20074 0%, #8a0046 100%)",border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>👨‍👦 COUSIN KERRY WELCOME</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.85)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Drop straight into the Kittles cameo</div>
         </button>
 
         <div style={{fontSize:11,color:"#888",lineHeight:1.5,padding:"10px 12px",background:"rgba(0,0,0,0.25)",borderRadius:8,marginBottom:14}}>
@@ -5739,6 +5816,19 @@ export default function App(){
     draft:(
       <MenuFrame sub="Draft Night" title="THE CALL">
         <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} money={money} setMoney={setMoney} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} setNbaTeam={setNbaTeam} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+
+    kerryWelcome:(
+      <MenuFrame sub="Welcome to the Association" title="COUSIN KERRY">
+        <KerryKittlesWelcome onContinue={()=>{
+          // Stamp metKerry=true so the cameo never replays on later NBA visits.
+          setPlayer(p=>({...p,metKerry:true}));
+          // Skip the go() interceptor — setPlayer is async and player.metKerry
+          // is still stale at this moment, so go("leagueHub") would bounce
+          // right back to this screen. setScreen direct sidesteps the guard.
+          setScreen("leagueHub");
+        }}/>
       </MenuFrame>
     ),
 
