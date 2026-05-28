@@ -2740,11 +2740,12 @@ function ShoeDealsBlock({pick, isLottery, onSign, signedBrand, toast}){
 }
 
 // ─── DRAFT SCREEN ─────────────────────────────────────────────────────────────
-function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,setPlayer,skillPoints,setSkillPoints,money,setMoney,signedShoeBrand,setSignedShoeBrand,setNbaTeam,go,toast}){
+function DraftScreen({player,school,starTier,agent,allYears,combineScore,interviewScore,setAgentAttention,setPlayer,skillPoints,setSkillPoints,money,setMoney,signedShoeBrand,setSignedShoeBrand,setNbaTeam,go,toast,initialStage,initialPick,initialTeam}){
   // Reveal stages: black-out → "with the Xth pick" → team name → "selects..." → name + jersey
-  const [stage,setStage]=useState("intro"); // intro → onClock → teamReveal → playerReveal → details
-  const [pick,setPick]=useState(null);
-  const [team,setTeam]=useState(null);
+  // initialStage lets testing-mode jump straight to "details" without the timers.
+  const [stage,setStage]=useState(initialStage||"intro");
+  const [pick,setPick]=useState(initialPick??null);
+  const [team,setTeam]=useState(initialTeam||null);
   // Jersey number from the player's chosen appearance (set on the setup screen)
   const jerseyNumber=player.appearance?.jerseyNumber??23;
   const ovr=calcOVR(player.skills||{},player.intangibles||[]);
@@ -2754,6 +2755,8 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
 
   // Compute pick + team once on mount
   useEffect(()=>{
+    // If testing mode pre-set the stage/pick/team, don't re-roll or restart timers.
+    if(initialStage) return;
     // Use the projectDraft helper for fairness (factors in combine + interview)
     const proj=projectDraft({ovr,starTier,school,allYears,combineScore,interviewScore});
     // Pick exact slot within the projected range, biased toward the projected pick
@@ -4348,6 +4351,10 @@ export default function App(){
   // preset doesn't clobber a real career. Set by the testing screen, cleared
   // when the user exits testing back to the title.
   const [testingMode,setTestingMode]=useState(false);
+  // Testing-mode hooks for the DraftScreen — let the "post-draft summary"
+  // preset land directly on the details/shoe-sign stage with pre-rolled pick
+  // and team. Cleared on exitTesting and after the user advances out of draft.
+  const [testingDraftInit,setTestingDraftInit]=useState(null); // null | {stage,pick,team}
 
   // Auto-save: write the entire career to localStorage whenever any tracked
   // state changes. Skipped when the player hasn't started (no name entered)
@@ -4450,6 +4457,7 @@ export default function App(){
   // auto-save from clobbering their real career while they poke around.
   const jumpToTesting=(preset)=>{
     setTestingMode(true);
+    setTestingDraftInit(null); // clear any prior draft seeding
     // Reset everything that's not preset-specific so leftover state from a
     // previous session can't bleed in.
     setStarTier(null); setSchool(null); setPriorities([]); setYear(1); setAllYears([]);
@@ -4459,77 +4467,75 @@ export default function App(){
     setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
     setNbaMentor(null); setPlayoffsDone(false); setNbaGamesPlayed(0);
 
-    if(preset==="lottery"){
-      // Top-5 pick with Nike shoe deal → +5 SP only, sits as starter
-      const mike=buildMike({draftPick:3});
-      setPlayer(mike); setNbaTeam("LA Lakers");
-      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
-      setAgent(AGENTS[0]); // Marcus Webb — top-tier rep 10 (matches lottery pick)
-      setMoney(2000000); setSkillPoints(5); setNbaSeasons([]);
-      setScreen("leagueHub");
-      toast("Mike — Lottery Rookie loaded","#FFD700");
+    if(preset==="preDraft"){
+      // PRE-DRAFT — finished college, agent signed, combine & interview done.
+      // Lands on the predraft hub with ENTER THE DRAFT ready to click.
+      const mike=buildMike();
+      setPlayer(mike); setNbaTeam(null);
+      setStarTier(STAR_TIERS[1]); // 4-star
+      setSchool(SCHOOLS[0]);      // Duke
+      setAllYears([
+        {year:1,school:"Duke",ppg:14.2,rpg:4.1,apg:3.0,fg:48,record:"24-7",madeTournament:true},
+        {year:2,school:"Duke",ppg:18.4,rpg:5.2,apg:3.8,fg:50,record:"26-6",madeTournament:true},
+      ]);
+      setAgent(AGENTS[1]);        // Diane Holloway, rep 8 — solid mid-tier
+      setAgentAttention(85);
+      setInterviewDone(true); setInterviewScore(82);
+      setCombineDone(true); setCombineScore(78);
+      setSkillPoints(0); // college skill pool already spent
+      setNbaSeasons([]);
+      setScreen("predraft");
+      toast("Mike — Pre-Draft (declared) loaded","#e8873a");
     }
-    else if(preset==="secondRound"){
-      // 2nd-round pick, no shoe deal → 0 SP, rookie minutes floor at slot 2
-      const mike=buildMike({draftPick:40});
-      setPlayer(mike); setNbaTeam("Charlotte Bobcats");
+    else if(preset==="postDraft"){
+      // POST-DRAFT — landed on the draft details/shoe recap. Pre-rolled as the
+      // #3 pick to the Lakers; user can sign a shoe deal and hit WELCOME TO
+      // THE LEAGUE to test the post-draft → Kerry flow.
+      const mike=buildMike({metKerry:false});
+      // Strip draftPick so the WELCOME button persists pick=3 on click.
+      delete mike.draftPick; delete mike.isUndrafted;
+      setPlayer(mike);
+      setStarTier(STAR_TIERS[1]); setSchool(SCHOOLS[0]);
+      setAllYears([
+        {year:1,school:"Duke",ppg:14.2,rpg:4.1,apg:3.0,fg:48,record:"24-7",madeTournament:true},
+        {year:2,school:"Duke",ppg:18.4,rpg:5.2,apg:3.8,fg:50,record:"26-6",madeTournament:true},
+      ]);
+      setAgent(AGENTS[0]); setAgentAttention(95);
+      setInterviewDone(true); setInterviewScore(82);
+      setCombineDone(true); setCombineScore(78);
+      setMoney(0); setSkillPoints(100); // pre-shoe-deal college pool
       setSignedShoeBrand(null);
-      setAgent(AGENTS[3]); // Nia Collins — boutique rep 6, fits early-2nd
-      setMoney(0); setSkillPoints(0); setNbaSeasons([]);
-      setScreen("leagueHub");
-      toast("Mike — 2nd Round Rookie loaded","#a88aff");
+      setNbaTeam(null); setNbaSeasons([]);
+      // Seed the draft screen with stage=details so it skips reveal timers.
+      setTestingDraftInit({stage:"details",pick:3,team:"LA Lakers"});
+      setScreen("draft");
+      toast("Mike — Post-Draft Summary loaded","#FFD700");
     }
-    else if(preset==="undrafted"){
-      // Undrafted, no shoe deal → 0 SP, deepest rookie floor at slot 3
-      const mike=buildMike({draftPick:0,isUndrafted:true});
-      setPlayer(mike); setNbaTeam("Cleveland Cavaliers");
-      setSignedShoeBrand(null);
-      setAgent(AGENTS[4]); // Kevin Pratt — hungry rep 4, takes anyone
-      setMoney(0); setSkillPoints(0); setNbaSeasons([]);
-      setScreen("leagueHub");
-      toast("Mike — Undrafted Rookie loaded","#ff5252");
-    }
-    else if(preset==="vet"){
-      // Year 3 veteran — past the rookie floor, elite skills, two full seasons logged
-      const mike=buildMike({draftPick:8,elite:true});
+    else if(preset==="leagueStar"){
+      // IN THE LEAGUE @ 90 OVR — established 5-year vet, elite skills, fully
+      // formed career. Drops straight onto the leagueHub.
+      const mike=buildMike({draftPick:5,elite:true});
+      // Push elite skills well past the +15 bump for a genuine 90+ OVR.
+      mike.skills={threePoint:90,midRange:92,finishing:90,handles:88,playmaking:85,perimDefense:86,postDefense:78,rebounding:82};
+      mike.intangibles=["highIQ","confident","clutch"];
       setPlayer(mike); setNbaTeam("Sacramento Kings");
-      setSignedShoeBrand({id:"adidas",name:"Adidas",maxPick:10,bonus:2000000,skillBonus:5,color:"#FFFFFF",subtitle:"Top 10 picks only"});
-      setAgent(AGENTS[1]); // Diane Holloway — established rep 8
-      setMoney(5000000); setSkillPoints(20);
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); // Marcus Webb, rep 10 — superstar rep
+      setMoney(12000000); setSkillPoints(25);
       setNbaSeasons([
         {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
-        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:18.6,rpg:5.0,apg:4.2,fg:48},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
       ]);
       setScreen("leagueHub");
-      toast("Mike — Year 3 Vet loaded","#00dc64");
-    }
-    else if(preset==="college"){
-      // Freshman at Duke — no NBA state, start of college season flow
-      const mike=buildMike();
-      setPlayer(mike);
-      setStarTier(STAR_TIERS[1]); // 4-star
-      setSchool(SCHOOLS[0]); // Duke
-      setPriorities(["finishing","midRange","threePoint"]);
-      setYear(1); setAllYears([]);
-      setNbaTeam(null); setSkillPoints(0);
-      setScreen("season");
-      toast("Mike — College Freshman at Duke loaded","#e8873a");
-    }
-    else if(preset==="kerry"){
-      // Drops directly into the Cousin Kerry welcome cameo so we can verify it
-      // renders without playing through the full draft flow.
-      const mike=buildMike({draftPick:3,metKerry:false});
-      setPlayer(mike); setNbaTeam("New Jersey Nets"); // Kerry's actual team
-      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
-      setAgent(AGENTS[0]);
-      setMoney(2000000); setSkillPoints(5); setNbaSeasons([]);
-      setScreen("kerryWelcome");
-      toast("Mike — Cousin Kerry preview","#e20074");
+      toast("Mike — League Star (90+ OVR) loaded","#00dc64");
     }
   };
 
   const exitTesting=()=>{
     setTestingMode(false);
+    setTestingDraftInit(null);
     // If there's a real career saved, resume it (overwrites Mike's state with
     // the real player). Otherwise just go home with empty state — auto-save
     // bails on empty player.name so the save is untouched either way.
@@ -5060,8 +5066,8 @@ export default function App(){
       </MenuFrame>
     ),
 
-    // Testing mode — preset Mike Basketball at various career stages so the
-    // user can verify each batch of changes without playing through.
+    // Testing mode — preset Mike Basketball at career stages so the user can
+    // verify the game flow without playing through.
     testing:(
       <MenuFrame sub="Mike Basketball Presets" title="TESTING MODE">
         <button onClick={()=>go("options")} style={{...ghostS,marginBottom:14,width:"auto",padding:"7px 14px",fontSize:12}}>← Back to Options</button>
@@ -5071,40 +5077,24 @@ export default function App(){
           <div style={{fontSize:11,color:"#aaa",lineHeight:1.5}}>Your real career save is untouched. Use "Exit Testing" on any screen — or return to the title — to come back.</div>
         </div>
 
-        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginBottom:8}}>NBA Presets</div>
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginBottom:8}}>Career Stages</div>
 
-        <button onClick={()=>jumpToTesting("lottery")} style={{...btnS,textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block"}}>
-          <div style={{fontSize:14,fontWeight:900,color:"#080c10"}}>🏆 LOTTERY ROOKIE</div>
-          <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>#3 pick · Lakers · Nike deal (+5 SP) · Starter minutes</div>
+        {/* Stage 1 — pre-draft */}
+        <button onClick={()=>jumpToTesting("preDraft")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:"rgba(255,255,255,0.05)",border:`1px solid ${OR}55`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900,color:OR}}>🎤 PRE-DRAFT</div>
+          <div style={{fontSize:10,color:"#aaa",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Declared · 2 yrs Duke · Agent signed · Combine & interview done</div>
         </button>
 
-        <button onClick={()=>jumpToTesting("secondRound")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${PU} 0%, #4a2e8a 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>📋 2ND ROUND ROOKIE</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>#40 pick · Bobcats · No shoe deal · Limited minutes (≤14 MPG)</div>
+        {/* Stage 2 — post-draft summary */}
+        <button onClick={()=>jumpToTesting("postDraft")} style={{...btnS,textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block"}}>
+          <div style={{fontSize:14,fontWeight:900,color:"#080c10"}}>🏆 POST-DRAFT SUMMARY</div>
+          <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>#3 to Lakers · Pick a shoe deal · Tap WELCOME for Kerry cameo</div>
         </button>
 
-        <button onClick={()=>jumpToTesting("undrafted")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${RE} 0%, #6b1818 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>😤 UNDRAFTED ROOKIE</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Cavaliers · No shoe deal · Deep bench (≤8 MPG)</div>
-        </button>
-
-        <button onClick={()=>jumpToTesting("vet")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>🌟 YEAR 3 VET</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Kings · Elite skills · 2 prior seasons · No rookie floor</div>
-        </button>
-
-        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginTop:14,marginBottom:8}}>Pre-NBA</div>
-
-        <button onClick={()=>jumpToTesting("college")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:"rgba(255,255,255,0.05)",border:`1px solid ${OR}55`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900,color:OR}}>🎓 COLLEGE FRESHMAN</div>
-          <div style={{fontSize:10,color:"#aaa",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Duke · 4-star recruit · Year 1 · Skills 65-75</div>
-        </button>
-
-        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginTop:14,marginBottom:8}}>Cameos</div>
-
-        <button onClick={()=>jumpToTesting("kerry")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:"linear-gradient(135deg, #e20074 0%, #8a0046 100%)",border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>👨‍👦 COUSIN KERRY WELCOME</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.85)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Drop straight into the Kittles cameo</div>
+        {/* Stage 3 — established star */}
+        <button onClick={()=>jumpToTesting("leagueStar")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🌟 IN THE LEAGUE · 90 OVR</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Year 5 vet · Kings · Elite skills · Trade picker unlocked</div>
         </button>
 
         <div style={{fontSize:11,color:"#888",lineHeight:1.5,padding:"10px 12px",background:"rgba(0,0,0,0.25)",borderRadius:8,marginBottom:14}}>
@@ -5888,7 +5878,7 @@ export default function App(){
 
     draft:(
       <MenuFrame sub="Draft Night" title="THE CALL">
-        <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} money={money} setMoney={setMoney} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} setNbaTeam={setNbaTeam} go={go} toast={toast}/>
+        <DraftScreen player={player} school={school} starTier={starTier} agent={agent} allYears={allYears} combineScore={combineScore} interviewScore={interviewScore} setAgentAttention={setAgentAttention} setPlayer={setPlayer} skillPoints={skillPoints} setSkillPoints={setSkillPoints} money={money} setMoney={setMoney} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} setNbaTeam={setNbaTeam} go={go} toast={toast} initialStage={testingDraftInit?.stage} initialPick={testingDraftInit?.pick} initialTeam={testingDraftInit?.team}/>
       </MenuFrame>
     ),
 
