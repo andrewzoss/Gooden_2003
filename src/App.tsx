@@ -156,37 +156,82 @@ const NBA_TEAMS = [
 
 // Era-accurate team colors for 2003-04 jersey reveals
 const NBA_TEAM_DATA = {
-  "Atlanta Hawks":{p:"#E03A3E",s:"#C1D32F",abbr:"ATL",logoUrl:"/logos/atl.svg"},
-  "Boston Celtics":{p:"#007A33",s:"#FFFFFF",abbr:"BOS",logoUrl:"/logos/bos.svg"},
-  "Chicago Bulls":{p:"#CE1141",s:"#000000",abbr:"CHI",logoUrl:"/logos/chi.svg"},
-  "Cleveland Cavaliers":{p:"#860038",s:"#FDBB30",abbr:"CLE",logoUrl:"/logos/cle.svg"},
-  "Dallas Mavericks":{p:"#00538C",s:"#002B5E",abbr:"DAL",logoUrl:"/logos/dal.svg"},
-  "Denver Nuggets":{p:"#0E2240",s:"#FEC524",abbr:"DEN",logoUrl:"/logos/den.svg"},
-  "Detroit Pistons":{p:"#C8102E",s:"#1D42BA",abbr:"DET",logoUrl:"/logos/det.svg"},
-  "Golden State Warriors":{p:"#1D428A",s:"#FFC72C",abbr:"GSW",logoUrl:"/logos/gsw.svg"},
-  "Houston Rockets":{p:"#CE1141",s:"#000000",abbr:"HOU",logoUrl:"/logos/hou.svg"},
-  "Indiana Pacers":{p:"#002D62",s:"#FDBB30",abbr:"IND",logoUrl:"/logos/ind.svg"},
-  "LA Clippers":{p:"#C8102E",s:"#1D428A",abbr:"LAC",logoUrl:"/logos/lac.svg"},
-  "LA Lakers":{p:"#552583",s:"#FDB927",abbr:"LAL",logoUrl:"/logos/lal.svg"},
-  "Memphis Grizzlies":{p:"#00B2A9",s:"#040204",abbr:"MEM",logoUrl:"/logos/mem.svg"},
-  "Miami Heat":{p:"#98002E",s:"#F9A01B",abbr:"MIA",logoUrl:"/logos/mia.svg"},
-  "Milwaukee Bucks":{p:"#6F263D",s:"#274E13",abbr:"MIL",logoUrl:"/logos/mil.svg"},
-  "Minnesota Timberwolves":{p:"#0C2340",s:"#236192",abbr:"MIN",logoUrl:"/logos/min.svg"},
-  "New Orleans Hornets":{p:"#0F586C",s:"#B4975A",abbr:"NOH",logoUrl:"/logos/noh.svg"},
-  "New York Knicks":{p:"#006BB6",s:"#F58426",abbr:"NYK",logoUrl:"/logos/nyk.svg"},
-  "Seattle SuperSonics":{p:"#00653A",s:"#FFC200",abbr:"SEA",logoUrl:"/logos/sea.svg"},
-  "Orlando Magic":{p:"#0077C0",s:"#000000",abbr:"ORL",logoUrl:"/logos/orl.svg"},
-  "Philadelphia 76ers":{p:"#000000",s:"#ED174C",abbr:"PHI",logoUrl:"/logos/phi.svg"},
-  "Phoenix Suns":{p:"#1D1160",s:"#E56020",abbr:"PHX",logoUrl:"/logos/phx.svg"},
-  "Portland Trail Blazers":{p:"#E03A3E",s:"#000000",abbr:"POR",logoUrl:"/logos/por.svg"},
-  "Sacramento Kings":{p:"#5A2D81",s:"#63727A",abbr:"SAC",logoUrl:"/logos/sac.svg"},
-  "San Antonio Spurs":{p:"#000000",s:"#C4CED4",abbr:"SAS",logoUrl:"/logos/sas.svg"},
-  "Toronto Raptors":{p:"#753BBD",s:"#CE1141",abbr:"TOR",logoUrl:"/logos/tor.svg"},
-  "Utah Jazz":{p:"#5C2D91",s:"#75B2DD",abbr:"UTA",logoUrl:"/logos/uta.svg"},
-  "Washington Wizards":{p:"#000000",s:"#C8A572",abbr:"WAS",logoUrl:"/logos/was.svg"},
-  "Charlotte Bobcats":{p:"#F26532",s:"#053F61",abbr:"CHA",logoUrl:"/logos/cha.svg"},
-  "New Jersey Nets":{p:"#002A60",s:"#C8102E",abbr:"NJN",logoUrl:"/logos/njn.svg"},
+  "Atlanta Hawks":{p:"#E03A3E",s:"#C1D32F",abbr:"ATL",logoUrl:"/logos/atl.png"},
+  "Boston Celtics":{p:"#007A33",s:"#FFFFFF",abbr:"BOS",logoUrl:"/logos/bos.png"},
+  "Chicago Bulls":{p:"#CE1141",s:"#000000",abbr:"CHI",logoUrl:"/logos/chi.png"},
+  "Cleveland Cavaliers":{p:"#860038",s:"#FDBB30",abbr:"CLE",logoUrl:"/logos/cle.png"},
+  "Dallas Mavericks":{p:"#00538C",s:"#002B5E",abbr:"DAL",logoUrl:"/logos/dal.png"},
+  "Denver Nuggets":{p:"#0E2240",s:"#FEC524",abbr:"DEN",logoUrl:"/logos/den.png"},
+  "Detroit Pistons":{p:"#C8102E",s:"#1D42BA",abbr:"DET",logoUrl:"/logos/det.png"},
+  "Golden State Warriors":{p:"#1D428A",s:"#FFC72C",abbr:"GSW",logoUrl:"/logos/gsw.png"},
+  "Houston Rockets":{p:"#CE1141",s:"#000000",abbr:"HOU",logoUrl:"/logos/hou.png"},
+  "Indiana Pacers":{p:"#002D62",s:"#FDBB30",abbr:"IND",logoUrl:"/logos/ind.png"},
+  "LA Clippers":{p:"#C8102E",s:"#1D428A",abbr:"LAC",logoUrl:"/logos/lac.png"},
+  "LA Lakers":{p:"#552583",s:"#FDB927",abbr:"LAL",logoUrl:"/logos/lal.png"},
+  "Memphis Grizzlies":{p:"#00B2A9",s:"#040204",abbr:"MEM",logoUrl:"/logos/mem.png"},
+  "Miami Heat":{p:"#98002E",s:"#F9A01B",abbr:"MIA",logoUrl:"/logos/mia.png"},
+  "Milwaukee Bucks":{p:"#6F263D",s:"#274E13",abbr:"MIL",logoUrl:"/logos/mil.png"},
+  "Minnesota Timberwolves":{p:"#0C2340",s:"#236192",abbr:"MIN",logoUrl:"/logos/min.png"},
+  "New Orleans Hornets":{p:"#0F586C",s:"#B4975A",abbr:"NOH",logoUrl:"/logos/noh.png"},
+  "New York Knicks":{p:"#006BB6",s:"#F58426",abbr:"NYK",logoUrl:"/logos/nyk.png"},
+  "Seattle SuperSonics":{p:"#00653A",s:"#FFC200",abbr:"SEA",logoUrl:"/logos/sea.png"},
+  "Orlando Magic":{p:"#0077C0",s:"#000000",abbr:"ORL",logoUrl:"/logos/orl.png"},
+  "Philadelphia 76ers":{p:"#000000",s:"#ED174C",abbr:"PHI",logoUrl:"/logos/phi.png"},
+  "Phoenix Suns":{p:"#1D1160",s:"#E56020",abbr:"PHX",logoUrl:"/logos/phx.png"},
+  "Portland Trail Blazers":{p:"#E03A3E",s:"#000000",abbr:"POR",logoUrl:"/logos/por.png"},
+  "Sacramento Kings":{p:"#5A2D81",s:"#63727A",abbr:"SAC",logoUrl:"/logos/sac.png"},
+  "San Antonio Spurs":{p:"#000000",s:"#C4CED4",abbr:"SAS",logoUrl:"/logos/sas.png"},
+  "Toronto Raptors":{p:"#753BBD",s:"#CE1141",abbr:"TOR",logoUrl:"/logos/tor.png"},
+  "Utah Jazz":{p:"#5C2D91",s:"#75B2DD",abbr:"UTA",logoUrl:"/logos/uta.png"},
+  "Washington Wizards":{p:"#000000",s:"#C8A572",abbr:"WAS",logoUrl:"/logos/was.png"},
+  "Charlotte Bobcats":{p:"#F26532",s:"#053F61",abbr:"CHA",logoUrl:"/logos/cha.png"},
+  "New Jersey Nets":{p:"#002A60",s:"#C8102E",abbr:"NJN",logoUrl:"/logos/njn.png"},
+  // ── Future identities — same franchise, post-rename/relocation. The player's
+  // canonical nbaTeam stays as the original key; getTeamIdentity() swaps in
+  // these display details when the year crosses the relevant threshold.
+  "Oklahoma City Thunder":{p:"#007AC1",s:"#EF3B24",abbr:"OKC",logoUrl:"/logos/okc.png"},
+  "New Orleans Pelicans":{p:"#0C2340",s:"#C8102E",abbr:"NOP",logoUrl:"/logos/nop.png"},
+  "Charlotte Hornets":{p:"#1D1160",s:"#00788C",abbr:"CHA",logoUrl:"/logos/cho.png"},
 };
+
+// ─── FRANCHISE EVOLUTION ───────────────────────────────────────────────────────
+// Maps original team key → the historical name/logo/roster that should display
+// for a given NBA year. The player's `nbaTeam` field always stays the original
+// key (so saves never break and trade logic stays simple) — only the rendered
+// identity changes when the franchise renames or relocates.
+//
+// Each entry: {since: NBA_YEAR_START, becomes: "New Team Key"}. The first match
+// applies. Year is the first season the new identity takes effect, e.g. 2008
+// means "from the 2008-09 season onward."
+const FRANCHISE_EVOLUTION = {
+  "Seattle SuperSonics": [{since:2008, becomes:"Oklahoma City Thunder"}],
+  "New Orleans Hornets": [{since:2013, becomes:"New Orleans Pelicans"}],
+  "Charlotte Bobcats":   [{since:2014, becomes:"Charlotte Hornets"}],
+};
+
+// Look up the historical identity for a team key in a given NBA year. Always
+// returns a usable identity — falls back to the original key if no change has
+// happened yet, and to a safe placeholder if the key itself is unknown.
+function getTeamIdentity(teamKey, currentYear){
+  if(!teamKey) return {name:"--", abbr:"???", p:"#444", s:"#888", logoUrl:null, rosterKey:teamKey};
+  const evolution=FRANCHISE_EVOLUTION[teamKey];
+  // Find the latest evolution that applies for this year
+  let displayKey=teamKey;
+  if(evolution){
+    for(const step of evolution){
+      if(currentYear>=step.since) displayKey=step.becomes;
+    }
+  }
+  const data=NBA_TEAM_DATA[displayKey]||NBA_TEAM_DATA[teamKey]||{p:"#444",s:"#888",abbr:"???",logoUrl:null};
+  return {
+    name:displayKey,        // display name — "Oklahoma City Thunder" in 2010
+    rosterKey:displayKey,   // what to look up in season-roster data
+    abbr:data.abbr,
+    p:data.p,
+    s:data.s,
+    logoUrl:data.logoUrl,
+  };
+}
 
 // ─── SHOE DEALS ────────────────────────────────────────────────────────────────
 // 2003-era endorsement market. Each brand has a maxPick (their cutoff: a brand
@@ -3468,10 +3513,11 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
 function KerryKittlesWelcome({onContinue}){
   return(
     <div style={{padding:"4px 0 20px"}}>
-      {/* Hero portrait — soft frame, team-color accent ring */}
+      {/* Hero portrait — circular frame, transparent inner so the orange ring
+          continues seamlessly into the background behind Kerry. */}
       <div style={{textAlign:"center",marginBottom:14}}>
-        <div style={{display:"inline-block",position:"relative",padding:4,background:`linear-gradient(135deg, ${OR}, ${YE})`,borderRadius:14,boxShadow:"0 4px 20px rgba(232,135,58,0.4)"}}>
-          <img src={KERRY_KITTLES_URL} alt="Kerry Kittles" style={{display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",borderRadius:11,background:"#1a0a04"}}/>
+        <div style={{display:"inline-block",position:"relative",padding:4,background:`linear-gradient(135deg, ${OR}, ${YE})`,borderRadius:"50%",boxShadow:"0 4px 20px rgba(232,135,58,0.4)"}}>
+          <img src={KERRY_KITTLES_URL} alt="Kerry Kittles" style={{display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"transparent"}}/>
         </div>
         <div style={{fontSize:10,letterSpacing:3,color:YE,marginTop:10,textTransform:"uppercase",fontWeight:700}}>NBA Veteran · Your Cousin</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff",marginTop:2,letterSpacing:0.5}}>KERRY KITTLES</div>
@@ -3493,7 +3539,7 @@ function KerryKittlesWelcome({onContinue}){
         Kerry Kittles brought to you by <span style={{color:"#e20074",fontWeight:900}}>T·Mobile</span> <span style={{color:"#aaa"}}>· Get More</span>
       </div>
 
-      <button onClick={onContinue} style={{...btnS,fontSize:15,padding:"14px 16px",width:"100%"}}>GOT IT, COUSIN →</button>
+      <button onClick={onContinue} style={{...btnS,fontSize:15,padding:"14px 16px",width:"100%"}}>START MY CAREER →</button>
     </div>
   );
 }
@@ -3502,10 +3548,16 @@ function KerryKittlesWelcome({onContinue}){
 // The post-draft "home screen" — like the title menu, but with the team logo,
 // current W-L record, and 5 menu options.
 function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals, playoffsDone, skillPoints, go}){
-  const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
-  const season=getNbaSeasonData(currentYear).data[nbaTeam]||{w:0,l:0};
+  // Resolve the team to its historical identity for this year — e.g. a player
+  // drafted to Seattle whose `nbaTeam` is "Seattle SuperSonics" sees the OKC
+  // logo and name from 2008-09 onward. The rosterKey is what we use to look
+  // up actual season data, which lives under the post-relocation name.
+  const id=getTeamIdentity(nbaTeam,currentYear);
+  const teamData={p:id.p,s:id.s,abbr:id.abbr,logoUrl:id.logoUrl};
+  const displayName=id.name;
+  const season=getNbaSeasonData(currentYear).data[id.rosterKey]||{w:0,l:0};
   // Current season's projected record proportional to games played
   const gp=nbaGamesPlayed;
   const projectedW=Math.round((season.w*gp)/82);
@@ -3544,10 +3596,10 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
       }}>
         {/* Faint diagonal team-color streak for visual interest */}
         <div style={{position:"absolute",top:-20,right:-30,width:120,height:140,background:`linear-gradient(135deg, ${teamData.s}22, transparent)`,transform:"rotate(15deg)",pointerEvents:"none"}}/>
-        <TeamEmblem colors={{p:teamData.p,s:teamData.s}} abbr={teamData.abbr} name={nbaTeam} size={62} logoUrl={teamData.logoUrl}/>
+        <TeamEmblem colors={{p:teamData.p,s:teamData.s}} abbr={teamData.abbr} name={displayName} size={62} logoUrl={teamData.logoUrl}/>
         <div style={{flex:1,minWidth:0,position:"relative"}}>
           <div style={{fontSize:10,letterSpacing:2,color:"#ddd",textTransform:"uppercase",marginBottom:2,fontWeight:700}}>{yearLabel} Season</div>
-          <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{nbaTeam}</div>
+          <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{displayName}</div>
           <div style={{fontSize:13,color:"#ddd",marginTop:4}}>
             <span style={{color:GR,fontWeight:700}}>{projectedW}</span><span style={{color:"#666",margin:"0 4px"}}>–</span><span style={{color:RE,fontWeight:700}}>{projectedL}</span>
             <span style={{color:"#888",marginLeft:8,fontSize:11}}>· {gp}/82</span>
@@ -3632,12 +3684,15 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
 
 // ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
 function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, go, toast}){
-  const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
+  const id=getTeamIdentity(nbaTeam,currentYear);
+  const teamData={p:id.p,s:id.s,abbr:id.abbr,logoUrl:id.logoUrl};
   const seasonData=getNbaSeasonData(currentYear).data;
-  const season=seasonData[nbaTeam]||{w:0,l:0};
-  const {slot, minutes, isStarter}=calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons);
+  const season=seasonData[id.rosterKey]||{w:0,l:0};
+  // Pass the historical roster key so the player gets matched against the
+  // correct roster after a relocation (e.g. OKC's roster post-2008).
+  const {slot, minutes, isStarter}=calcRotationSlot(player,id.rosterKey,seasonData,nbaSeasons);
   const gp=nbaGamesPlayed;
   const regSeasonDone=gp>=82;
   const madePlayoffs=season.w>=41;
@@ -3674,7 +3729,10 @@ function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaS
           // Push this season into history, then reset for next year.
           const totals=nbaSeasonTotals;
           const seasonEntry={
-            year:yearLabel, team:nbaTeam, teamRecord:`${season.w}-${season.l}`, madePlayoffs,
+            // Use the historical display name so a Sonics-era season shows
+            // "Seattle SuperSonics" while OKC-era seasons show "Oklahoma City
+            // Thunder" — both still tied to the same canonical nbaTeam.
+            year:yearLabel, team:id.name, teamRecord:`${season.w}-${season.l}`, madePlayoffs,
             gp:totals.games,
             ppg:totals.games>0?+(totals.pts/totals.games).toFixed(1):0,
             rpg:totals.games>0?+(totals.reb/totals.games).toFixed(1):0,
@@ -3758,6 +3816,7 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
   };
   return(
     <div>
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Train</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SKILLS</div>
@@ -3807,11 +3866,14 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
 // ─── NBA TEAM ──────────────────────────────────────────────────────────────────
 // Roster view by position with depth chart. Mentor selection at the top.
 function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, skillPoints, setSkillPoints, go, toast}){
-  const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
   const currentYear=NBA_START_YEAR+(nbaSeasons||[]).length;
+  const id=getTeamIdentity(nbaTeam,currentYear);
+  const teamData={p:id.p,s:id.s,abbr:id.abbr,logoUrl:id.logoUrl};
   const seasonData=getNbaSeasonData(currentYear).data;
-  const {starters, bench}=buildRotation(player,nbaTeam,seasonData,nbaSeasons);
-  const {slot, minutes}=calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons);
+  // buildRotation / calcRotationSlot look up players by teamName inside
+  // seasonData — feed them the historical roster key, not the original.
+  const {starters, bench}=buildRotation(player,id.rosterKey,seasonData,nbaSeasons);
+  const {slot, minutes}=calcRotationSlot(player,id.rosterKey,seasonData,nbaSeasons);
   // Role label by slot — gives the player a feel for where they fit beyond just MPG.
   const roleLabel=slot===0?"STARTER":slot===1?"6TH MAN":slot===2?"ROTATION":slot===3?"BENCH":"DEEP BENCH";
   const [showMentorPick,setShowMentorPick]=useState(false);
@@ -3829,14 +3891,15 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
 
   // Eligible mentors = ALL teammates on the roster (NOT including the player).
   // The veteran-restriction (OVR >= 75) was removed — any teammate can be picked.
-  const data=seasonData[nbaTeam];
+  const data=seasonData[id.rosterKey];
   const mentorCandidates=data?data.players.map(p=>({name:p[0],pos:p[1],ovr:p[2]})):[];
 
   return(
     <div>
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Roster</div>
-        <div style={{fontSize:22,fontWeight:900,color:"#fff",lineHeight:1.1}}>{nbaTeam}</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff",lineHeight:1.1}}>{id.name}</div>
         <div style={{fontSize:12,color:"#aaa",marginTop:4}}>
           You · <span style={{color:OR,fontWeight:900,letterSpacing:1}}>{roleLabel}</span> · <span style={{color:"#fff",fontWeight:700}}>{minutes}</span> MPG
         </div>
@@ -3922,15 +3985,17 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
 // ─── NBA SPEND (coming soon) ───────────────────────────────────────────────────
 function NbaSpendScreen({money, go}){
   return(
-    <div style={{textAlign:"center",padding:"30px 0"}}>
-      <div style={{fontSize:48,marginBottom:8}}>💰</div>
-      <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:4}}>SPEND</div>
-      <div style={{fontSize:13,color:"#aaa",marginBottom:6}}>Current balance</div>
-      <div style={{fontSize:32,fontWeight:900,color:GR,marginBottom:24}}>{fmtMoney(money||0)}</div>
-      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:18,fontSize:12,color:"#888",lineHeight:1.6}}>
-        Coming soon: contracts, endorsements, investments, charity, off-court spending.
+    <div>
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
+      <div style={{textAlign:"center",padding:"30px 0"}}>
+        <div style={{fontSize:48,marginBottom:8}}>💰</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:4}}>SPEND</div>
+        <div style={{fontSize:13,color:"#aaa",marginBottom:6}}>Current balance</div>
+        <div style={{fontSize:32,fontWeight:900,color:GR,marginBottom:24}}>{fmtMoney(money||0)}</div>
+        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:18,fontSize:12,color:"#888",lineHeight:1.6}}>
+          Coming soon: contracts, endorsements, investments, charity, off-court spending.
+        </div>
       </div>
-      <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
     </div>
   );
 }
@@ -3942,6 +4007,7 @@ function NbaSpendScreen({money, go}){
 function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, go, toast}){
   const ovr=calcOVR(player.skills||{},player.intangibles||[]);
   const seasonsPlayed=(nbaSeasons||[]).length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed; // used by getTeamIdentity for the picker
   const gp=nbaGamesPlayed||0;
   // "Mid-season" = between stretches (gp >= 41 but < 82). "Offseason" = at the
   // start of a year after at least one season has been played (gp == 0 and
@@ -3991,7 +4057,7 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
       // Trade = new team = new mentor relationship needed.
       setNbaMentor&&setNbaMentor(null);
       setResult({success:true,newTeam});
-      toast&&toast(`Traded to ${newTeam}!`,GR);
+      toast&&toast(`Traded to ${getTeamIdentity(newTeam,currentYear).name}!`,GR);
     } else {
       setResult({success:false});
       toast&&toast("Trade request denied — no team made a serious offer","#888");
@@ -4000,17 +4066,20 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
 
   if(!agent){
     return(
-      <div style={{textAlign:"center",padding:"30px 0"}}>
-        <div style={{fontSize:44,marginBottom:8}}>📞</div>
-        <div style={{fontSize:18,fontWeight:900,color:"#fff",marginBottom:6}}>NO AGENT SIGNED</div>
-        <div style={{fontSize:12,color:"#888",marginBottom:18,lineHeight:1.5}}>You don't have an agent on retainer.<br/>This screen unlocks once you sign with one.</div>
-        <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
+      <div>
+        <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
+        <div style={{textAlign:"center",padding:"30px 0"}}>
+          <div style={{fontSize:44,marginBottom:8}}>📞</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff",marginBottom:6}}>NO AGENT SIGNED</div>
+          <div style={{fontSize:12,color:"#888",marginBottom:18,lineHeight:1.5}}>You don't have an agent on retainer.<br/>This screen unlocks once you sign with one.</div>
+        </div>
       </div>
     );
   }
 
   return(
     <div>
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Representation</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>AGENT</div>
@@ -4035,7 +4104,7 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
           <div style={{fontSize:32,marginBottom:6}}>{result.success?"✅":"❌"}</div>
           <div style={{fontSize:16,fontWeight:900,color:result.success?GR:RE,marginBottom:4}}>{result.success?"TRADE APPROVED":"REQUEST DENIED"}</div>
           {result.success?(
-            <div style={{fontSize:12,color:"#ddd",lineHeight:1.5}}>You've been traded to the <span style={{color:"#fff",fontWeight:900}}>{result.newTeam}</span>.<br/>Mentor cleared — pick a new vet on your team page.</div>
+            <div style={{fontSize:12,color:"#ddd",lineHeight:1.5}}>You've been traded to the <span style={{color:"#fff",fontWeight:900}}>{getTeamIdentity(result.newTeam,currentYear).name}</span>.<br/>Mentor cleared — pick a new vet on your team page.</div>
           ):(
             <div style={{fontSize:12,color:"#aaa",lineHeight:1.5}}>{agent.name} couldn't drum up a serious offer.{ovr<70?" Keep grinding your skills — higher OVR opens more doors.":" Maybe wait for the next window."}</div>
           )}
@@ -4076,7 +4145,10 @@ function NbaAgentScreen({player, agent, nbaTeam, setNbaTeam, setNbaMentor, nbaGa
               <div style={{fontSize:11,color:"#aaa",marginBottom:8,lineHeight:1.5}}>You're a 90+ OVR superstar — pick up to 3 teams. If your trade goes through, you'll land on one of them.</div>
               <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:4,marginBottom:6}}>
                 {NBA_TEAMS.filter(t=>t!==nbaTeam).map(t=>{
-                  const td=NBA_TEAM_DATA[t]||{p:"#444",s:"#888",abbr:"???"};
+                  // Use the historical identity so post-rebrand teams show their
+                  // current logo/colors/abbreviation in the picker.
+                  const tid=getTeamIdentity(t,currentYear);
+                  const td={p:tid.p,s:tid.s,abbr:tid.abbr};
                   const selected=picks.includes(t);
                   return(
                     <button key={t} onClick={()=>togglePick(t)} style={{padding:"5px 2px",background:selected?`linear-gradient(135deg, ${td.p}, ${td.p}88)`:"rgba(0,0,0,0.3)",border:`1px solid ${selected?td.s+"99":"rgba(255,255,255,0.08)"}`,borderRadius:5,color:selected?"#fff":"#aaa",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",fontWeight:selected?900:600,fontSize:10,letterSpacing:0.5}}>
@@ -4128,6 +4200,7 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
 
   return(
     <div>
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Career</div>
         <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>STATS</div>
@@ -5820,7 +5893,7 @@ export default function App(){
     ),
 
     kerryWelcome:(
-      <MenuFrame sub="Welcome to the Association" title="COUSIN KERRY">
+      <MenuFrame sub="The Association" title="WELCOME TO THE LEAGUE">
         <KerryKittlesWelcome onContinue={()=>{
           // Stamp metKerry=true so the cameo never replays on later NBA visits.
           setPlayer(p=>({...p,metKerry:true}));
@@ -5833,12 +5906,12 @@ export default function App(){
     ),
 
     leagueHub:(
-      <MenuFrame sub={`${player.position||"--"} · ${(nbaTeam||"FREE AGENT").toUpperCase()}`} title={(player.name||"PLAYER").toUpperCase()}>
+      <MenuFrame sub={`${player.position||"--"} · ${(nbaTeam?getTeamIdentity(nbaTeam,NBA_START_YEAR+nbaSeasons.length).name:"FREE AGENT").toUpperCase()}`} title={(player.name||"PLAYER").toUpperCase()}>
         <LeagueHub player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} nbaGamesPlayed={nbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} playoffsDone={playoffsDone} skillPoints={skillPoints} go={go}/>
       </MenuFrame>
     ),
     nbaPlay:(
-      <MenuFrame sub={`${nbaTeam||"Team"} · Season`} title="GAMETIME">
+      <MenuFrame sub={`${nbaTeam?getTeamIdentity(nbaTeam,NBA_START_YEAR+nbaSeasons.length).name:"Team"} · Season`} title="GAMETIME">
         <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
       </MenuFrame>
     ),
