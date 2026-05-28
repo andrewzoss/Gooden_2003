@@ -2963,15 +2963,24 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
         <div style={{textAlign:"center",padding:"20px 0"}}>
           <div style={{fontSize:52,marginBottom:10}}>😤</div>
           <div style={{fontSize:28,fontWeight:900,color:RE,marginBottom:8}}>UNDRAFTED</div>
-          <div style={{fontSize:14,color:"#aaa",marginBottom:20,lineHeight:1.5}}>The phones never rang.<br/>{agent?.name} is on the line about alternatives.</div>
-          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            <button onClick={()=>toast("Overseas signing — Part 2 coming soon",PU)} style={btnS}>🌍 Sign Overseas</button>
-            <button onClick={()=>toast("Summer League — Part 2 coming soon",BL)} style={ghostS}>📋 Summer League Tryout</button>
+          <div style={{fontSize:13,color:"#aaa",marginBottom:14,lineHeight:1.5}}>The phones never rang. But {agent?.name} found teams willing to give you a Summer League invite.<br/><span style={{color:"#888",fontSize:12}}>Pick any team — minutes will be scarce.</span></div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3, 1fr)",gap:6,marginBottom:14}}>
+            {NBA_TEAMS.map(t=>{
+              const td=NBA_TEAM_DATA[t]||{p:"#444",s:"#888",abbr:"???"};
+              return(
+                <button key={t} onClick={()=>{
+                  setNbaTeam&&setNbaTeam(t);
+                  setSkillPoints&&setSkillPoints(signedShoeBrand?.skillBonus||0);
+                  setPlayer&&setPlayer(p=>({...p,draftPick:0,isUndrafted:true}));
+                  go&&go("leagueHub");
+                }} style={{display:"flex",flexDirection:"column",alignItems:"center",gap:4,padding:"10px 4px",background:`linear-gradient(135deg, ${td.p} 0%, #000 140%)`,border:`1px solid ${td.s}66`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  <div style={{fontSize:14,fontWeight:900,letterSpacing:1}}>{td.abbr}</div>
+                  <div style={{fontSize:9,color:"rgba(255,255,255,0.85)",lineHeight:1.1,minHeight:22}}>{t}</div>
+                </button>
+              );
+            })}
           </div>
-          <div style={{background:"rgba(0,0,0,0.3)",borderRadius:12,padding:14,marginTop:18}}>
-            <div style={{fontSize:13,color:OR,fontWeight:700,marginBottom:4}}>🏆 Part 1 Complete</div>
-            <div style={{fontSize:12,color:"#888",lineHeight:1.5}}>The NBA journey starts in Part 2. Your build, stats, and undrafted status all carry over.</div>
-          </div>
+          <div style={{background:"rgba(0,0,0,0.3)",borderRadius:10,padding:10,fontSize:11,color:"#888",lineHeight:1.4}}>Undrafted players sit at the end of the bench. Earn your minutes.</div>
         </div>
       );
     }
@@ -3018,10 +3027,10 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
 
         {/* Roster status */}
         <div style={{background:isSecondRound?"rgba(168,138,255,0.12)":"rgba(0,220,100,0.12)",border:`1px solid ${isSecondRound?PU:GR}55`,borderRadius:10,padding:"10px 12px",marginBottom:14}}>
-          <div style={{fontSize:11,letterSpacing:1.5,color:isSecondRound?PU:GR,fontWeight:700,marginBottom:3}}>{isSecondRound?"📋 G LEAGUE ASSIGNMENT":"🏀 NBA ROSTER LOCK"}</div>
+          <div style={{fontSize:11,letterSpacing:1.5,color:isSecondRound?PU:GR,fontWeight:700,marginBottom:3}}>{isSecondRound?"📋 NBA ROSTER · LIMITED ROLE":"🏀 NBA ROSTER LOCK"}</div>
           <div style={{fontSize:12,color:"#ccc",lineHeight:1.4}}>
             {isSecondRound
-              ?`The ${team} drafted you but are sending you to their G League affiliate to start. Earn your way up.`
+              ?`You're on the ${team} 15-man roster as a 2nd-round pick — expect limited minutes off the bench to start.`
               :`You're on the ${team} 15-man roster. Training camp opens in October.`}
           </div>
         </div>
@@ -3106,9 +3115,13 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
         {/* Continue to the NBA hub — captures the team affiliation. */}
         <button onClick={()=>{
           setNbaTeam&&setNbaTeam(team);
+          // Reset skill points to only the shoe-deal bonus (clears the 100-pt college pool).
+          setSkillPoints&&setSkillPoints(signedShoeBrand?.skillBonus||0);
+          // Persist draft status on the player so minutes/role logic can use it later.
+          setPlayer&&setPlayer(p=>({...p,draftPick:pick,isUndrafted:false}));
           go&&go("leagueHub");
         }} style={{...btnS,fontSize:16,padding:14,marginTop:8}}>
-          {isSecondRound?"OFF TO G LEAGUE":"WELCOME TO THE LEAGUE"} →
+          WELCOME TO THE LEAGUE →
         </button>
       </div>
     );
@@ -3170,7 +3183,7 @@ function clearSave(){
 // depth-chart index (0=starter, 1=first off bench, etc.) and starter status.
 // `seasonData` is the per-team roster object for the current NBA season
 // (the result of `getNbaSeasonData(year).data`).
-function calcRotationSlot(player, teamName, seasonData){
+function calcRotationSlot(player, teamName, seasonData, nbaSeasons){
   const data=seasonData?.[teamName];
   if(!data) return {slot:99, minutes:8, isStarter:false};
   const pos=player.position||"SG";
@@ -3179,7 +3192,14 @@ function calcRotationSlot(player, teamName, seasonData){
   const samePos=data.players.filter(p=>p[1]===pos).sort((a,b)=>b[2]-a[2]);
   // Count how many existing players at this position are better
   const betterCount=samePos.filter(p=>p[2]>playerOvr).length;
-  const slot=betterCount;
+  let slot=betterCount;
+  // Rookie-year floor: 2nd-rounders sit at slot ≥ 2 (≤14 MPG), undrafted sit
+  // at slot ≥ 3 (≤8 MPG). After year one, your OVR alone decides your role.
+  const isRookie=!nbaSeasons||nbaSeasons.length===0;
+  if(isRookie){
+    if(player.isUndrafted) slot=Math.max(slot,3);
+    else if(player.draftPick&&player.draftPick>=31) slot=Math.max(slot,2);
+  }
   const isStarter=slot===0;
   // Minutes by depth: 0→34, 1→24, 2→14, 3→8, 4+→4
   const mpgBySlot=[34,24,14,8,4];
@@ -3241,6 +3261,53 @@ function buildDepthChart(player, teamName, seasonData){
   return byPos;
 }
 
+// Build a Starting Five + Bench rotation view. Starters are slot-0 at each
+// position (one PG, one SG, one SF, one PF, one C). Bench is everyone else,
+// sorted by minutes per game descending — so the 6th man (slot 1 at any
+// position, 24 MPG) leads, deep bench (slot 4+, 4 MPG) trails. The player gets
+// the same rookie-year floor as calcRotationSlot, so 2nd-round and undrafted
+// players are forced down the depth chart in year one.
+function buildRotation(player, teamName, seasonData, nbaSeasons){
+  const data=seasonData?.[teamName];
+  if(!data) return {starters:[], bench:[]};
+  const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
+  const playerEntry={name:player.name||"You", position:player.position, ovr:playerOvr, isPlayer:true};
+  const all=data.players.map(p=>({name:p[0], position:p[1], ovr:p[2], isPlayer:false}));
+  all.push(playerEntry);
+  const mpgBySlot=[34,24,14,8,4];
+  const isRookie=!nbaSeasons||nbaSeasons.length===0;
+  // For each position: sort by OVR, then nudge the player down to their floor.
+  const byPos={};
+  ["PG","SG","SF","PF","C"].forEach(pos=>{
+    const list=all.filter(x=>x.position===pos).sort((a,b)=>b.ovr-a.ovr);
+    if(isRookie){
+      const i=list.findIndex(x=>x.isPlayer);
+      if(i>=0){
+        let floor=i;
+        if(player.isUndrafted) floor=Math.max(i,3);
+        else if(player.draftPick&&player.draftPick>=31) floor=Math.max(i,2);
+        if(floor>i){
+          const [me]=list.splice(i,1);
+          list.splice(floor,0,me);
+        }
+      }
+    }
+    byPos[pos]=list;
+  });
+  // Now stamp each player with their slot + mpg
+  const enriched=[];
+  ["PG","SG","SF","PF","C"].forEach(pos=>{
+    byPos[pos].forEach((p,slot)=>{
+      enriched.push({...p, slot, mpg:mpgBySlot[Math.min(slot,4)]});
+    });
+  });
+  const posOrder={PG:0,SG:1,SF:2,PF:3,C:4};
+  const starters=enriched.filter(p=>p.slot===0).sort((a,b)=>posOrder[a.position]-posOrder[b.position]);
+  // Bench: limit to 8 (so total roster shown = 13). Sort by MPG desc, then OVR desc.
+  const bench=enriched.filter(p=>p.slot!==0).sort((a,b)=>b.mpg-a.mpg||b.ovr-a.ovr).slice(0,8);
+  return {starters, bench};
+}
+
 // ─── NBA GAME RUNNER ───────────────────────────────────────────────────────────
 // Reuses the same 5 mini-games but feeds results into NBA stat calculations.
 // Each completed sequence = "41 games" of chunked simulation. The orchestrator
@@ -3253,17 +3320,47 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   const [gameIdx,setGameIdx]=useState(0);
   const [results,setResults]=useState([]);
   const [phase,setPhase]=useState("intro");
-  const handleResult=(r)=>{
-    const next=[...results,r];
-    setResults(next);
-    if(next.length>=MINI_GAMES.length){
-      const totalPts=next.reduce((a,b)=>a+(b.pts||0),0);
-      const made=next.filter(x=>x.made).length;
-      onComplete&&onComplete({totalPts,made,details:next});
-    } else {
-      setGameIdx(next.length);
+  // Guard rail: ensures onComplete fires exactly once even if a mini-game
+  // accidentally calls onResult twice (e.g., a stray setTimeout after unmount).
+  const completedRef=useRef(false);
+
+  // When results.length hits the target, finalize. Doing this in an effect
+  // (instead of inside handleResult) decouples completion from a single render
+  // cycle and survives any timing weirdness in the child games.
+  useEffect(()=>{
+    if(completedRef.current) return;
+    if(results.length>=MINI_GAMES.length){
+      completedRef.current=true;
+      const totalPts=results.reduce((a,b)=>a+(b.pts||0),0);
+      const made=results.filter(x=>x.made).length;
+      onComplete&&onComplete({totalPts,made,details:results});
     }
+  },[results,onComplete]);
+
+  const handleResult=(r)=>{
+    if(completedRef.current) return; // already finalized — ignore late fires
+    setResults(prev=>{
+      // Don't add more results once we've hit the cap (prevents duplicate-fire bugs)
+      if(prev.length>=MINI_GAMES.length) return prev;
+      return [...prev,r];
+    });
+    setGameIdx(idx=>Math.min(idx+1,MINI_GAMES.length-1));
   };
+
+  // Escape hatch — auto-simulates any remaining mini-games as average-effort
+  // results and finalizes the stretch. Saves the user if a single mini-game
+  // hits a bug. Each simmed game lands as a 1-pt make (mediocre but not zero).
+  const skipRemaining=()=>{
+    if(completedRef.current) return;
+    const remaining=MINI_GAMES.length-results.length;
+    if(remaining<=0) return;
+    const filler=[];
+    for(let i=0;i<remaining;i++){
+      filler.push({type:MINI_GAMES[results.length+i]||"sim",made:Math.random()<0.4,pts:rand(0,2),simmed:true});
+    }
+    setResults(prev=>[...prev,...filler]);
+  };
+
   const gameType=MINI_GAMES[gameIdx];
   const props={player,difficulty,onResult:handleResult,key:gameIdx};
   if(phase==="intro") return(
@@ -3277,7 +3374,7 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,fontSize:11,color:"#888"}}>
-        <span>Game {gameIdx+1}/{MINI_GAMES.length}</span>
+        <span>Game {Math.min(results.length+1,MINI_GAMES.length)}/{MINI_GAMES.length}</span>
         <span>{minutes} min/game · {mentor?`Mentor: ${mentor}`:"No mentor"}</span>
       </div>
       <div style={{display:"flex",gap:3,marginBottom:14}}>
@@ -3290,6 +3387,12 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
       {gameType==="possession"&&<OffensivePossessionGame {...props}/>}
       {gameType==="steal"&&<StealAndDunkGame {...props}/>}
       {gameType==="pass"&&<PassingGame {...props}/>}
+      {/* Escape hatch — auto-sims the rest if a mini-game gets stuck */}
+      {results.length<MINI_GAMES.length&&results.length>0&&(
+        <div style={{marginTop:14,textAlign:"center"}}>
+          <button onClick={skipRemaining} style={{padding:"7px 14px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:6,color:"#aaa",cursor:"pointer",fontSize:10,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>↠ SKIP REMAINING ({MINI_GAMES.length-results.length})</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -3374,7 +3477,7 @@ function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaS
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const seasonData=getNbaSeasonData(currentYear).data;
   const season=seasonData[nbaTeam]||{w:0,l:0};
-  const {slot, minutes, isStarter}=calcRotationSlot(player,nbaTeam,seasonData);
+  const {slot, minutes, isStarter}=calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons);
   const gp=nbaGamesPlayed;
   const regSeasonDone=gp>=82;
   const madePlayoffs=season.w>=41;
@@ -3481,8 +3584,10 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
     if(skillPoints<=0) return toast&&toast("Out of skill points","#888");
     const cur=skills[id]||50;
     if(cur>=99) return toast&&toast(`${id} is maxed at 99`,"#888");
-    setPlayer(p=>({...p,skills:{...p.skills,[id]:Math.min(99,(p.skills?.[id]||50)+1)}}));
-    setSkillPoints(p=>p-1);
+    // Spend up to 5 SP, but don't overshoot the 99 cap or your remaining SP balance.
+    const spend=Math.min(5,skillPoints,99-cur);
+    setPlayer(p=>({...p,skills:{...p.skills,[id]:(p.skills?.[id]||50)+spend}}));
+    setSkillPoints(p=>p-spend);
   };
   return(
     <div>
@@ -3503,7 +3608,7 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
                 </div>
               </div>
               <div style={{fontSize:14,fontWeight:900,color:OR,minWidth:28,textAlign:"right"}}>{v}</div>
-              <button onClick={()=>bumpSkill(s.id)} disabled={skillPoints<=0||v>=99} style={{padding:"6px 12px",background:skillPoints>0&&v<99?OR:"rgba(255,255,255,0.08)",border:"none",borderRadius:6,color:skillPoints>0&&v<99?"#080c10":"#666",fontWeight:900,cursor:skillPoints>0&&v<99?"pointer":"default",fontSize:13,fontFamily:"'Barlow Condensed',sans-serif"}}>+1</button>
+              <button onClick={()=>bumpSkill(s.id)} disabled={skillPoints<=0||v>=99} style={{padding:"6px 12px",background:skillPoints>0&&v<99?OR:"rgba(255,255,255,0.08)",border:"none",borderRadius:6,color:skillPoints>0&&v<99?"#080c10":"#666",fontWeight:900,cursor:skillPoints>0&&v<99?"pointer":"default",fontSize:13,fontFamily:"'Barlow Condensed',sans-serif"}}>+5</button>
             </div>
           );
         })}
@@ -3519,8 +3624,10 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
   const teamData=NBA_TEAM_DATA[nbaTeam]||{p:"#444",s:"#888",abbr:"???"};
   const currentYear=NBA_START_YEAR+(nbaSeasons||[]).length;
   const seasonData=getNbaSeasonData(currentYear).data;
-  const depthChart=buildDepthChart(player,nbaTeam,seasonData);
-  const {slot, minutes}=calcRotationSlot(player,nbaTeam,seasonData);
+  const {starters, bench}=buildRotation(player,nbaTeam,seasonData,nbaSeasons);
+  const {slot, minutes}=calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons);
+  // Role label by slot — gives the player a feel for where they fit beyond just MPG.
+  const roleLabel=slot===0?"STARTER":slot===1?"6TH MAN":slot===2?"ROTATION":slot===3?"BENCH":"DEEP BENCH";
   const [showMentorPick,setShowMentorPick]=useState(false);
 
   const chooseMentor=(name)=>{
@@ -3544,7 +3651,9 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Roster</div>
         <div style={{fontSize:22,fontWeight:900,color:"#fff",lineHeight:1.1}}>{nbaTeam}</div>
-        <div style={{fontSize:12,color:"#aaa",marginTop:4}}>Your slot: #{slot+1} at {player.position} · ~{minutes} MPG</div>
+        <div style={{fontSize:12,color:"#aaa",marginTop:4}}>
+          You · <span style={{color:OR,fontWeight:900,letterSpacing:1}}>{roleLabel}</span> · <span style={{color:"#fff",fontWeight:700}}>{minutes}</span> MPG
+        </div>
       </div>
 
       {/* Mentor block */}
@@ -3570,31 +3679,54 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
         )}
       </div>
 
-      {/* Depth chart by position */}
-      {["PG","SG","SF","PF","C"].map(pos=>(
-        <div key={pos} style={{marginBottom:14,background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px"}}>
-          <div style={{fontSize:10,letterSpacing:2,color:OR,textTransform:"uppercase",marginBottom:6,fontWeight:700}}>{pos}</div>
-          {(depthChart[pos]||[]).map((p,i)=>(
-            <div key={p.name+i} style={{
-              display:"flex",justifyContent:"space-between",alignItems:"center",
-              padding:"6px 8px",marginBottom:3,
-              background:p.isPlayer?"rgba(232,135,58,0.18)":"transparent",
-              border:p.isPlayer?`1px solid ${OR}66`:"1px solid transparent",
-              borderRadius:5
-            }}>
-              <div>
-                <span style={{fontSize:10,color:"#666",marginRight:8,fontFamily:"monospace"}}>{i+1}.</span>
-                <span style={{fontSize:13,fontWeight:p.isPlayer?900:600,color:p.isPlayer?OR:"#ddd"}}>{p.name}</span>
-                {p.isPlayer&&<span style={{fontSize:9,color:OR,marginLeft:6,letterSpacing:1}}>YOU</span>}
-              </div>
-              <div style={{fontSize:12,color:"#aaa"}}>
-                <span style={{color:p.ovr>=85?GR:p.ovr>=75?OR:"#888",fontWeight:700}}>{p.ovr}</span>
-                <span style={{color:"#555",marginLeft:6,fontSize:10}}>OVR</span>
-              </div>
-            </div>
-          ))}
+      {/* STARTING FIVE — one per position, in PG-SG-SF-PF-C order */}
+      <div style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+          <div style={{fontSize:10,letterSpacing:2,color:OR,textTransform:"uppercase",fontWeight:700}}>Starting Five</div>
+          <div style={{fontSize:9,color:"#666",letterSpacing:1}}>POS · NAME · OVR · MPG</div>
         </div>
-      ))}
+        {starters.map((p,i)=>(
+          <div key={p.name+i} style={{
+            display:"grid",gridTemplateColumns:"28px 1fr auto auto",alignItems:"center",gap:8,
+            padding:"6px 8px",marginBottom:3,
+            background:p.isPlayer?"rgba(232,135,58,0.18)":"transparent",
+            border:p.isPlayer?`1px solid ${OR}66`:"1px solid transparent",
+            borderRadius:5
+          }}>
+            <span style={{fontSize:10,color:"#888",fontWeight:700,letterSpacing:0.5}}>{p.position}</span>
+            <span style={{fontSize:13,fontWeight:p.isPlayer?900:600,color:p.isPlayer?OR:"#ddd",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+              {p.name}{p.isPlayer&&<span style={{fontSize:9,color:OR,marginLeft:6,letterSpacing:1}}>YOU</span>}
+            </span>
+            <span style={{fontSize:12,color:p.ovr>=85?GR:p.ovr>=75?OR:"#888",fontWeight:700,minWidth:24,textAlign:"right"}}>{p.ovr}</span>
+            <span style={{fontSize:11,color:"#aaa",minWidth:36,textAlign:"right"}}>{p.mpg} MPG</span>
+          </div>
+        ))}
+      </div>
+
+      {/* BENCH — sorted by minutes per game descending (6th man first, deep bench last) */}
+      <div style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px",marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",textTransform:"uppercase",fontWeight:700}}>Bench · by minutes</div>
+          <div style={{fontSize:9,color:"#666",letterSpacing:1}}>POS · NAME · OVR · MPG</div>
+        </div>
+        {bench.length===0&&<div style={{fontSize:11,color:"#666",fontStyle:"italic"}}>No bench data.</div>}
+        {bench.map((p,i)=>(
+          <div key={p.name+i} style={{
+            display:"grid",gridTemplateColumns:"28px 1fr auto auto",alignItems:"center",gap:8,
+            padding:"6px 8px",marginBottom:3,
+            background:p.isPlayer?"rgba(232,135,58,0.18)":"transparent",
+            border:p.isPlayer?`1px solid ${OR}66`:"1px solid transparent",
+            borderRadius:5
+          }}>
+            <span style={{fontSize:10,color:"#888",fontWeight:700,letterSpacing:0.5}}>{p.position}</span>
+            <span style={{fontSize:13,fontWeight:p.isPlayer?900:600,color:p.isPlayer?OR:"#ddd",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+              {p.name}{p.isPlayer&&<span style={{fontSize:9,color:OR,marginLeft:6,letterSpacing:1}}>YOU</span>}
+            </span>
+            <span style={{fontSize:12,color:p.ovr>=85?GR:p.ovr>=75?OR:"#888",fontWeight:700,minWidth:24,textAlign:"right"}}>{p.ovr}</span>
+            <span style={{fontSize:11,color:"#aaa",minWidth:36,textAlign:"right"}}>{p.mpg} MPG</span>
+          </div>
+        ))}
+      </div>
 
       <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
     </div>
