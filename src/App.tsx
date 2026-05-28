@@ -1056,7 +1056,7 @@ function ShotMeterGame({player, difficulty, onResult}){
         <div style={{position:"absolute",left:winX+winW*0.4,top:0,width:winW*0.2,height:"100%",background:"rgba(255,215,0,0.45)"}}/>
         <div style={{position:"absolute",left:barX,top:6,width:9,height:28,background:"white",borderRadius:5,boxShadow:"0 0 10px white"}}/>
       </div>
-      <button onPointerDown={(e)=>{e.preventDefault();shoot();}} style={{...btnS,width:"auto",padding:"10px 40px",fontSize:15,touchAction:"none"}}>SHOOT</button>
+      <button onPointerDown={(e)=>{e.preventDefault();e.stopPropagation();shoot();}} style={{...btnS,width:"auto",padding:"10px 40px",fontSize:15,touchAction:"none"}}>SHOOT</button>
     </div>
   );
 
@@ -3142,7 +3142,7 @@ const SAVE_VERSION = 1;
 // the user can visit at any time. We don't save them as the "resume to"
 // destination, otherwise hitting "Resume Career" from the title would just
 // return you to the title.
-const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras"]);
+const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing"]);
 
 // Read a save from localStorage. Returns null if missing, malformed, or from
 // an incompatible version.
@@ -3317,44 +3317,37 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   // is a pro. We base it on the player's slot quality (lower slot = harder
   // matchups for them since better defenders guard the starters).
   const difficulty=1.3;
-  const [gameIdx,setGameIdx]=useState(0);
+  // Results is the SOURCE OF TRUTH. gameIdx (which mini-game to show) is
+  // derived from results.length, so they can never desynchronize.
   const [results,setResults]=useState([]);
   const [phase,setPhase]=useState("intro");
   // Guard rail: ensures onComplete fires exactly once even if a mini-game
-  // accidentally calls onResult twice (e.g., a stray setTimeout after unmount).
+  // accidentally calls onResult twice (e.g., event bubbling, stray setTimeout).
   const completedRef=useRef(false);
 
-  // Finalize once we have all 5 results. Wrapped so it can be called from both
-  // handleResult and skipRemaining without duplicating logic.
+  // Finalize once we have all 5 results. Wrapped so handleResult and
+  // skipRemaining share the logic. Deferred via setTimeout so onComplete
+  // (which calls go("leagueHub")) never fires mid-render.
   const finalize=(all)=>{
     if(completedRef.current) return;
     completedRef.current=true;
     const totalPts=all.reduce((a,b)=>a+(b.pts||0),0);
     const made=all.filter(x=>x.made).length;
-    // Defer to next tick so we never call onComplete in the middle of a
-    // setState render — that's the React anti-pattern that caused premature
-    // unmounts when onComplete called go("leagueHub") synchronously.
     setTimeout(()=>onComplete&&onComplete({totalPts,made,details:all}),0);
   };
 
   const handleResult=(r)=>{
     if(completedRef.current) return; // already finalized — ignore late fires
-    let didAdd=false;
     setResults(prev=>{
-      // Don't add more results once we've hit the cap (prevents duplicate-fire bugs)
+      // Don't add more results once we've hit the cap — guards against
+      // double-fire bugs (event bubbling, late setTimeout, strict mode).
       if(prev.length>=MINI_GAMES.length) return prev;
-      didAdd=true;
       const next=[...prev,r];
       if(next.length>=MINI_GAMES.length){
         finalize(next);
       }
       return next;
     });
-    // Advance the visible mini-game only if there's another game to show.
-    // Stays clamped at the last index so the index is never out of range.
-    if(didAdd){
-      setGameIdx(idx=>Math.min(idx+1,MINI_GAMES.length-1));
-    }
   };
 
   // Escape hatch — auto-simulates any remaining mini-games as mediocre results
@@ -3373,7 +3366,12 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
     });
   };
 
+  // gameIdx is derived — always equal to how many results we have, clamped
+  // so we don't read past MINI_GAMES while waiting for onComplete to fire.
+  const allDone=results.length>=MINI_GAMES.length;
+  const gameIdx=Math.min(results.length,MINI_GAMES.length-1);
   const gameType=MINI_GAMES[gameIdx];
+
   if(phase==="intro") return(
     <div style={{textAlign:"center",padding:"20px 0"}}>
       <div style={{fontSize:11,letterSpacing:3,color:OR,marginBottom:10,textTransform:"uppercase"}}>Game Stretch</div>
@@ -3383,7 +3381,7 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
     </div>
   );
   // `key` MUST be a JSX attribute, not part of spread props, or React ignores it
-  // and the mini-game retains stale state when gameIdx advances.
+  // and the mini-game retains stale state when the index advances.
   const childProps={player,difficulty,onResult:handleResult};
   return(
     <div>
@@ -3396,17 +3394,29 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
           <div key={i} style={{flex:1,height:4,borderRadius:2,background:i<results.length?(results[i].made?GR:RE):i===gameIdx?OR:"rgba(255,255,255,0.08)"}}/>
         ))}
       </div>
-      {gameType==="shot"&&<ShotMeterGame key={gameIdx} {...childProps}/>}
-      {gameType==="defense"&&<DefenseGame key={gameIdx} {...childProps}/>}
-      {gameType==="possession"&&<OffensivePossessionGame key={gameIdx} {...childProps}/>}
-      {gameType==="steal"&&<StealAndDunkGame key={gameIdx} {...childProps}/>}
-      {gameType==="pass"&&<PassingGame key={gameIdx} {...childProps}/>}
-      {/* Escape hatch — auto-sims the rest if a mini-game gets stuck. Tucked
-          well below the game so it's hard to mistap. */}
-      {results.length<MINI_GAMES.length&&results.length>0&&(
-        <div style={{marginTop:28,textAlign:"center",opacity:0.5}}>
-          <button onClick={skipRemaining} style={{padding:"6px 12px",background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#888",cursor:"pointer",fontSize:10,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>↠ skip remaining ({MINI_GAMES.length-results.length})</button>
+      {/* Once all 5 results are in, show a "calculating" placeholder until
+          the deferred onComplete fires (next tick). Stops the last mini-game
+          from briefly re-rendering before the screen transitions. */}
+      {allDone?(
+        <div style={{textAlign:"center",padding:"30px 0"}}>
+          <div style={{fontSize:14,color:OR,fontWeight:700,letterSpacing:2,marginBottom:6}}>STRETCH COMPLETE</div>
+          <div style={{fontSize:12,color:"#888"}}>Calculating stats…</div>
         </div>
+      ):(
+        <>
+          {gameType==="shot"&&<ShotMeterGame key={gameIdx} {...childProps}/>}
+          {gameType==="defense"&&<DefenseGame key={gameIdx} {...childProps}/>}
+          {gameType==="possession"&&<OffensivePossessionGame key={gameIdx} {...childProps}/>}
+          {gameType==="steal"&&<StealAndDunkGame key={gameIdx} {...childProps}/>}
+          {gameType==="pass"&&<PassingGame key={gameIdx} {...childProps}/>}
+          {/* Escape hatch — auto-sims the rest if a mini-game gets stuck. Tucked
+              well below the game so it's hard to mistap. */}
+          {results.length>0&&(
+            <div style={{marginTop:28,textAlign:"center",opacity:0.5}}>
+              <button onClick={skipRemaining} style={{padding:"6px 12px",background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#888",cursor:"pointer",fontSize:10,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>↠ skip remaining ({MINI_GAMES.length-results.length})</button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
@@ -3584,7 +3594,6 @@ function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaS
           go("leagueHub");
         }}
       />
-      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginTop:14,padding:"10px 0"}}>← Back to Hub</button>
     </div>
   );
 }
@@ -3843,6 +3852,36 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
   );
 }
 
+// ─── TESTING MODE ─────────────────────────────────────────────────────────────
+// Generic test player ("Mike Basketball") and presets that let the user drop
+// into different career stages without playing through the whole flow. All
+// state changes during testing skip the auto-save (see testingMode flag in App).
+function buildMike(opts={}){
+  const skills={
+    threePoint:72, midRange:72, finishing:75, handles:70,
+    playmaking:68, perimDefense:68, postDefense:60, rebounding:65,
+  };
+  // Bumped variant for the superstar / vet presets so they actually start.
+  if(opts.elite){
+    Object.keys(skills).forEach(k=>{skills[k]=Math.min(99,skills[k]+15);});
+  }
+  return {
+    name:"Mike Basketball",
+    position:opts.position||"SG",
+    height:78,  // 6'6"
+    weight:215,
+    hometown:"Indianapolis, IN",
+    skills,
+    intangibles:["highIQ","confident"],
+    draftPick:opts.draftPick,
+    isUndrafted:opts.isUndrafted||false,
+    appearance:{
+      skin:"#4A2912",hair:"Low Cut",beard:"Clean",
+      headband:"None",headbandColor:"Black",jerseyNumber:23,
+    },
+  };
+}
+
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
   const [screen,setScreen]=useState("loadscreen");
@@ -3893,6 +3932,10 @@ export default function App(){
   // Whether a save exists in localStorage. Drives the "Resume Career" button
   // on the title screen. Refreshed when we save, clear, or load.
   const [hasSave,setHasSave]=useState(()=>loadSave()!==null);
+  // Testing mode — when true, auto-save is disabled so jumping into a Mike
+  // preset doesn't clobber a real career. Set by the testing screen, cleared
+  // when the user exits testing back to the title.
+  const [testingMode,setTestingMode]=useState(false);
 
   // Auto-save: write the entire career to localStorage whenever any tracked
   // state changes. Skipped when the player hasn't started (no name entered)
@@ -3901,6 +3944,7 @@ export default function App(){
   useEffect(()=>{
     if(!player.name) return;
     if(screen==="loadscreen") return;
+    if(testingMode) return; // never save while testing — preserve real career
     // When the user is on a menu screen (title, options, etc.) DON'T overwrite
     // the saved screen — otherwise "Resume Career" would just send them right
     // back to the menu. Read the previous save's screen and keep that as the
@@ -3925,14 +3969,24 @@ export default function App(){
       nbaTeam, nbaGamesPlayed, nbaSeasonTotals, nbaMentor, nbaSeasons, playoffsDone,
     });
     setHasSave(true);
-  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs,money,signedShoeBrand,nbaTeam,nbaGamesPlayed,nbaSeasonTotals,nbaMentor,nbaSeasons,playoffsDone]);
+  },[screen,player,starTier,school,priorities,year,allYears,agent,workoutPlayer,workoutDone,agentAttention,interviewDone,combineDone,combineScore,interviewScore,seasonResult,xferSel,skillPoints,intangs,money,signedShoeBrand,nbaTeam,nbaGamesPlayed,nbaSeasonTotals,nbaMentor,nbaSeasons,playoffsDone,testingMode]);
 
   // Restore a saved career into all the state slots, then navigate to the
   // screen they were on when they last played.
   const resumeCareer=()=>{
     const data=loadSave();
     if(!data) return;
-    if(data.player) setPlayer(data.player);
+    if(data.player){
+      // Migrate older saves that predate the draftPick/isUndrafted flags
+      // (added when the G League path was removed). If the player is in the
+      // NBA but has no draft data, assume 1st-round (no rookie minutes floor).
+      const migrated={...data.player};
+      if(migrated.draftPick===undefined&&data.nbaTeam){
+        migrated.draftPick=1;
+        migrated.isUndrafted=false;
+      }
+      setPlayer(migrated);
+    }
     if(data.starTier!==undefined) setStarTier(data.starTier);
     if(data.school!==undefined) setSchool(data.school);
     if(data.priorities) setPriorities(data.priorities);
@@ -3958,6 +4012,8 @@ export default function App(){
     if(data.nbaMentor!==undefined) setNbaMentor(data.nbaMentor);
     if(data.nbaSeasons!==undefined) setNbaSeasons(data.nbaSeasons);
     if(data.playoffsDone!==undefined) setPlayoffsDone(data.playoffsDone);
+    // Resuming a real career — drop out of testing mode if we were in it.
+    setTestingMode(false);
     // Jump back to where they were. If the saved screen is a menu screen
     // (legacy saves from before the menu-screen guard was added), infer the
     // best resume point from the saved progress data — much better UX than
@@ -3967,6 +4023,91 @@ export default function App(){
       setScreen(saved);
     } else {
       setScreen(inferCareerScreen(data));
+    }
+  };
+
+  // ─── TESTING MODE JUMPS ────────────────────────────────────────────────────
+  // Each preset wipes career state, builds a Mike player tailored to the
+  // scenario, and drops the user into the right screen. testingMode prevents
+  // auto-save from clobbering their real career while they poke around.
+  const jumpToTesting=(preset)=>{
+    setTestingMode(true);
+    // Reset everything that's not preset-specific so leftover state from a
+    // previous session can't bleed in.
+    setStarTier(null); setSchool(null); setPriorities([]); setYear(1); setAllYears([]);
+    setAgent(null); setWorkoutPlayer(null); setWorkoutDone(false); setAgentAttention(100);
+    setInterviewDone(false); setCombineDone(false); setCombineScore(null); setInterviewScore(null);
+    setSeasonResult(null); setXferSel(null); setIntangs([]);
+    setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
+    setNbaMentor(null); setPlayoffsDone(false); setNbaGamesPlayed(0);
+
+    if(preset==="lottery"){
+      // Top-5 pick with Nike shoe deal → +5 SP only, sits as starter
+      const mike=buildMike({draftPick:3});
+      setPlayer(mike); setNbaTeam("LA Lakers");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setMoney(2000000); setSkillPoints(5); setNbaSeasons([]);
+      setScreen("leagueHub");
+      toast("Mike — Lottery Rookie loaded","#FFD700");
+    }
+    else if(preset==="secondRound"){
+      // 2nd-round pick, no shoe deal → 0 SP, rookie minutes floor at slot 2
+      const mike=buildMike({draftPick:40});
+      setPlayer(mike); setNbaTeam("Charlotte Bobcats");
+      setSignedShoeBrand(null);
+      setMoney(0); setSkillPoints(0); setNbaSeasons([]);
+      setScreen("leagueHub");
+      toast("Mike — 2nd Round Rookie loaded","#a88aff");
+    }
+    else if(preset==="undrafted"){
+      // Undrafted, no shoe deal → 0 SP, deepest rookie floor at slot 3
+      const mike=buildMike({draftPick:0,isUndrafted:true});
+      setPlayer(mike); setNbaTeam("Cleveland Cavaliers");
+      setSignedShoeBrand(null);
+      setMoney(0); setSkillPoints(0); setNbaSeasons([]);
+      setScreen("leagueHub");
+      toast("Mike — Undrafted Rookie loaded","#ff5252");
+    }
+    else if(preset==="vet"){
+      // Year 3 veteran — past the rookie floor, elite skills, two full seasons logged
+      const mike=buildMike({draftPick:8,elite:true});
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"adidas",name:"Adidas",maxPick:10,bonus:2000000,skillBonus:5,color:"#FFFFFF",subtitle:"Top 10 picks only"});
+      setMoney(5000000); setSkillPoints(20);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:18.6,rpg:5.0,apg:4.2,fg:48},
+      ]);
+      setScreen("leagueHub");
+      toast("Mike — Year 3 Vet loaded","#00dc64");
+    }
+    else if(preset==="college"){
+      // Freshman at Duke — no NBA state, start of college season flow
+      const mike=buildMike();
+      setPlayer(mike);
+      setStarTier(STAR_TIERS[1]); // 4-star
+      setSchool(SCHOOLS[0]); // Duke
+      setPriorities(["finishing","midRange","threePoint"]);
+      setYear(1); setAllYears([]);
+      setNbaTeam(null); setSkillPoints(0);
+      setScreen("season");
+      toast("Mike — College Freshman at Duke loaded","#e8873a");
+    }
+  };
+
+  const exitTesting=()=>{
+    setTestingMode(false);
+    // If there's a real career saved, resume it (overwrites Mike's state with
+    // the real player). Otherwise just go home with empty state — auto-save
+    // bails on empty player.name so the save is untouched either way.
+    if(hasSave){
+      resumeCareer();
+      toast("Real career restored","#00dc64");
+    } else {
+      setPlayer({name:"",position:"SG",height:76,weight:210,hometown:"",skills:defaultSkills("SG"),intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
+      setNbaTeam(null); setNbaSeasons([]); setNbaGamesPlayed(0);
+      setScreen("title");
+      toast("Exited testing mode","#888");
     }
   };
 
@@ -4460,7 +4601,68 @@ export default function App(){
           )}
         </div>
 
+        {/* Testing mode — jump in as a generic player at any stage. Auto-save
+            is paused while in testing so the real career is preserved. */}
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:OR,marginBottom:8}}>Developer</div>
+        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#f0ede8"}}>🧪 Testing Mode</div>
+          <div style={{fontSize:11,color:"#888",marginTop:2,lineHeight:1.5}}>
+            Jump in as Mike Basketball at any stage to verify the game works. Auto-save is paused — your real career is preserved.
+          </div>
+          <button onClick={()=>go("testing")} style={{...ghostS,marginTop:10,width:"auto",padding:"7px 14px",fontSize:12}}>
+            Open Testing Mode →
+          </button>
+        </div>
+
         <button onClick={()=>go("title")} style={btnS}>BACK TO HOME →</button>
+      </MenuFrame>
+    ),
+
+    // Testing mode — preset Mike Basketball at various career stages so the
+    // user can verify each batch of changes without playing through.
+    testing:(
+      <MenuFrame sub="Mike Basketball Presets" title="TESTING MODE">
+        <button onClick={()=>go("options")} style={{...ghostS,marginBottom:14,width:"auto",padding:"7px 14px",fontSize:12}}>← Back to Options</button>
+
+        <div style={{background:"rgba(232,135,58,0.08)",border:`1px solid ${OR}55`,borderRadius:10,padding:"10px 12px",marginBottom:14}}>
+          <div style={{fontSize:11,color:OR,fontWeight:700,letterSpacing:1.5,marginBottom:3}}>⚠ AUTO-SAVE IS PAUSED</div>
+          <div style={{fontSize:11,color:"#aaa",lineHeight:1.5}}>Your real career save is untouched. Use "Exit Testing" on any screen — or return to the title — to come back.</div>
+        </div>
+
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginBottom:8}}>NBA Presets</div>
+
+        <button onClick={()=>jumpToTesting("lottery")} style={{...btnS,textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block"}}>
+          <div style={{fontSize:14,fontWeight:900,color:"#080c10"}}>🏆 LOTTERY ROOKIE</div>
+          <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>#3 pick · Lakers · Nike deal (+5 SP) · Starter minutes</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("secondRound")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${PU} 0%, #4a2e8a 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>📋 2ND ROUND ROOKIE</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>#40 pick · Bobcats · No shoe deal · Limited minutes (≤14 MPG)</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("undrafted")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${RE} 0%, #6b1818 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>😤 UNDRAFTED ROOKIE</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Cavaliers · No shoe deal · Deep bench (≤8 MPG)</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("vet")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🌟 YEAR 3 VET</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Kings · Elite skills · 2 prior seasons · No rookie floor</div>
+        </button>
+
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#aaa",marginTop:14,marginBottom:8}}>Pre-NBA</div>
+
+        <button onClick={()=>jumpToTesting("college")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:"rgba(255,255,255,0.05)",border:`1px solid ${OR}55`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900,color:OR}}>🎓 COLLEGE FRESHMAN</div>
+          <div style={{fontSize:10,color:"#aaa",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Duke · 4-star recruit · Year 1 · Skills 65-75</div>
+        </button>
+
+        <div style={{fontSize:11,color:"#888",lineHeight:1.5,padding:"10px 12px",background:"rgba(0,0,0,0.25)",borderRadius:8,marginBottom:14}}>
+          Each preset wipes whatever career state is in memory and drops you in fresh. Your saved career on disk is preserved.
+        </div>
+
+        <button onClick={()=>go("title")} style={ghostS}>← Back to Home</button>
       </MenuFrame>
     ),
 
@@ -5315,6 +5517,14 @@ export default function App(){
       }} title={audioState==="error"?"Music error — tap":(musicOn?"Mute":"Unmute")}>
         {audioState==="error"?"⚠️":musicOn?(audioState==="playing"?"🔊":"🔈"):"🔇"}
       </div>
+      {/* Testing mode banner — always visible while in a Mike preset so the
+          user has an obvious bail-out path no matter what screen they're on. */}
+      {testingMode&&screen!=="testing"&&(
+        <div style={{position:"sticky",top:0,zIndex:50,background:"linear-gradient(90deg, rgba(232,135,58,0.25), rgba(232,135,58,0.1))",borderBottom:`1px solid ${OR}88`,padding:"6px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:10,color:OR,letterSpacing:1.5,fontWeight:900}}>🧪 TESTING MODE · NOT SAVING</div>
+          <button onClick={exitTesting} style={{padding:"4px 10px",background:OR,border:"none",borderRadius:5,color:"#080c10",fontWeight:900,fontSize:10,letterSpacing:1,cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>EXIT</button>
+        </div>
+      )}
       {screen!=="loadscreen"&&screen!=="title"&&(
         <div style={{position:"sticky",top:0,zIndex:10,background:"rgba(8,12,16,0.96)",backdropFilter:"blur(8px)",borderBottom:"1px solid rgba(232,135,58,0.1)",padding:"8px 14px",display:"flex",alignItems:"center",minHeight:42}}>
           <div onClick={()=>go("title")} style={{cursor:"pointer"}}>
