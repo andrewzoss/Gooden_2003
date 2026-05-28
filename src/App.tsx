@@ -3572,34 +3572,58 @@ function calcRotationSlot(player, teamName, seasonData, nbaSeasons){
 // and minutes, produce per-game PPG/RPG/APG/FG% for THIS chunk of games.
 function generateNbaGameStats(player, totalPts, made, minutes, mentor){
   const posMult={
-    PG:{ppg:0.85,apg:1.6,rpg:0.55},
-    SG:{ppg:1.00,apg:0.9,rpg:0.65},
-    SF:{ppg:0.95,apg:0.7,rpg:0.95},
-    PF:{ppg:0.90,apg:0.5,rpg:1.40},
-    C: {ppg:0.85,apg:0.4,rpg:1.70},
+    PG:{ppg:0.95,apg:1.4,rpg:0.55},
+    SG:{ppg:1.05,apg:0.9,rpg:0.65},
+    SF:{ppg:1.00,apg:0.7,rpg:0.95},
+    PF:{ppg:0.95,apg:0.5,rpg:1.30},
+    C: {ppg:0.90,apg:0.4,rpg:1.50},
   };
   const pm=posMult[player.position]||posMult.SG;
   // Minutes factor — 36 minutes is "full starter load"
   const minFactor=minutes/36;
-  // Scoring skill influences PPG
-  const scoringSkill=((player.skills?.threePoint||50)+(player.skills?.midRange||50)+(player.skills?.finishing||50))/3;
-  const scoringMult=0.70+scoringSkill/200;
+  // Scoring-specific skill — uses a weighted blend that gives more weight to
+  // the player's BEST scoring skill, so an inside-scoring big with 99 finishing
+  // / 50 threes still scores like an elite scorer. Math: 60% best + 30% middle
+  // + 10% worst. Avg of (three, mid, finish) gave inside bigs short shrift.
+  const sk=[player.skills?.threePoint||50, player.skills?.midRange||50, player.skills?.finishing||50].sort((a,b)=>b-a);
+  const scoringSkill=sk[0]*0.6+sk[1]*0.3+sk[2]*0.1;
   // Height bonus for rebounds
   const heightBonus=Math.max(0,(player.height-74)*0.18);
   // Mentor bump: +5% across the board if they have a mentor
   const mentorMult=mentor?1.05:1.0;
   // Mini-game performance ratio (0.0-1.0 of max 15 pts across 5 games)
   const perf=Math.min(1,totalPts/15);
-  // PPG calculation — blends position role × scoring skill × minutes × perf
-  const ppg=parseFloat((perf*22*minFactor*pm.ppg*scoringMult*mentorMult).toFixed(1));
-  // APG
-  const playmaking=(player.skills?.playmaking||50)/10;
-  const apg=parseFloat((playmaking*minFactor*pm.apg*mentorMult).toFixed(1));
-  // RPG
-  const rebounding=(player.skills?.rebounding||50)/9;
-  const rpg=parseFloat((rebounding*minFactor*pm.rpg+heightBonus*minFactor).toFixed(1));
-  // FG% — roughly 40-55% range based on shot accuracy
-  const fgPct=Math.round(38+(perf*15)+(scoringSkill-50)*0.1);
+
+  // ─── PPG ──────────────────────────────────────────────────────────────────
+  // Baseline PPG ceiling scales with scoring skill: a 95 scorer can top 32 PPG,
+  // a 60 scorer maxes around 15. We let perf modulate ±30% around that baseline
+  // so an off night still posts respectable numbers for an elite scorer.
+  //   ceiling(skill)  ≈ skill/100 × 35 (so 95 → 33.3, 75 → 26.3, 50 → 17.5)
+  //   baseline       = ceiling × 0.75
+  //   final         = baseline × (0.85 + perf × 0.30) × posMult × minFactor × mentor
+  const ppgCeiling=(scoringSkill/100)*35;
+  const ppgBaseline=ppgCeiling*0.75;
+  const ppg=parseFloat((ppgBaseline*(0.85+perf*0.30)*pm.ppg*minFactor*mentorMult).toFixed(1));
+
+  // ─── APG ──────────────────────────────────────────────────────────────────
+  // Playmaking-driven. The exponent makes elite passers stand out without
+  // letting them run away — a 99 PG posts ~11 APG, a 75 posts ~5, 50 posts ~2.
+  const playmaking=player.skills?.playmaking||50;
+  const apgBaseline=Math.pow(playmaking/100, 1.7)*9;
+  const apg=parseFloat((apgBaseline*(0.90+perf*0.20)*pm.apg*minFactor*mentorMult).toFixed(1));
+
+  // ─── RPG ──────────────────────────────────────────────────────────────────
+  // Rebounding skill + height. A 95-rebounding 7-footer can top 14 RPG; a
+  // 50-rebounding 6'2" PG posts ~3.
+  const rebounding=player.skills?.rebounding||50;
+  // Scale rebounding curve so only elite + tall combos approach the historic
+  // 14-ish ceiling. The previous 11-base + position 1.7× was overshooting.
+  const rpgBaseline=Math.pow(rebounding/100, 1.2)*8+heightBonus;
+  const rpg=parseFloat((rpgBaseline*(0.90+perf*0.20)*pm.rpg*minFactor*mentorMult).toFixed(1));
+
+  // ─── FG% ──────────────────────────────────────────────────────────────────
+  // 40-55% range — scoring skill drives the baseline, perf nudges around it.
+  const fgPct=Math.round(38+(perf*15)+(scoringSkill-50)*0.12);
   return {ppg, apg, rpg, fg:clamp(fgPct,30,60)};
 }
 
@@ -3733,29 +3757,34 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   const gameIdx=Math.min(results.length,MINI_GAMES.length-1);
   const gameType=MINI_GAMES[gameIdx];
 
-  // Auto-simulate the entire 5-game stretch. Randomized but biased by the
-  // player's OVR — elite players get better simmed numbers, scrubs get worse.
-  // Goes through the same finalize() flow so SP awards and stat application
-  // are identical whether the user plays or sims.
+  // Auto-simulate the entire 5-game stretch. Outcomes are centered on the
+  // player's OVR with a ±25% randomization swing per game — so a 90-OVR sim
+  // reliably produces high totals (with variance), and a 55-OVR sim produces
+  // low ones. Routes through finalize() so SP awards and stat application are
+  // identical whether the user plays or sims.
   const simStretch=()=>{
     if(completedRef.current) return;
     setPhase("playing"); // jumps past the intro so the "Calculating…" view shows
     const ovr=calcOVR(player.skills||{},player.intangibles||[]);
-    // skillFactor ranges roughly 0.45 (OVR 45) → 0.99 (OVR 99). Used to bias
-    // both made% and pts so a 90-OVR sim doesn't roll like a 55-OVR sim.
-    const skillFactor=Math.min(0.99,Math.max(0.45,ovr/100));
+    // Expected make-rate = OVR/100 (clamped to a sensible band so even the
+    // worst player makes some plays and the best player isn't perfect).
+    const expectedMakeRate=Math.min(0.95, Math.max(0.30, ovr/100));
+    // Expected pts per made play scales linearly from ~1.0 (low OVR) to ~2.5
+    // (elite). Roughly: 50 OVR → 1.1, 75 OVR → 1.7, 90 OVR → 2.15, 99 OVR → 2.45.
+    const expectedPtsPerMake=1.0+(ovr-50)*0.030;
+    // ±25% randomization swing per individual mini-game.
+    const swing=()=>1+(Math.random()*0.50-0.25);
     setResults(prev=>{
       if(prev.length>=MINI_GAMES.length) return prev;
       const fake=[];
       for(let i=0;i<MINI_GAMES.length;i++){
-        const made=Math.random()<(0.40+skillFactor*0.40); // 0.58 - 0.80 made-rate
-        // pts distribution: 0 (miss) / 1 (made low) / 2 (made solid) / 3 (perfect)
+        const gameMakeRate=Math.min(1, expectedMakeRate*swing());
+        const made=Math.random()<gameMakeRate;
+        // Points for this game: if made, sample around expected pts/make with
+        // its own ±25% swing; round to nearest int (0/1/2/3). Missed plays = 0.
         let pts=0;
         if(made){
-          const roll=Math.random();
-          if(roll<skillFactor*0.30) pts=3;
-          else if(roll<0.5+skillFactor*0.20) pts=2;
-          else pts=1;
+          pts=Math.max(1, Math.min(3, Math.round(expectedPtsPerMake*swing())));
         }
         fake.push({type:MINI_GAMES[i],made,pts,simmed:true});
       }
@@ -4947,19 +4976,32 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
           <div style={{fontSize:12,color:"#888",fontStyle:"italic",padding:"8px 0"}}>No NBA games played yet.</div>
         ):(
           <div>
-            <div style={{display:"grid",gridTemplateColumns:"1.2fr 0.4fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:4,paddingBottom:4,borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
-              <div>YEAR</div><div style={{textAlign:"right"}}>GP</div><div style={{textAlign:"right"}}>PPG</div><div style={{textAlign:"right"}}>RPG</div><div style={{textAlign:"right"}}>APG</div><div style={{textAlign:"right"}}>FG%</div>
+            <div style={{display:"grid",gridTemplateColumns:"0.9fr 0.55fr 0.35fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:4,paddingBottom:4,borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+              <div>YEAR</div><div>TEAM</div><div style={{textAlign:"right"}}>GP</div><div style={{textAlign:"right"}}>PPG</div><div style={{textAlign:"right"}}>RPG</div><div style={{textAlign:"right"}}>APG</div><div style={{textAlign:"right"}}>FG%</div>
             </div>
-            {allNba.map((s,i)=>(
-              <div key={i} style={{display:"grid",gridTemplateColumns:"1.2fr 0.4fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<allNba.length-1?"1px solid rgba(255,255,255,0.04)":"none"}}>
-                <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.year}</div>
-                <div style={{textAlign:"right",color:"#aaa"}}>{s.gp}</div>
-                <div style={{textAlign:"right",color:OR,fontWeight:700}}>{s.ppg}</div>
-                <div style={{textAlign:"right",color:"#ddd"}}>{s.rpg}</div>
-                <div style={{textAlign:"right",color:"#ddd"}}>{s.apg}</div>
-                <div style={{textAlign:"right",color:"#ddd"}}>{s.fg}%</div>
-              </div>
-            ))}
+            {allNba.map((s,i)=>{
+              // Look up team abbreviation. NBA_TEAM_DATA is keyed by the full
+              // display name, which matches what we stamp on each seasonEntry.
+              // Falls back to a 3-letter slug of the name if no entry exists
+              // (defensive — shouldn't happen for any real team).
+              const td=s.team?NBA_TEAM_DATA[s.team]:null;
+              const abbr=td?.abbr || (s.team?s.team.split(" ").slice(-1)[0].slice(0,3).toUpperCase():"—");
+              const teamColor=td?.p||"#888";
+              return(
+                <div key={i} style={{display:"grid",gridTemplateColumns:"0.9fr 0.55fr 0.35fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<allNba.length-1?"1px solid rgba(255,255,255,0.04)":"none",alignItems:"center"}}>
+                  <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.year}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:5,minWidth:0}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:teamColor,flexShrink:0}}/>
+                    <span style={{fontSize:11,color:"#bbb",fontWeight:700,letterSpacing:0.5}}>{abbr}</span>
+                  </div>
+                  <div style={{textAlign:"right",color:"#aaa"}}>{s.gp}</div>
+                  <div style={{textAlign:"right",color:OR,fontWeight:700}}>{s.ppg}</div>
+                  <div style={{textAlign:"right",color:"#ddd"}}>{s.rpg}</div>
+                  <div style={{textAlign:"right",color:"#ddd"}}>{s.apg}</div>
+                  <div style={{textAlign:"right",color:"#ddd"}}>{s.fg}%</div>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
