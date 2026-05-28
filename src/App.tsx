@@ -3324,45 +3324,56 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   // accidentally calls onResult twice (e.g., a stray setTimeout after unmount).
   const completedRef=useRef(false);
 
-  // When results.length hits the target, finalize. Doing this in an effect
-  // (instead of inside handleResult) decouples completion from a single render
-  // cycle and survives any timing weirdness in the child games.
-  useEffect(()=>{
+  // Finalize once we have all 5 results. Wrapped so it can be called from both
+  // handleResult and skipRemaining without duplicating logic.
+  const finalize=(all)=>{
     if(completedRef.current) return;
-    if(results.length>=MINI_GAMES.length){
-      completedRef.current=true;
-      const totalPts=results.reduce((a,b)=>a+(b.pts||0),0);
-      const made=results.filter(x=>x.made).length;
-      onComplete&&onComplete({totalPts,made,details:results});
-    }
-  },[results,onComplete]);
+    completedRef.current=true;
+    const totalPts=all.reduce((a,b)=>a+(b.pts||0),0);
+    const made=all.filter(x=>x.made).length;
+    // Defer to next tick so we never call onComplete in the middle of a
+    // setState render — that's the React anti-pattern that caused premature
+    // unmounts when onComplete called go("leagueHub") synchronously.
+    setTimeout(()=>onComplete&&onComplete({totalPts,made,details:all}),0);
+  };
 
   const handleResult=(r)=>{
     if(completedRef.current) return; // already finalized — ignore late fires
+    let didAdd=false;
     setResults(prev=>{
       // Don't add more results once we've hit the cap (prevents duplicate-fire bugs)
       if(prev.length>=MINI_GAMES.length) return prev;
-      return [...prev,r];
+      didAdd=true;
+      const next=[...prev,r];
+      if(next.length>=MINI_GAMES.length){
+        finalize(next);
+      }
+      return next;
     });
-    setGameIdx(idx=>Math.min(idx+1,MINI_GAMES.length-1));
+    // Advance the visible mini-game only if there's another game to show.
+    // Stays clamped at the last index so the index is never out of range.
+    if(didAdd){
+      setGameIdx(idx=>Math.min(idx+1,MINI_GAMES.length-1));
+    }
   };
 
-  // Escape hatch — auto-simulates any remaining mini-games as average-effort
-  // results and finalizes the stretch. Saves the user if a single mini-game
-  // hits a bug. Each simmed game lands as a 1-pt make (mediocre but not zero).
+  // Escape hatch — auto-simulates any remaining mini-games as mediocre results
+  // and finalizes the stretch. Saves the user if a single mini-game hits a bug.
   const skipRemaining=()=>{
     if(completedRef.current) return;
-    const remaining=MINI_GAMES.length-results.length;
-    if(remaining<=0) return;
-    const filler=[];
-    for(let i=0;i<remaining;i++){
-      filler.push({type:MINI_GAMES[results.length+i]||"sim",made:Math.random()<0.4,pts:rand(0,2),simmed:true});
-    }
-    setResults(prev=>[...prev,...filler]);
+    setResults(prev=>{
+      if(prev.length>=MINI_GAMES.length) return prev;
+      const filler=[];
+      for(let i=prev.length;i<MINI_GAMES.length;i++){
+        filler.push({type:MINI_GAMES[i]||"sim",made:Math.random()<0.4,pts:rand(0,2),simmed:true});
+      }
+      const next=[...prev,...filler];
+      finalize(next);
+      return next;
+    });
   };
 
   const gameType=MINI_GAMES[gameIdx];
-  const props={player,difficulty,onResult:handleResult,key:gameIdx};
   if(phase==="intro") return(
     <div style={{textAlign:"center",padding:"20px 0"}}>
       <div style={{fontSize:11,letterSpacing:3,color:OR,marginBottom:10,textTransform:"uppercase"}}>Game Stretch</div>
@@ -3371,6 +3382,9 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
       <button onClick={()=>setPhase("playing")} style={{...btnS,width:"auto",padding:"12px 36px"}}>BEGIN STRETCH →</button>
     </div>
   );
+  // `key` MUST be a JSX attribute, not part of spread props, or React ignores it
+  // and the mini-game retains stale state when gameIdx advances.
+  const childProps={player,difficulty,onResult:handleResult};
   return(
     <div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,fontSize:11,color:"#888"}}>
@@ -3382,15 +3396,16 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
           <div key={i} style={{flex:1,height:4,borderRadius:2,background:i<results.length?(results[i].made?GR:RE):i===gameIdx?OR:"rgba(255,255,255,0.08)"}}/>
         ))}
       </div>
-      {gameType==="shot"&&<ShotMeterGame {...props}/>}
-      {gameType==="defense"&&<DefenseGame {...props}/>}
-      {gameType==="possession"&&<OffensivePossessionGame {...props}/>}
-      {gameType==="steal"&&<StealAndDunkGame {...props}/>}
-      {gameType==="pass"&&<PassingGame {...props}/>}
-      {/* Escape hatch — auto-sims the rest if a mini-game gets stuck */}
+      {gameType==="shot"&&<ShotMeterGame key={gameIdx} {...childProps}/>}
+      {gameType==="defense"&&<DefenseGame key={gameIdx} {...childProps}/>}
+      {gameType==="possession"&&<OffensivePossessionGame key={gameIdx} {...childProps}/>}
+      {gameType==="steal"&&<StealAndDunkGame key={gameIdx} {...childProps}/>}
+      {gameType==="pass"&&<PassingGame key={gameIdx} {...childProps}/>}
+      {/* Escape hatch — auto-sims the rest if a mini-game gets stuck. Tucked
+          well below the game so it's hard to mistap. */}
       {results.length<MINI_GAMES.length&&results.length>0&&(
-        <div style={{marginTop:14,textAlign:"center"}}>
-          <button onClick={skipRemaining} style={{padding:"7px 14px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:6,color:"#aaa",cursor:"pointer",fontSize:10,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>↠ SKIP REMAINING ({MINI_GAMES.length-results.length})</button>
+        <div style={{marginTop:28,textAlign:"center",opacity:0.5}}>
+          <button onClick={skipRemaining} style={{padding:"6px 12px",background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:6,color:"#888",cursor:"pointer",fontSize:10,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>↠ skip remaining ({MINI_GAMES.length-results.length})</button>
         </div>
       )}
     </div>
