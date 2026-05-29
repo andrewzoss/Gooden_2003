@@ -245,6 +245,49 @@ const SHOE_BRANDS = [
   {id:"converse", name:"Converse", maxPick:14, bonus: 500000, skillBonus:5, color:"#C8102E", subtitle:"Top 14 (lottery)"},
   {id:"and1",     name:"AND1",     maxPick:14, bonus:      0, skillBonus:5, color:"#000000", subtitle:"Top 14 (lottery)"},
 ];
+const SHOE_BRAND_BY_ID = Object.fromEntries(SHOE_BRANDS.map(b=>[b.id,b]));
+
+// ─── PRO SHOE CONTRACTS ────────────────────────────────────────────────────────
+// Once in the league, players can renegotiate or switch shoe brands at any
+// time from the Agent page. Each brand has a minimum OVR to even offer a deal,
+// plus a higher OVR threshold for a signature shoe. The bonus is scaled by
+// brand prestige (Nike pays more than And1) AND by current OVR (90 OVR Nike
+// pays more than 80 OVR Nike).
+const PRO_SHOE_BRANDS = [
+  {id:"nike",     name:"Nike",     baseBonus:4000000, minOVR:80, sigOVR:90, color:"#FA5400"},
+  {id:"adidas",   name:"Adidas",   baseBonus:3500000, minOVR:75, sigOVR:88, color:"#FFFFFF"},
+  {id:"reebok",   name:"Reebok",   baseBonus:3000000, minOVR:70, sigOVR:85, color:"#DA1A32"},
+  {id:"puma",     name:"Puma",     baseBonus:2500000, minOVR:65, sigOVR:80, color:"#FFD500"},
+  {id:"converse", name:"Converse", baseBonus:2000000, minOVR:60, sigOVR:80, color:"#C8102E"},
+  {id:"and1",     name:"AND1",     baseBonus:1500000, minOVR: 0, sigOVR:80, color:"#000000"},
+];
+const PRO_SHOE_BRAND_BY_ID = Object.fromEntries(PRO_SHOE_BRANDS.map(b=>[b.id,b]));
+
+// OVR-to-bonus multiplier curve. Below 60 OVR essentially gets minimum money;
+// 80 OVR is "fair market value" (1.0x); elite OVR gets a real premium.
+function shoeBonusMultiplier(ovr){
+  if(ovr>=95) return 2.0;
+  if(ovr>=90) return 1.6;
+  if(ovr>=85) return 1.3;
+  if(ovr>=80) return 1.0;
+  if(ovr>=70) return 0.8;
+  if(ovr>=60) return 0.6;
+  return 0.4;
+}
+
+// Given a brand + current OVR, compute the offered bonus + whether a
+// signature shoe comes with it. Returns null if the player isn't eligible
+// (OVR below minOVR for that brand).
+function buildShoeOffer(brand, ovr){
+  if(ovr<brand.minOVR) return null;
+  const bonus=Math.round(brand.baseBonus*shoeBonusMultiplier(ovr));
+  return {
+    brandId:brand.id, brandName:brand.name, color:brand.color,
+    bonus, skillBonus:5,
+    qualifiesForSignature: ovr>=brand.sigOVR,
+    sigOVR:brand.sigOVR,
+  };
+}
 // Format a dollar amount as "$2M", "$500K", or "$0" — used by the deals box.
 function fmtMoney(n){
   if(n===0) return "$0";
@@ -5677,6 +5720,238 @@ function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, toast}){
   );
 }
 
+// ─── SHOE CONTRACT CARD ────────────────────────────────────────────────────────
+// Compact card sitting on the Agent screen between the player contract and
+// the trade/extension request panel. Shows current brand + bonus + signature
+// shoe (if any), plus a "BROWSE OFFERS" link that opens the picker.
+function ShoeContractCard({signedShoeBrand, shoeSignature, ovr, onBrowse}){
+  // Highlight the highest brand the player currently qualifies for so they
+  // know there's an upgrade waiting. If they don't have a deal yet, prompt
+  // them to sign one.
+  const bestBrand=PRO_SHOE_BRANDS.find(b=>ovr>=b.minOVR);
+  const hasDeal=!!signedShoeBrand;
+  const currentColor=signedShoeBrand?.color||"#888";
+  return(
+    <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${hasDeal?currentColor+"55":"rgba(255,255,255,0.10)"}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase"}}>👟 Shoe Deal</div>
+        <button onClick={onBrowse} style={{padding:"4px 10px",background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:5,color:"#aaa",cursor:"pointer",fontSize:10,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          BROWSE OFFERS
+        </button>
+      </div>
+
+      {hasDeal?(
+        <>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+            <div style={{width:40,height:40,borderRadius:"50%",background:`linear-gradient(135deg, ${currentColor}, ${currentColor}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>👟</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{signedShoeBrand.name}</div>
+              <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                {signedShoeBrand.bonus>0?`${fmtMoney(signedShoeBrand.bonus)} signing bonus`:"No signing bonus"}
+                {signedShoeBrand.skillBonus>0?` · +${signedShoeBrand.skillBonus} SP`:""}
+              </div>
+            </div>
+          </div>
+
+          {/* Signature shoe preview if they have one */}
+          {shoeSignature&&(
+            <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginTop:8,background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:8}}>
+              <div style={{width:36,height:36,borderRadius:8,background:`linear-gradient(135deg, ${shoeSignature.color}, ${shoeSignature.color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>👟</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:9,letterSpacing:1.5,color:GO,fontWeight:700,marginBottom:1}}>★ SIGNATURE SHOE</div>
+                <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shoeSignature.name}</div>
+              </div>
+            </div>
+          )}
+        </>
+      ):(
+        <div style={{fontSize:12,color:"#888",lineHeight:1.5,fontStyle:"italic"}}>
+          No shoe deal signed. Tap BROWSE OFFERS to see what brands are interested.
+        </div>
+      )}
+
+      {/* Tease the highest brand the player qualifies for if there's room to upgrade */}
+      {bestBrand && (!hasDeal || (PRO_SHOE_BRAND_BY_ID[signedShoeBrand?.id]?.baseBonus||0) < bestBrand.baseBonus) && (
+        <div style={{fontSize:10,color:"#888",marginTop:8,paddingTop:8,borderTop:"1px dashed rgba(255,255,255,0.08)",lineHeight:1.4}}>
+          💡 {bestBrand.name} is interested — your OVR ({ovr}) qualifies you for their tier.
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── SHOE DEAL PICKER ──────────────────────────────────────────────────────────
+// Modal listing every brand and their current offer. Brands you don't qualify
+// for show their OVR requirement instead. Tapping a qualifying brand signs you.
+function ShoeDealPicker({ovr, currentBrandId, onClose, onSign}){
+  const [picked,setPicked]=useState(null);
+  return(
+    <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:440,width:"100%",maxHeight:"88vh",overflowY:"auto",border:`1px solid ${OR}55`}}>
+        <div style={{textAlign:"center",marginBottom:12}}>
+          <div style={{fontSize:9,letterSpacing:3,color:OR,textTransform:"uppercase",fontWeight:700,marginBottom:3}}>Endorsement Offers</div>
+          <div style={{fontSize:20,fontWeight:900,color:"#fff",letterSpacing:0.5}}>SHOE DEALS</div>
+          <div style={{fontSize:11,color:"#888",marginTop:4}}>Your OVR: <span style={{color:OR,fontWeight:900}}>{ovr}</span></div>
+        </div>
+
+        {PRO_SHOE_BRANDS.map(brand=>{
+          const offer=buildShoeOffer(brand,ovr);
+          const qualifies=!!offer;
+          const isCurrent=currentBrandId===brand.id;
+          const isSelected=picked===brand.id;
+          return(
+            <button key={brand.id} onClick={()=>{if(qualifies&&!isCurrent) setPicked(brand.id);}} disabled={!qualifies||isCurrent} style={{
+              display:"block",width:"100%",textAlign:"left",padding:"10px 12px",marginBottom:6,
+              background:isCurrent?"rgba(0,220,100,0.10)":isSelected?`linear-gradient(135deg, ${brand.color}33 0%, rgba(0,0,0,0.4) 100%)`:qualifies?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.02)",
+              border:`1.5px solid ${isCurrent?GR+"55":isSelected?brand.color:qualifies?brand.color+"33":"rgba(255,255,255,0.06)"}`,
+              borderRadius:8,color:"#fff",cursor:qualifies&&!isCurrent?"pointer":"not-allowed",
+              fontFamily:"'Barlow Condensed',sans-serif",opacity:qualifies?1:0.55
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
+                <div style={{width:36,height:36,borderRadius:"50%",background:`linear-gradient(135deg, ${brand.color}, ${brand.color}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>👟</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>
+                    {brand.name}{isCurrent&&<span style={{fontSize:9,color:GR,marginLeft:6,letterSpacing:1}}>CURRENT</span>}
+                    {offer?.qualifiesForSignature&&<span style={{fontSize:9,color:GO,marginLeft:6,letterSpacing:1}}>★ SIGNATURE</span>}
+                  </div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:1}}>
+                    {qualifies?`${fmtMoney(offer.bonus)} bonus · +${offer.skillBonus} SP`:`Requires OVR ${brand.minOVR}+`}
+                  </div>
+                </div>
+                {qualifies&&!offer.qualifiesForSignature&&(
+                  <div style={{fontSize:9,color:"#666",textAlign:"right",letterSpacing:0.5,maxWidth:80}}>
+                    Signature at OVR {brand.sigOVR}+
+                  </div>
+                )}
+              </div>
+            </button>
+          );
+        })}
+
+        <div style={{display:"flex",gap:8,marginTop:8}}>
+          <button onClick={onClose} style={{flex:1,padding:"9px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:7,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            CANCEL
+          </button>
+          <button onClick={()=>{
+            if(!picked) return;
+            const brand=PRO_SHOE_BRAND_BY_ID[picked];
+            const offer=buildShoeOffer(brand,ovr);
+            if(offer) onSign(offer);
+          }} disabled={!picked} style={{flex:2,padding:"9px 0",background:picked?btnS.background:"rgba(255,255,255,0.06)",border:"none",borderRadius:7,color:picked?"#080c10":"#666",cursor:picked?"pointer":"not-allowed",fontSize:12,fontWeight:900,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            {picked?`SIGN WITH ${PRO_SHOE_BRAND_BY_ID[picked].name.toUpperCase()}`:"SELECT A BRAND"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── SHOE DESIGNER SCREEN ──────────────────────────────────────────────────────
+// Triggered after the player signs a deal that qualifies for a signature shoe.
+// They name the shoe, pick a silhouette, and a colorway. Saves to
+// player.shoeSignature. Refreshable: each new qualifying deal lets them
+// re-design (or skip if they want to keep the old one).
+function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
+  // The pending context was set by the picker before navigating here.
+  const pending=player?.shoeSignaturePending;
+  const brandColor=pending?.brandColor||signedShoeBrand?.color||OR;
+  const brandName=pending?.brandName||signedShoeBrand?.name||"Brand";
+  // Default name suggestion: PLAYER FIRST NAME + roman numeral based on
+  // whether they've already had a signature (so it feels like a series).
+  const previousSig=player?.shoeSignature;
+  const firstName=(player?.name||"Mike").split(" ")[0];
+  const defaultName=previousSig?`${firstName} ${["II","III","IV","V","VI"][Math.min(4,(player?.shoeSignatureCount||1))]}`:`${firstName} I`;
+  const [name,setName]=useState(defaultName);
+  const [design,setDesign]=useState("lowtop");
+  const [color,setColor]=useState(brandColor);
+  const SILHOUETTES=[
+    {id:"lowtop",   name:"Low-Top",  description:"Speed and quickness"},
+    {id:"midtop",   name:"Mid-Top",  description:"Balanced support"},
+    {id:"hightop",  name:"High-Top", description:"Lockdown ankle"},
+    {id:"performance",name:"Performance",description:"Tech-forward modern"},
+  ];
+  const COLORS=[brandColor,"#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#000000","#FFFFFF"];
+  const ready=name.trim().length>=2;
+
+  const finalize=()=>{
+    if(!ready) return;
+    setPlayer(p=>({
+      ...p,
+      shoeSignature:{
+        name:name.trim(), design, color,
+        brandId:pending?.brandId,
+        brandName:pending?.brandName,
+      },
+      shoeSignaturePending:null,
+      shoeSignatureCount:(p?.shoeSignatureCount||0)+1,
+    }));
+    toast&&toast(`${name.trim()} unveiled by ${brandName}!`,GO);
+    go("nbaAgent");
+  };
+
+  const skip=()=>{
+    // User opted out — clear pending but don't create/refresh a signature.
+    setPlayer(p=>({...p, shoeSignaturePending:null}));
+    go("nbaAgent");
+  };
+
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:4,textTransform:"uppercase",fontWeight:700}}>★ Signature Shoe</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>DESIGN YOUR SHOE</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{brandName} wants to make this happen{previousSig?" — refresh your line":""}</div>
+      </div>
+
+      {/* Live preview — silhouette + name + color callout */}
+      <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:14,background:`linear-gradient(135deg, ${color}22 0%, rgba(0,0,0,0.5) 100%)`,border:`1.5px solid ${color}55`,borderRadius:12}}>
+        <div style={{width:90,height:90,borderRadius:14,background:`linear-gradient(135deg, ${color}, ${color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:48,flexShrink:0,boxShadow:`0 4px 22px ${color}66`}}>
+          👟
+        </div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:700,marginBottom:3}}>{brandName.toUpperCase()} PRESENTS</div>
+          <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name.trim()||"Untitled"}</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:3}}>{SILHOUETTES.find(s=>s.id===design)?.name} · {SILHOUETTES.find(s=>s.id===design)?.description}</div>
+        </div>
+      </div>
+
+      {/* Name input */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Shoe Name</div>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mike I" maxLength={28} style={{width:"100%",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1.5px solid ${ready?GO+"66":"rgba(255,255,255,0.12)"}`,borderRadius:8,color:"#fff",fontSize:14,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}/>
+      </div>
+
+      {/* Silhouette picker */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Silhouette</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+          {SILHOUETTES.map(s=>(
+            <button key={s.id} onClick={()=>setDesign(s.id)} style={{padding:"10px 8px",textAlign:"left",background:design===s.id?`linear-gradient(135deg, ${color}33 0%, ${color}11 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${design===s.id?color+"88":"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{fontSize:13,fontWeight:900,letterSpacing:0.5}}>{s.name}</div>
+              <div style={{fontSize:10,color:"#888",marginTop:2}}>{s.description}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Colorway */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Primary Colorway</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {COLORS.map((c,i)=>(
+            <button key={c+i} onClick={()=>setColor(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Color ${c}`}/>
+          ))}
+        </div>
+      </div>
+
+      <button onClick={finalize} disabled={!ready} style={{...btnS,width:"100%",padding:13,fontSize:14,opacity:ready?1:0.45,cursor:ready?"pointer":"not-allowed",marginBottom:8}}>
+        {ready?`🚀 LAUNCH ${name.trim().toUpperCase()}`:"NAME YOUR SHOE"}
+      </button>
+      <button onClick={skip} style={{...ghostS,width:"100%",padding:"9px 0",fontSize:11}}>SKIP · KEEP CURRENT SIGNATURE</button>
+    </div>
+  );
+}
+
 // ─── AGENT PICKER MODAL ────────────────────────────────────────────────────────
 // Full-screen overlay listing all 5 agents. Each agent's row shows their rep,
 // agency, and whether the player qualifies for them (OVR-gated). Tapping a
@@ -5736,7 +6011,7 @@ function AgentPickerModal({ovr, currentAgent, onClose, onPick}){
 // or a trade. Both gated by season state + resolved with chance based on
 // player OVR × agent reputation. Extension creates a new 4-year deal that
 // stacks onto the player's contract slot.
-function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, go, toast}){
+function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, signedShoeBrand, setSignedShoeBrand, setMoney, setSkillPoints, go, toast}){
   const ovr=calcOVR(player.skills||{},player.intangibles||[]);
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed; // used by getTeamIdentity for the picker
@@ -5745,6 +6020,8 @@ function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam
   // button — shows all agents the player qualifies for (by OVR threshold)
   // so they can re-sign with a better one as they level up.
   const [showAgentPicker,setShowAgentPicker]=useState(false);
+  // Shoe deal picker modal — listed shoe brands and current OVR-based offers.
+  const [showShoePicker,setShowShoePicker]=useState(false);
   // Contract info — feeds the new Contract card and gates the renegotiation UI
   // (renegotiation arrives in Batch 4; for now the card is read-only).
   const contract=player.contract;
@@ -5968,6 +6245,54 @@ function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam
         <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:"10px 14px",marginBottom:14,fontSize:12,color:"#888",fontStyle:"italic"}}>
           No contract on file — you're a free agent.
         </div>
+      )}
+
+      {/* Shoe contract card — current brand, bonus, signature shoe status,
+          and a button to look at new offers. The card pulls from signedShoeBrand
+          (App-level state) since it's also set during the draft. Player.shoeSignature
+          holds the optional signature shoe design (name/color/template). */}
+      <ShoeContractCard
+        signedShoeBrand={signedShoeBrand}
+        shoeSignature={player?.shoeSignature}
+        ovr={ovr}
+        onBrowse={()=>setShowShoePicker(true)}
+      />
+
+      {showShoePicker&&(
+        <ShoeDealPicker
+          ovr={ovr}
+          currentBrandId={signedShoeBrand?.id}
+          onClose={()=>setShowShoePicker(false)}
+          onSign={(offer)=>{
+            const brand=PRO_SHOE_BRAND_BY_ID[offer.brandId];
+            // Update the App-level brand handle (so the rest of the app sees
+            // the new brand) and pay the bonus + skill point bump.
+            setSignedShoeBrand&&setSignedShoeBrand({
+              id:brand.id, name:brand.name, color:brand.color,
+              bonus:offer.bonus, skillBonus:offer.skillBonus,
+              maxPick:99, subtitle:"Pro deal",
+            });
+            setMoney&&setMoney(m=>(m||0)+offer.bonus);
+            // Skill bonus also goes to the player on every signing.
+            setSkillPoints&&setSkillPoints(p=>(p||0)+offer.skillBonus);
+            setShowShoePicker(false);
+            // Signature shoe creator fires when the OVR qualifies AND either:
+            //   - they're switching to a new brand (refresh on brand change)
+            //   - they already had a signature with this brand and the OVR
+            //     threshold is hit (refresh on tier-up)
+            // For simplicity: any qualifying signing fires the designer.
+            if(offer.qualifiesForSignature){
+              // Stash the pending brand context for the designer screen to read
+              setPlayer(p=>({...p, shoeSignaturePending:{
+                brandId:brand.id, brandName:brand.name, brandColor:brand.color,
+              }}));
+              toast&&toast(`${brand.name} deal signed · ${fmtMoney(offer.bonus)}`,GR);
+              go("shoeDesigner");
+            } else {
+              toast&&toast(`${brand.name} deal signed · ${fmtMoney(offer.bonus)}`,GR);
+            }
+          }}
+        />
       )}
 
       {/* If we have a result, show it and stop here */}
@@ -8030,7 +8355,7 @@ export default function App(){
     ),
     nbaAgent:(
       <MenuFrame sub="Representation" title="AGENT">
-        <NbaAgentScreen player={player} setPlayer={setPlayer} agent={agent} setAgent={setAgent} nbaTeam={nbaTeam} setNbaTeam={setNbaTeam} setNbaMentor={setNbaMentor} nbaGamesPlayed={nbaGamesPlayed} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+        <NbaAgentScreen player={player} setPlayer={setPlayer} agent={agent} setAgent={setAgent} nbaTeam={nbaTeam} setNbaTeam={setNbaTeam} setNbaMentor={setNbaMentor} nbaGamesPlayed={nbaGamesPlayed} nbaSeasons={nbaSeasons} signedShoeBrand={signedShoeBrand} setSignedShoeBrand={setSignedShoeBrand} setMoney={setMoney} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
       </MenuFrame>
     ),
     freeAgency:(
@@ -8056,6 +8381,11 @@ export default function App(){
     nbaAlbum:(
       <MenuFrame sub="Ventures" title="ALBUM">
         <AlbumScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    shoeDesigner:(
+      <MenuFrame sub="Signature Series" title="DESIGN STUDIO">
+        <ShoeDesignerScreen player={player} setPlayer={setPlayer} signedShoeBrand={signedShoeBrand} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaStats:(
