@@ -283,10 +283,20 @@ function buildShoeOffer(brand, ovr){
   const bonus=Math.round(brand.baseBonus*shoeBonusMultiplier(ovr));
   return {
     brandId:brand.id, brandName:brand.name, color:brand.color,
-    bonus, skillBonus:5,
+    bonus, // skillBonus only awarded on first shoe deal — see signing flow
     qualifiesForSignature: ovr>=brand.sigOVR,
     sigOVR:brand.sigOVR,
   };
+}
+
+// Pro shoe deals lock the player in for 4 years — no resigning until that
+// window closes. Mirrors the player contract structure. Returns 0 if no
+// active deal or deal has expired.
+const SHOE_DEAL_YEARS = 4;
+function shoeDealRemainingYears(shoeContract, currentYear){
+  if(!shoeContract||shoeContract.signedYear==null) return 0;
+  const elapsed=currentYear-shoeContract.signedYear;
+  return Math.max(0, SHOE_DEAL_YEARS-elapsed);
 }
 // Format a dollar amount as "$2M", "$500K", or "$0" — used by the deals box.
 function fmtMoney(n){
@@ -505,6 +515,16 @@ const SHOP_ITEMS = [
     description:"Your first NBA car. Cloth seats, AM/FM, V6 power. Practical, dependable, and a far cry from the AMG you'll buy in a few years.",
     color:"#888888",
   },
+  {
+    // The "stupid fat house" — pure flex, no feature unlock. The kind of
+    // 2004-era trophy mansion with a foyer fountain, marble everything, a
+    // pool with the team logo on the bottom, and an arcade room nobody uses.
+    id:"mtv_cribs_house", category:"home",
+    name:"Stupid Fat House", subtitle:"To get you on MTV Cribs",
+    price:8000000, icon:"🏰",
+    description:"A 14,000 sq ft monstrosity with a marble foyer, indoor pool, six-car garage, home theater, and a fountain shaped like your jersey number. The producers are already on the phone — welcome to MTV Cribs.",
+    color:"#a855f7",
+  },
 ];
 // Lookup by id — used after purchase to display item details.
 const SHOP_ITEM_BY_ID = Object.fromEntries(SHOP_ITEMS.map(i=>[i.id,i]));
@@ -549,6 +569,23 @@ const RESTAURANT_CHAIN_BY_ID = Object.fromEntries(RESTAURANT_CHAINS.map(c=>[c.id
 
 // Cost to start your own chain — scales by number of starting locations.
 const RESTAURANT_OWN_COSTS=[15000000,17000000,19000000,21000000,24000000];
+
+// Food types the player can pick. Each type has its own emoji palette so the
+// logo builder can suggest food-relevant emojis alongside the generic palette.
+const RESTAURANT_FOOD_TYPES = [
+  {id:"burgers", name:"Burgers", icon:"🍔", emojis:["🍔","🍟","🥤","🥬","🧀","🥩","🥓","🌽"]},
+  {id:"pizza",   name:"Pizza",   icon:"🍕", emojis:["🍕","🍅","🧀","🌿","🍄","🫒","🥖","🌶️"]},
+  {id:"wings",   name:"Wings",   icon:"🍗", emojis:["🍗","🌶️","🧄","🥫","🍺","🌿","🥕","🥬"]},
+  {id:"soup",    name:"Soup",    icon:"🍲", emojis:["🍲","🥣","🥖","🌽","🥕","🧅","🍅","🌿"]},
+  {id:"tacos",   name:"Tacos",   icon:"🌮", emojis:["🌮","🌯","🌶️","🥑","🧀","🌽","🍅","🌿"]},
+  {id:"bowls",   name:"Bowls",   icon:"🥗", emojis:["🥗","🥑","🍚","🥒","🥕","🌽","🍅","🌶️"]},
+  {id:"sushi",   name:"Sushi",   icon:"🍣", emojis:["🍣","🍙","🥢","🐟","🌶️","🥒","🥑","🍵"]},
+];
+const RESTAURANT_FOOD_TYPE_BY_ID = Object.fromEntries(RESTAURANT_FOOD_TYPES.map(f=>[f.id,f]));
+
+// Generic emojis available regardless of food type — for decoration / vibe.
+const RESTAURANT_GENERIC_EMOJIS = ["⭐","🔥","👑","💎","🌟","💯","⚡","🏆","🎯","❤️","✨","🌈"];
+
 function ownChainCost(locations){
   // locations is 1-5; clamp + look up
   return RESTAURANT_OWN_COSTS[Math.max(0,Math.min(4,locations-1))];
@@ -579,6 +616,204 @@ function ownChainExpansionFailChance(addLocations){
 // aggressive the expansion was.
 function ownChainExpansionLoss(addLocations){
   return Math.min(addLocations, 1+Math.floor(addLocations/2));
+}
+
+// ─── SEASON AWARDS ─────────────────────────────────────────────────────────────
+// End-of-regular-season awards: MVP, 6MOY, MIP, DPOY. Real-world winners are
+// hardcoded for known years; for years past 2025 we fall back to plausible
+// generated winners pulled from the active rosters.
+//
+// Each year maps to a winner object: {name, team}. team is used so the
+// awards screen can show team colors. Names are stored as plain strings —
+// the player only wins if they "earn it" per eligibility rules below.
+const REAL_AWARDS_MVP = {
+  2003:{name:"Kevin Garnett",team:"Minnesota Timberwolves"},
+  2004:{name:"Steve Nash",team:"Phoenix Suns"},
+  2005:{name:"Steve Nash",team:"Phoenix Suns"},
+  2006:{name:"Dirk Nowitzki",team:"Dallas Mavericks"},
+  2007:{name:"Kobe Bryant",team:"Los Angeles Lakers"},
+  2008:{name:"LeBron James",team:"Cleveland Cavaliers"},
+  2009:{name:"LeBron James",team:"Cleveland Cavaliers"},
+  2010:{name:"Derrick Rose",team:"Chicago Bulls"},
+  2011:{name:"LeBron James",team:"Miami Heat"},
+  2012:{name:"LeBron James",team:"Miami Heat"},
+  2013:{name:"Kevin Durant",team:"Oklahoma City Thunder"},
+  2014:{name:"Stephen Curry",team:"Golden State Warriors"},
+  2015:{name:"Stephen Curry",team:"Golden State Warriors"},
+  2016:{name:"Russell Westbrook",team:"Oklahoma City Thunder"},
+  2017:{name:"James Harden",team:"Houston Rockets"},
+  2018:{name:"Giannis Antetokounmpo",team:"Milwaukee Bucks"},
+  2019:{name:"Giannis Antetokounmpo",team:"Milwaukee Bucks"},
+  2020:{name:"Nikola Jokić",team:"Denver Nuggets"},
+  2021:{name:"Nikola Jokić",team:"Denver Nuggets"},
+  2022:{name:"Joel Embiid",team:"Philadelphia 76ers"},
+  2023:{name:"Nikola Jokić",team:"Denver Nuggets"},
+  2024:{name:"Shai Gilgeous-Alexander",team:"Oklahoma City Thunder"},
+};
+const REAL_AWARDS_6MOY = {
+  2003:{name:"Antawn Jamison",team:"Dallas Mavericks"},
+  2004:{name:"Ben Gordon",team:"Chicago Bulls"},
+  2005:{name:"Mike Miller",team:"Memphis Grizzlies"},
+  2006:{name:"Leandro Barbosa",team:"Phoenix Suns"},
+  2007:{name:"Manu Ginóbili",team:"San Antonio Spurs"},
+  2008:{name:"Jason Terry",team:"Dallas Mavericks"},
+  2009:{name:"Jamal Crawford",team:"Atlanta Hawks"},
+  2010:{name:"Lamar Odom",team:"Los Angeles Lakers"},
+  2011:{name:"James Harden",team:"Oklahoma City Thunder"},
+  2012:{name:"Jamal Crawford",team:"Los Angeles Clippers"},
+  2013:{name:"Jamal Crawford",team:"Los Angeles Clippers"},
+  2014:{name:"Lou Williams",team:"Toronto Raptors"},
+  2015:{name:"Jamal Crawford",team:"Los Angeles Clippers"},
+  2016:{name:"Eric Gordon",team:"Houston Rockets"},
+  2017:{name:"Lou Williams",team:"Los Angeles Clippers"},
+  2018:{name:"Lou Williams",team:"Los Angeles Clippers"},
+  2019:{name:"Montrezl Harrell",team:"Los Angeles Clippers"},
+  2020:{name:"Jordan Clarkson",team:"Utah Jazz"},
+  2021:{name:"Tyler Herro",team:"Miami Heat"},
+  2022:{name:"Malcolm Brogdon",team:"Boston Celtics"},
+  2023:{name:"Naz Reid",team:"Minnesota Timberwolves"},
+  2024:{name:"Payton Pritchard",team:"Boston Celtics"},
+};
+const REAL_AWARDS_MIP = {
+  2003:{name:"Zach Randolph",team:"Portland Trail Blazers"},
+  2004:{name:"Bobby Simmons",team:"Los Angeles Clippers"},
+  2005:{name:"Boris Diaw",team:"Phoenix Suns"},
+  2006:{name:"Monta Ellis",team:"Golden State Warriors"},
+  2007:{name:"Hedo Türkoğlu",team:"Orlando Magic"},
+  2008:{name:"Danny Granger",team:"Indiana Pacers"},
+  2009:{name:"Aaron Brooks",team:"Houston Rockets"},
+  2010:{name:"Kevin Love",team:"Minnesota Timberwolves"},
+  2011:{name:"Ryan Anderson",team:"Orlando Magic"},
+  2012:{name:"Paul George",team:"Indiana Pacers"},
+  2013:{name:"Goran Dragić",team:"Phoenix Suns"},
+  2014:{name:"Jimmy Butler",team:"Chicago Bulls"},
+  2015:{name:"C.J. McCollum",team:"Portland Trail Blazers"},
+  2016:{name:"Giannis Antetokounmpo",team:"Milwaukee Bucks"},
+  2017:{name:"Victor Oladipo",team:"Indiana Pacers"},
+  2018:{name:"Pascal Siakam",team:"Toronto Raptors"},
+  2019:{name:"Brandon Ingram",team:"New Orleans Pelicans"},
+  2020:{name:"Julius Randle",team:"New York Knicks"},
+  2021:{name:"Ja Morant",team:"Memphis Grizzlies"},
+  2022:{name:"Lauri Markkanen",team:"Utah Jazz"},
+  2023:{name:"Tyrese Maxey",team:"Philadelphia 76ers"},
+  2024:{name:"Dyson Daniels",team:"Atlanta Hawks"},
+};
+const REAL_AWARDS_DPOY = {
+  2003:{name:"Ron Artest",team:"Indiana Pacers"},
+  2004:{name:"Ben Wallace",team:"Detroit Pistons"},
+  2005:{name:"Ben Wallace",team:"Detroit Pistons"},
+  2006:{name:"Marcus Camby",team:"Denver Nuggets"},
+  2007:{name:"Kevin Garnett",team:"Boston Celtics"},
+  2008:{name:"Dwight Howard",team:"Orlando Magic"},
+  2009:{name:"Dwight Howard",team:"Orlando Magic"},
+  2010:{name:"Dwight Howard",team:"Orlando Magic"},
+  2011:{name:"Tyson Chandler",team:"Dallas Mavericks"},
+  2012:{name:"Marc Gasol",team:"Memphis Grizzlies"},
+  2013:{name:"Kawhi Leonard",team:"San Antonio Spurs"},
+  2014:{name:"Kawhi Leonard",team:"San Antonio Spurs"},
+  2015:{name:"Kawhi Leonard",team:"San Antonio Spurs"},
+  2016:{name:"Draymond Green",team:"Golden State Warriors"},
+  2017:{name:"Rudy Gobert",team:"Utah Jazz"},
+  2018:{name:"Rudy Gobert",team:"Utah Jazz"},
+  2019:{name:"Giannis Antetokounmpo",team:"Milwaukee Bucks"},
+  2020:{name:"Rudy Gobert",team:"Utah Jazz"},
+  2021:{name:"Marcus Smart",team:"Boston Celtics"},
+  2022:{name:"Jaren Jackson Jr.",team:"Memphis Grizzlies"},
+  2023:{name:"Rudy Gobert",team:"Minnesota Timberwolves"},
+  2024:{name:"Victor Wembanyama",team:"San Antonio Spurs"},
+};
+
+// Award type metadata for display + eligibility checks.
+const AWARD_TYPES = [
+  {id:"mvp",  name:"Most Valuable Player",     short:"MVP",  icon:"🏆", color:"#FFD700", table:REAL_AWARDS_MVP},
+  {id:"6moy", name:"Sixth Man of the Year",    short:"6MOY", icon:"🪑", color:"#22c55e", table:REAL_AWARDS_6MOY},
+  {id:"mip",  name:"Most Improved Player",     short:"MIP",  icon:"📈", color:"#3b82f6", table:REAL_AWARDS_MIP},
+  {id:"dpoy", name:"Defensive Player of the Year", short:"DPOY", icon:"🛡️", color:"#ef4444", table:REAL_AWARDS_DPOY},
+];
+const AWARD_TYPE_BY_ID = Object.fromEntries(AWARD_TYPES.map(a=>[a.id,a]));
+
+// Get the real-world default winner for a year, or generate a plausible one.
+// year is the season-start year (2010 = 2010-11 season).
+function getDefaultAwardWinner(awardId, year){
+  const table=AWARD_TYPE_BY_ID[awardId]?.table;
+  if(table&&table[year]) return table[year];
+  // Past our hardcoded data — generate a plausible winner. Just reuse the
+  // most recent known winner since "future" plausible winners are guesswork.
+  if(table){
+    const knownYears=Object.keys(table).map(Number).sort((a,b)=>b-a);
+    if(knownYears.length>0) return table[knownYears[0]];
+  }
+  return {name:"NBA Veteran", team:"Unknown"};
+}
+
+// Compute player's eligibility for each award given their current season
+// stats + skills + previous season stats. Returns an object keyed by award id
+// with `eligible` bool and `score` number (higher = more deserving).
+function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr){
+  const skills=player?.skills||{};
+  const out={};
+  // MVP — needs to be elite scorer with elite OVR. Score combines PPG +
+  // efficiency proxy + OVR. The default real-world MVP has a high score, so
+  // the player must really be elite to take it.
+  const mvpEligible=ovr>=88 && currentSeasonStats.ppg>=25;
+  out.mvp={
+    eligible:mvpEligible,
+    score: currentSeasonStats.ppg*2 + ovr + currentSeasonStats.apg + currentSeasonStats.rpg*0.5,
+  };
+  // 6MOY — bench player with strong PPG. slot 0=starter, 1=6th man, etc.
+  // Players in slot 1 (first off the bench) score highest.
+  const sixmoyEligible=rotationSlot>=1 && currentSeasonStats.ppg>=13;
+  out["6moy"]={
+    eligible:sixmoyEligible,
+    score: currentSeasonStats.ppg*2.5 + (rotationSlot===1?12:rotationSlot===2?6:0) + ovr*0.4,
+  };
+  // MIP — biggest improvement in PPG. Need a real jump AND need to be
+  // posting solid numbers now, not just going 8→13.
+  const ppgJump=currentSeasonStats.ppg-(prevSeasonStats?.ppg||0);
+  const mipEligible=!!prevSeasonStats && ppgJump>=5 && currentSeasonStats.ppg>=17;
+  out.mip={
+    eligible:mipEligible,
+    score: ppgJump*5 + currentSeasonStats.ppg,
+  };
+  // DPOY — defense skills. Avg of perim + post defense, with rebounding
+  // and steals/blocks proxy via post defense.
+  const perimD=skills.perimDefense||50;
+  const postD=skills.postDefense||50;
+  const defAvg=(perimD+postD)/2;
+  const dpoyEligible=defAvg>=86;
+  out.dpoy={
+    eligible:dpoyEligible,
+    score: defAvg + (skills.rebounding||50)*0.3 + ovr*0.2,
+  };
+  return out;
+}
+
+// Default real-world winner gets a baseline score so the player has to
+// actually beat them. Roughly: average MVP-caliber score is ~150, average
+// 6MOY ~75, etc. We add a small random jitter so it's not deterministic.
+function defaultWinnerScore(awardId){
+  switch(awardId){
+    case "mvp":  return 150 + (Math.random()*10-5);
+    case "6moy": return 70  + (Math.random()*8-4);
+    case "mip":  return 50  + (Math.random()*8-4);
+    case "dpoy": return 95  + (Math.random()*6-3);
+    default: return 100;
+  }
+}
+
+// Pick winners for all 4 awards for a given season. Returns an array of
+// {awardId, winner:{name,team,isPlayer}}. If the player is eligible and
+// outscores the real-world default, they get it; otherwise the default wins.
+function pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear){
+  const playerEval=evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr);
+  return AWARD_TYPES.map(award=>{
+    const def=getDefaultAwardWinner(award.id, currentYear);
+    const pEval=playerEval[award.id];
+    if(pEval.eligible && pEval.score > defaultWinnerScore(award.id)){
+      return {awardId:award.id, winner:{name:player.name||"You", team:player.nbaTeam||"", isPlayer:true}};
+    }
+    return {awardId:award.id, winner:{...def, isPlayer:false}};
+  });
 }
 
 // ─── MUSIC ALBUM ───────────────────────────────────────────────────────────────
@@ -679,7 +914,7 @@ function rollAlbumOutcome(album){
 
 // Album cover renderer — used in the configurator preview AND on the status
 // card. Tiny self-contained component so the visual style is consistent.
-function AlbumCover({name, design, style, color="#FA5400", size=120}){
+function AlbumCover({name, design, style, color="#FA5400", emoji=null, size=120}){
   const safeName=(name||"UNTITLED").toUpperCase();
   const styleData=ALBUM_STYLES.find(s=>s.id===style);
   const designData=ALBUM_DESIGNS.find(d=>d.id===design);
@@ -713,6 +948,9 @@ function AlbumCover({name, design, style, color="#FA5400", size=120}){
       {overlay}
       {size>=70&&(
         <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:design==="portrait"?"flex-end":"center",alignItems:"center",padding:size*0.08,textAlign:"center"}}>
+          {emoji&&(
+            <div style={{fontSize:size*0.35,lineHeight:1,marginBottom:size*0.02,filter:design==="minimal"?"none":"drop-shadow(0 2px 8px rgba(0,0,0,0.4))"}}>{emoji}</div>
+          )}
           <div style={{fontSize:size*0.13,fontWeight:900,color:textColor,letterSpacing:1,lineHeight:1.1,textShadow:design==="minimal"?"none":"0 2px 8px rgba(0,0,0,0.6)",wordBreak:"break-word",fontFamily:"'Barlow Condensed',sans-serif"}}>
             {safeName}
           </div>
@@ -722,6 +960,10 @@ function AlbumCover({name, design, style, color="#FA5400", size=120}){
             </div>
           )}
         </div>
+      )}
+      {/* On the small variant (size<70), still show the emoji centered if present */}
+      {emoji&&size<70&&(
+        <div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:size*0.5,filter:"drop-shadow(0 1px 3px rgba(0,0,0,0.4))"}}>{emoji}</div>
       )}
     </div>
   );
@@ -4198,11 +4440,17 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   const madePlayoffs=season.w>=41;
   // What does "Play" actually do right now?
   const regSeasonDone=gp>=82;
-  const playoffsAvailable=regSeasonDone && madePlayoffs && !playoffsDone;
+  // Awards: shown ONCE per season, between regular season and playoffs.
+  // Stored on player.awardsShownYear (the season-start year) so we know
+  // whether to inject the awards ceremony next.
+  const seasonStartYear=NBA_START_YEAR+(nbaSeasons||[]).length;
+  const awardsPending=regSeasonDone && player?.awardsShownYear!==seasonStartYear;
+  const playoffsAvailable=regSeasonDone && !awardsPending && madePlayoffs && !playoffsDone;
   let playLabel="PLAY";
   let playSub="";
   if(gp===0) playSub=`Start the ${yearLabel} season (41 games)`;
   else if(gp<82) playSub=`Continue season — ${gp}/82 played`;
+  else if(awardsPending) {playLabel="AWARDS";playSub="Regular season over — see the awards";}
   else if(playoffsAvailable) {playLabel="PLAYOFFS";playSub="Season over — playoff run begins";}
   else if(playoffsDone) {playLabel="OFFSEASON";playSub="Season complete — start next year";}
   else if(regSeasonDone && !madePlayoffs) {playLabel="OFFSEASON";playSub="Missed the playoffs — start next year";}
@@ -4253,7 +4501,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
       {/* Menu options — PLAY hero card, then 5 menu rows */}
       <div style={{display:"flex",flexDirection:"column",gap:8}}>
         {/* PLAY — primary action, bigger and brighter */}
-        <button onClick={()=>go("nbaPlay")} style={{...btnS,padding:"15px 18px",textAlign:"left",position:"relative",fontSize:14,boxShadow:"0 2px 8px rgba(232,135,58,0.3)"}}>
+        <button onClick={()=>go(awardsPending?"nbaAwards":"nbaPlay")} style={{...btnS,padding:"15px 18px",textAlign:"left",position:"relative",fontSize:14,boxShadow:"0 2px 8px rgba(232,135,58,0.3)"}}>
           <div style={{fontSize:18,fontWeight:900,letterSpacing:2}}>▶ {playLabel}</div>
           {playSub&&<div style={{fontSize:11,fontWeight:600,color:"rgba(0,0,0,0.65)",marginTop:3,letterSpacing:0.5}}>{playSub}</div>}
         </button>
@@ -4814,7 +5062,7 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
             return(
               <button onClick={()=>go("nbaRestaurant")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(0,220,100,0.06)",border:`1.5px solid ${r.color||GR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>{isOwn?"🍔":r.icon}</div>
+                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>{isOwn?(r.logoEmoji||"🍔"):r.icon}</div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:9,color:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>✓ {isOwn?"YOUR CHAIN":"INVESTED"}</div>
                     <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isOwn?r.name:r.chainName}</div>
@@ -4858,7 +5106,7 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
             return(
               <button onClick={()=>go("nbaAlbum")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(168,85,247,0.06)",border:`1.5px solid ${a.color||OR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <AlbumCover name={a.name} design={a.design} style={a.style} color={a.color||OR} size={46}/>
+                  <AlbumCover name={a.name} design={a.design} style={a.style} color={a.color||OR} emoji={a.emoji} size={46}/>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:9,color:a.status==="flop"?RE:a.status==="recording"?GO:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
                       {a.status==="recording"?"🎙️ IN STUDIO":
@@ -5208,11 +5456,37 @@ function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBac
   const [name,setName]=useState("");
   const [color,setColor]=useState("#fb923c");
   const [locations,setLocations]=useState(1);
+  const [foodType,setFoodType]=useState("burgers");
+  // logoEmoji holds the single emoji that anchors the logo. Default tracks the
+  // selected food type's primary icon so changing type auto-updates the logo,
+  // but the user can override.
+  const [logoEmoji,setLogoEmoji]=useState("🍔");
+  // logoEmojiOverridden — true once the user has manually picked an emoji, so
+  // we stop auto-syncing it to food type changes. Otherwise picking "Pizza"
+  // after manually selecting "🥑" would clobber their choice.
+  const [logoEmojiOverridden,setLogoEmojiOverridden]=useState(false);
   const cost=ownChainCost(locations);
   const annualIncome=ownChainAnnualIncome(locations);
   const canAfford=(money||0)>=cost;
   const ready=name.trim().length>=2&&canAfford;
   const COLOR_OPTIONS=["#fb923c","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#14b8a6","#000000"];
+
+  const pickFoodType=(id)=>{
+    setFoodType(id);
+    if(!logoEmojiOverridden){
+      const t=RESTAURANT_FOOD_TYPE_BY_ID[id];
+      if(t) setLogoEmoji(t.icon);
+    }
+  };
+  const pickLogoEmoji=(e)=>{
+    setLogoEmoji(e);
+    setLogoEmojiOverridden(true);
+  };
+
+  // Build the emoji palette from food type emojis + generic. Filter duplicates.
+  const foodEmojis=RESTAURANT_FOOD_TYPE_BY_ID[foodType]?.emojis||[];
+  const emojiPalette=[...new Set([...foodEmojis, ...RESTAURANT_GENERIC_EMOJIS])];
+
   const launch=()=>{
     if(!ready) return;
     setMoney(m=>(m||0)-cost);
@@ -5220,6 +5494,7 @@ function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBac
       const purchases=ensurePurchases(p);
       return {...p, purchases:{...purchases, restaurant:{
         type:"own", name:name.trim(), color, locations,
+        foodType, logoEmoji,
         yearStarted:currentYear, failures:0,
         // Track the cumulative invested so the status panel can show ROI
         totalInvested:cost,
@@ -5232,10 +5507,43 @@ function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBac
       <button onClick={onBack} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Back</button>
       <div style={{fontSize:10,letterSpacing:3,color:OR,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Configure Your Chain</div>
 
+      {/* Logo preview — emoji + name on color background */}
+      <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",marginBottom:14,background:"rgba(0,0,0,0.3)",borderRadius:10}}>
+        <div style={{width:64,height:64,borderRadius:14,background:`linear-gradient(135deg, ${color}, ${color}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,flexShrink:0,boxShadow:`0 4px 18px ${color}55`}}>{logoEmoji}</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:10,color:"#888",letterSpacing:2,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Logo Preview</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name.trim()||"Your Chain Name"}</div>
+          <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{RESTAURANT_FOOD_TYPE_BY_ID[foodType]?.name||"—"}</div>
+        </div>
+      </div>
+
       {/* Name input */}
       <div style={{marginBottom:12}}>
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Restaurant Name</div>
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mike's Wings" maxLength={28} style={{width:"100%",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1.5px solid ${name.trim().length>=2?OR+"66":"rgba(255,255,255,0.12)"}`,borderRadius:8,color:"#fff",fontSize:14,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}/>
+      </div>
+
+      {/* Food type picker */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Food Type</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:5}}>
+          {RESTAURANT_FOOD_TYPES.map(t=>(
+            <button key={t.id} onClick={()=>pickFoodType(t.id)} style={{padding:"8px 4px",background:foodType===t.id?`linear-gradient(135deg, ${color} 0%, ${color}99 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${foodType===t.id?color+"99":"rgba(255,255,255,0.08)"}`,borderRadius:7,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{fontSize:20,marginBottom:1}}>{t.icon}</div>
+              <div style={{fontSize:10,fontWeight:700,letterSpacing:0.5}}>{t.name}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Logo emoji picker */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Logo Emoji</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+          {emojiPalette.map((e,i)=>(
+            <button key={e+i} onClick={()=>pickLogoEmoji(e)} style={{width:36,height:36,fontSize:22,background:logoEmoji===e?`linear-gradient(135deg, ${color} 0%, ${color}77 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${logoEmoji===e?color+"99":"rgba(255,255,255,0.08)"}`,borderRadius:8,cursor:"pointer",padding:0,fontFamily:"sans-serif"}}>{e}</button>
+          ))}
+        </div>
       </div>
 
       {/* Color picker */}
@@ -5245,15 +5553,6 @@ function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBac
           {COLOR_OPTIONS.map(c=>(
             <button key={c} onClick={()=>setColor(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Color ${c}`}/>
           ))}
-        </div>
-      </div>
-
-      {/* Logo preview */}
-      <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",marginBottom:14,background:"rgba(0,0,0,0.3)",borderRadius:10}}>
-        <div style={{width:56,height:56,borderRadius:12,background:`linear-gradient(135deg, ${color}, ${color}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 4px 18px ${color}55`}}>🍔</div>
-        <div style={{flex:1,minWidth:0}}>
-          <div style={{fontSize:10,color:"#888",letterSpacing:2,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Preview</div>
-          <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name.trim()||"Your Chain Name"}</div>
         </div>
       </div>
 
@@ -5383,7 +5682,7 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
       {/* Restaurant header card with logo + name */}
       <div style={{background:"rgba(255,255,255,0.04)",border:`1.5px solid ${restaurant.color}55`,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
-          <div style={{width:56,height:56,borderRadius:12,background:`linear-gradient(135deg, ${restaurant.color}, ${restaurant.color}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 4px 18px ${restaurant.color}55`}}>🍔</div>
+          <div style={{width:56,height:56,borderRadius:12,background:`linear-gradient(135deg, ${restaurant.color}, ${restaurant.color}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:32,flexShrink:0,boxShadow:`0 4px 18px ${restaurant.color}55`}}>{restaurant.logoEmoji||"🍔"}</div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Your Chain · Year {yearsRunning+1}</div>
             <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{restaurant.name}</div>
@@ -5466,6 +5765,7 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
   const [design,setDesign]=useState("gradient");
   const [style,setStyle]=useState("hiphop");
   const [color,setColor]=useState("#FA5400"); // accent color used by cover art
+  const [emoji,setEmoji]=useState(null); // optional cover emoji — overlays the artwork
   const [producers,setProducers]=useState([]); // ids
   const [features,setFeatures]=useState([]);
   const cost=albumTotalCost(producers,features);
@@ -5487,6 +5787,9 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
     });
   };
   const COLOR_OPTIONS=["#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#14b8a6"];
+  // Cover emoji palette — leans into the music-and-bravado vibe across all
+  // styles. The "none" tile lets the user turn the emoji off entirely.
+  const COVER_EMOJIS=["🎤","🎧","💿","📀","🎸","🥁","🎹","🎷","🎺","🔥","👑","💎","⭐","💯","🌹","🦅","🐉","🤘","✨","💀","🌃","💰","🚀","⚡"];
 
   const dropAlbum=()=>{
     if(!ready) return;
@@ -5494,7 +5797,7 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
     setPlayer(p=>{
       const purchases=ensurePurchases(p);
       return {...p, purchases:{...purchases, album:{
-        name:name.trim(), design, style, color,
+        name:name.trim(), design, style, color, emoji,
         producers:[...producers], features:[...features],
         cost, yearStarted:currentYear,
         status:"recording", payout:0,
@@ -5507,7 +5810,7 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
     <>
       {/* Live cover preview */}
       <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",marginBottom:14,background:"rgba(0,0,0,0.3)",borderRadius:10}}>
-        <AlbumCover name={name} design={design} style={style} color={color} size={96}/>
+        <AlbumCover name={name} design={design} style={style} color={color} emoji={emoji} size={96}/>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:10,color:"#888",letterSpacing:2,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Live Preview</div>
           <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name.trim()||"Untitled"}</div>
@@ -5542,6 +5845,20 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
             <button key={d.id} onClick={()=>setDesign(d.id)} style={{padding:"7px 4px",background:design===d.id?OR:"rgba(255,255,255,0.06)",border:"none",borderRadius:6,color:design===d.id?"#fff":"#aaa",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:0.5}}>
               {d.name}
             </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Cover emoji picker — optional, overlays on the cover art above the
+          album title. Tapping the currently-selected emoji deselects it. */}
+      <div style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase"}}>Cover Emoji <span style={{color:"#666",fontWeight:600,marginLeft:4}}>optional</span></div>
+          {emoji&&<button onClick={()=>setEmoji(null)} style={{padding:"3px 8px",background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:4,color:"#888",cursor:"pointer",fontSize:9,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>CLEAR</button>}
+        </div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+          {COVER_EMOJIS.map(e=>(
+            <button key={e} onClick={()=>setEmoji(emoji===e?null:e)} style={{width:36,height:36,fontSize:22,background:emoji===e?`linear-gradient(135deg, ${color} 0%, ${color}77 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${emoji===e?color+"99":"rgba(255,255,255,0.08)"}`,borderRadius:8,cursor:"pointer",padding:0,fontFamily:"sans-serif"}}>{e}</button>
           ))}
         </div>
       </div>
@@ -5660,7 +5977,7 @@ function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, toast}){
     <>
       {/* Cover + headline status */}
       <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:12,background:"rgba(255,255,255,0.04)",border:`1.5px solid ${album.color||OR}55`,borderRadius:12}}>
-        <AlbumCover name={album.name} design={album.design} style={album.style} color={album.color||OR} size={100}/>
+        <AlbumCover name={album.name} design={album.design} style={album.style} color={album.color||OR} emoji={album.emoji} size={100}/>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>
             {album.status==="recording"?"In Studio":
@@ -5724,19 +6041,29 @@ function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, toast}){
 // Compact card sitting on the Agent screen between the player contract and
 // the trade/extension request panel. Shows current brand + bonus + signature
 // shoe (if any), plus a "BROWSE OFFERS" link that opens the picker.
-function ShoeContractCard({signedShoeBrand, shoeSignature, ovr, onBrowse}){
-  // Highlight the highest brand the player currently qualifies for so they
-  // know there's an upgrade waiting. If they don't have a deal yet, prompt
-  // them to sign one.
-  const bestBrand=PRO_SHOE_BRANDS.find(b=>ovr>=b.minOVR);
+function ShoeContractCard({signedShoeBrand, shoeSignature, shoeContract, ovr, currentYear, onBrowse, onDesignSignature}){
   const hasDeal=!!signedShoeBrand;
   const currentColor=signedShoeBrand?.color||"#888";
+  const remainingYears=shoeContract?shoeDealRemainingYears(shoeContract,currentYear):0;
+  const locked=remainingYears>0;
+  // Does the player CURRENTLY qualify for a signature shoe with their existing
+  // brand but doesn't already have one for this brand? This is the trigger
+  // for the standalone "Design Signature Shoe" prompt — the user grew into
+  // the threshold mid-deal and doesn't need to re-sign to claim it.
+  const currentBrandData=signedShoeBrand?PRO_SHOE_BRAND_BY_ID[signedShoeBrand.id]:null;
+  const qualifiesForCurrentSig=currentBrandData && ovr>=currentBrandData.sigOVR;
+  const hasSigForCurrentBrand=shoeSignature && shoeSignature.brandId===signedShoeBrand?.id;
+  const canDesignNewSignature=qualifiesForCurrentSig && !hasSigForCurrentBrand;
+  // Tease an upgrade brand only when no lock OR a clearly better brand opens
+  const bestBrand=PRO_SHOE_BRANDS.find(b=>ovr>=b.minOVR);
+  const showUpgradeTease=!locked&&bestBrand && (!hasDeal || (PRO_SHOE_BRAND_BY_ID[signedShoeBrand?.id]?.baseBonus||0) < bestBrand.baseBonus);
+
   return(
     <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${hasDeal?currentColor+"55":"rgba(255,255,255,0.10)"}`,borderRadius:12,padding:"12px 14px",marginBottom:14}}>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase"}}>👟 Shoe Deal</div>
-        <button onClick={onBrowse} style={{padding:"4px 10px",background:"transparent",border:"1px solid rgba(255,255,255,0.15)",borderRadius:5,color:"#aaa",cursor:"pointer",fontSize:10,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
-          BROWSE OFFERS
+        <button onClick={onBrowse} disabled={locked} style={{padding:"4px 10px",background:"transparent",border:`1px solid rgba(255,255,255,${locked?0.06:0.15})`,borderRadius:5,color:locked?"#555":"#aaa",cursor:locked?"not-allowed":"pointer",fontSize:10,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          {locked?`LOCKED · ${remainingYears}YR LEFT`:"BROWSE OFFERS"}
         </button>
       </div>
 
@@ -5747,21 +6074,25 @@ function ShoeContractCard({signedShoeBrand, shoeSignature, ovr, onBrowse}){
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{signedShoeBrand.name}</div>
               <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
-                {signedShoeBrand.bonus>0?`${fmtMoney(signedShoeBrand.bonus)} signing bonus`:"No signing bonus"}
-                {signedShoeBrand.skillBonus>0?` · +${signedShoeBrand.skillBonus} SP`:""}
+                {locked?`${remainingYears} yr${remainingYears===1?"":"s"} remaining`:"Free to renegotiate"}
+                {signedShoeBrand.bonus>0?` · ${fmtMoney(signedShoeBrand.bonus)} signing bonus`:""}
               </div>
             </div>
           </div>
 
           {/* Signature shoe preview if they have one */}
           {shoeSignature&&(
-            <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginTop:8,background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:8}}>
-              <div style={{width:36,height:36,borderRadius:8,background:`linear-gradient(135deg, ${shoeSignature.color}, ${shoeSignature.color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>👟</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:9,letterSpacing:1.5,color:GO,fontWeight:700,marginBottom:1}}>★ SIGNATURE SHOE</div>
-                <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shoeSignature.name}</div>
-              </div>
-            </div>
+            <ShoeSignaturePreview shoeSignature={shoeSignature}/>
+          )}
+
+          {/* Eligible to design a signature shoe RIGHT NOW (grew into the OVR
+              while under contract). Standalone button — doesn't require a
+              fresh signing. */}
+          {canDesignNewSignature&&(
+            <button onClick={onDesignSignature} style={{display:"block",width:"100%",marginTop:8,padding:"10px 12px",background:`linear-gradient(135deg, ${GO}, #b08800)`,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"center"}}>
+              <div style={{fontSize:9,letterSpacing:2,fontWeight:700,marginBottom:1}}>★ SIGNATURE SHOE UNLOCKED</div>
+              <div style={{fontSize:13,fontWeight:900,letterSpacing:1}}>DESIGN YOUR {signedShoeBrand.name.toUpperCase()} SIGNATURE →</div>
+            </button>
           )}
         </>
       ):(
@@ -5770,8 +6101,8 @@ function ShoeContractCard({signedShoeBrand, shoeSignature, ovr, onBrowse}){
         </div>
       )}
 
-      {/* Tease the highest brand the player qualifies for if there's room to upgrade */}
-      {bestBrand && (!hasDeal || (PRO_SHOE_BRAND_BY_ID[signedShoeBrand?.id]?.baseBonus||0) < bestBrand.baseBonus) && (
+      {/* Upgrade tease (only when not locked) */}
+      {showUpgradeTease && (
         <div style={{fontSize:10,color:"#888",marginTop:8,paddingTop:8,borderTop:"1px dashed rgba(255,255,255,0.08)",lineHeight:1.4}}>
           💡 {bestBrand.name} is interested — your OVR ({ovr}) qualifies you for their tier.
         </div>
@@ -5780,11 +6111,39 @@ function ShoeContractCard({signedShoeBrand, shoeSignature, ovr, onBrowse}){
   );
 }
 
+// Renders a signature shoe preview row — used by ShoeContractCard. The icon
+// reflects the silhouette via a per-design emoji set so a high-top doesn't
+// render as a low-top runner shoe.
+function ShoeSignaturePreview({shoeSignature}){
+  const icon=SHOE_DESIGN_ICONS[shoeSignature.design]||"👟";
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginTop:8,background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:8}}>
+      <div style={{width:36,height:36,borderRadius:8,background:`linear-gradient(135deg, ${shoeSignature.color}, ${shoeSignature.color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{icon}</div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:9,letterSpacing:1.5,color:GO,fontWeight:700,marginBottom:1}}>★ SIGNATURE SHOE</div>
+        <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shoeSignature.name}</div>
+      </div>
+    </div>
+  );
+}
+
+// Maps silhouette ids to emojis — used by the preview AND the designer screen
+// so the icon visually reflects the design type (per user feedback). The
+// emoji set is intentionally varied so each silhouette looks distinct.
+const SHOE_DESIGN_ICONS = {
+  lowtop:     "👟", // running/training shoe (low cut)
+  midtop:     "🥾", // boot-ish for mid-cut
+  hightop:    "🥿", // ankle-high
+  performance:"⚡", // tech-forward / lightning bolt for "performance"
+};
+
 // ─── SHOE DEAL PICKER ──────────────────────────────────────────────────────────
 // Modal listing every brand and their current offer. Brands you don't qualify
 // for show their OVR requirement instead. Tapping a qualifying brand signs you.
-function ShoeDealPicker({ovr, currentBrandId, onClose, onSign}){
+function ShoeDealPicker({ovr, currentBrandId, shoeContract, currentYear, onClose, onSign}){
   const [picked,setPicked]=useState(null);
+  const remainingYears=shoeContract?shoeDealRemainingYears(shoeContract,currentYear):0;
+  const locked=remainingYears>0;
   return(
     <div onClick={onClose} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:14}}>
       <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:440,width:"100%",maxHeight:"88vh",overflowY:"auto",border:`1px solid ${OR}55`}}>
@@ -5794,18 +6153,26 @@ function ShoeDealPicker({ovr, currentBrandId, onClose, onSign}){
           <div style={{fontSize:11,color:"#888",marginTop:4}}>Your OVR: <span style={{color:OR,fontWeight:900}}>{ovr}</span></div>
         </div>
 
+        {locked&&(
+          <div style={{background:"rgba(232,135,58,0.08)",border:`1px solid ${OR}44`,borderRadius:8,padding:"10px 12px",marginBottom:10,fontSize:11,color:"#ddd",lineHeight:1.5}}>
+            🔒 You're locked into your current deal for <span style={{color:OR,fontWeight:900}}>{remainingYears} more year{remainingYears===1?"":"s"}</span>. Browse for now — you can re-sign once the deal ends.
+          </div>
+        )}
+
         {PRO_SHOE_BRANDS.map(brand=>{
           const offer=buildShoeOffer(brand,ovr);
           const qualifies=!!offer;
           const isCurrent=currentBrandId===brand.id;
           const isSelected=picked===brand.id;
+          // While locked, brands can still be browsed but none can be signed.
+          const canPick=qualifies && !isCurrent && !locked;
           return(
-            <button key={brand.id} onClick={()=>{if(qualifies&&!isCurrent) setPicked(brand.id);}} disabled={!qualifies||isCurrent} style={{
+            <button key={brand.id} onClick={()=>{if(canPick) setPicked(brand.id);}} disabled={!canPick} style={{
               display:"block",width:"100%",textAlign:"left",padding:"10px 12px",marginBottom:6,
               background:isCurrent?"rgba(0,220,100,0.10)":isSelected?`linear-gradient(135deg, ${brand.color}33 0%, rgba(0,0,0,0.4) 100%)`:qualifies?"rgba(255,255,255,0.05)":"rgba(255,255,255,0.02)",
               border:`1.5px solid ${isCurrent?GR+"55":isSelected?brand.color:qualifies?brand.color+"33":"rgba(255,255,255,0.06)"}`,
-              borderRadius:8,color:"#fff",cursor:qualifies&&!isCurrent?"pointer":"not-allowed",
-              fontFamily:"'Barlow Condensed',sans-serif",opacity:qualifies?1:0.55
+              borderRadius:8,color:"#fff",cursor:canPick?"pointer":"not-allowed",
+              fontFamily:"'Barlow Condensed',sans-serif",opacity:qualifies?(locked&&!isCurrent?0.7:1):0.55
             }}>
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
                 <div style={{width:36,height:36,borderRadius:"50%",background:`linear-gradient(135deg, ${brand.color}, ${brand.color}88)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>👟</div>
@@ -5815,7 +6182,7 @@ function ShoeDealPicker({ovr, currentBrandId, onClose, onSign}){
                     {offer?.qualifiesForSignature&&<span style={{fontSize:9,color:GO,marginLeft:6,letterSpacing:1}}>★ SIGNATURE</span>}
                   </div>
                   <div style={{fontSize:10,color:"#aaa",marginTop:1}}>
-                    {qualifies?`${fmtMoney(offer.bonus)} bonus · +${offer.skillBonus} SP`:`Requires OVR ${brand.minOVR}+`}
+                    {qualifies?`${fmtMoney(offer.bonus)} signing bonus`:`Requires OVR ${brand.minOVR}+`}
                   </div>
                 </div>
                 {qualifies&&!offer.qualifiesForSignature&&(
@@ -5903,10 +6270,11 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
         <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{brandName} wants to make this happen{previousSig?" — refresh your line":""}</div>
       </div>
 
-      {/* Live preview — silhouette + name + color callout */}
+      {/* Live preview — silhouette + name + color callout. Icon adapts to
+          the silhouette so a high-top doesn't look identical to a low-top. */}
       <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:14,background:`linear-gradient(135deg, ${color}22 0%, rgba(0,0,0,0.5) 100%)`,border:`1.5px solid ${color}55`,borderRadius:12}}>
-        <div style={{width:90,height:90,borderRadius:14,background:`linear-gradient(135deg, ${color}, ${color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:48,flexShrink:0,boxShadow:`0 4px 22px ${color}66`}}>
-          👟
+        <div style={{width:90,height:90,borderRadius:14,background:`linear-gradient(135deg, ${color}, ${color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:52,flexShrink:0,boxShadow:`0 4px 22px ${color}66`}}>
+          {SHOE_DESIGN_ICONS[design]||"👟"}
         </div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:700,marginBottom:3}}>{brandName.toUpperCase()} PRESENTS</div>
@@ -5926,9 +6294,12 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Silhouette</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
           {SILHOUETTES.map(s=>(
-            <button key={s.id} onClick={()=>setDesign(s.id)} style={{padding:"10px 8px",textAlign:"left",background:design===s.id?`linear-gradient(135deg, ${color}33 0%, ${color}11 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${design===s.id?color+"88":"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-              <div style={{fontSize:13,fontWeight:900,letterSpacing:0.5}}>{s.name}</div>
-              <div style={{fontSize:10,color:"#888",marginTop:2}}>{s.description}</div>
+            <button key={s.id} onClick={()=>setDesign(s.id)} style={{padding:"10px 12px",textAlign:"left",background:design===s.id?`linear-gradient(135deg, ${color}33 0%, ${color}11 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${design===s.id?color+"88":"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",display:"flex",alignItems:"center",gap:10}}>
+              <div style={{fontSize:24,flexShrink:0}}>{SHOE_DESIGN_ICONS[s.id]||"👟"}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:900,letterSpacing:0.5}}>{s.name}</div>
+                <div style={{fontSize:10,color:"#888",marginTop:2}}>{s.description}</div>
+              </div>
             </button>
           ))}
         </div>
@@ -6248,41 +6619,67 @@ function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam
       )}
 
       {/* Shoe contract card — current brand, bonus, signature shoe status,
-          and a button to look at new offers. The card pulls from signedShoeBrand
-          (App-level state) since it's also set during the draft. Player.shoeSignature
-          holds the optional signature shoe design (name/color/template). */}
+          and a button to look at new offers. shoeContract carries the
+          signedYear so we can enforce 4-year lockouts; player.shoeSignature
+          holds the optional signature shoe design (name/color/silhouette).
+          The "design signature shoe" path fires standalone when the player
+          grows into the OVR threshold mid-deal. */}
       <ShoeContractCard
         signedShoeBrand={signedShoeBrand}
         shoeSignature={player?.shoeSignature}
+        shoeContract={player?.shoeContract}
         ovr={ovr}
+        currentYear={currentYear}
         onBrowse={()=>setShowShoePicker(true)}
+        onDesignSignature={()=>{
+          // Standalone signature flow — no signing, just stash pending context
+          // matching the current brand so the designer screen knows whose
+          // shoe to render.
+          const brand=PRO_SHOE_BRAND_BY_ID[signedShoeBrand.id];
+          if(!brand) return;
+          setPlayer(p=>({...p, shoeSignaturePending:{
+            brandId:brand.id, brandName:brand.name, brandColor:brand.color,
+          }}));
+          go("shoeDesigner");
+        }}
       />
 
       {showShoePicker&&(
         <ShoeDealPicker
           ovr={ovr}
           currentBrandId={signedShoeBrand?.id}
+          shoeContract={player?.shoeContract}
+          currentYear={currentYear}
           onClose={()=>setShowShoePicker(false)}
           onSign={(offer)=>{
             const brand=PRO_SHOE_BRAND_BY_ID[offer.brandId];
             // Update the App-level brand handle (so the rest of the app sees
-            // the new brand) and pay the bonus + skill point bump.
+            // the new brand) and pay the bonus.
             setSignedShoeBrand&&setSignedShoeBrand({
               id:brand.id, name:brand.name, color:brand.color,
-              bonus:offer.bonus, skillBonus:offer.skillBonus,
+              bonus:offer.bonus, skillBonus:0, // SP no longer awarded on resignings
               maxPick:99, subtitle:"Pro deal",
             });
             setMoney&&setMoney(m=>(m||0)+offer.bonus);
-            // Skill bonus also goes to the player on every signing.
-            setSkillPoints&&setSkillPoints(p=>(p||0)+offer.skillBonus);
+            // Skill bonus only on the player's VERY FIRST shoe deal across
+            // their whole career. After that, only money — no more SP farming
+            // by serially signing with different brands.
+            if(!player?.firstShoeDealClaimed){
+              setSkillPoints&&setSkillPoints(p=>(p||0)+5);
+              setPlayer(p=>({...p, firstShoeDealClaimed:true}));
+            }
+            // Stamp the shoe contract with the signing year so the 4-year
+            // lockout starts ticking. Also clears any prior pending designer
+            // context just in case.
+            setPlayer(p=>({...p,
+              shoeContract:{brandId:brand.id, signedYear:currentYear, bonus:offer.bonus},
+              firstShoeDealClaimed:true,
+            }));
             setShowShoePicker(false);
-            // Signature shoe creator fires when the OVR qualifies AND either:
-            //   - they're switching to a new brand (refresh on brand change)
-            //   - they already had a signature with this brand and the OVR
-            //     threshold is hit (refresh on tier-up)
-            // For simplicity: any qualifying signing fires the designer.
+            // Signature shoe creator fires when the OVR qualifies. The designer
+            // can be entered now OR later via the standalone button if they
+            // skip. Each qualifying signing creates a NEW signature slot.
             if(offer.qualifiesForSignature){
-              // Stash the pending brand context for the designer screen to read
               setPlayer(p=>({...p, shoeSignaturePending:{
                 brandId:brand.id, brandName:brand.name, brandColor:brand.color,
               }}));
@@ -6527,6 +6924,124 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
   );
 }
 
+// ─── SEASON AWARDS SCREEN ──────────────────────────────────────────────────────
+// Ceremonial reveal of MVP, 6MOY, MIP, DPOY between regular season and
+// playoffs. Each award reveals on tap with a brief ceremony. After all 4 are
+// shown, a CONTINUE button advances to playoffs or offseason as appropriate.
+// Player wins stored to player.awards = [{year, type}, ...].
+function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGamesPlayed, nbaTeam, playoffsDone, go}){
+  const seasonsPlayed=nbaSeasons.length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed;
+  // Stats for this regular season — current in-progress totals.
+  const gp=nbaSeasonTotals.games||0;
+  const currentSeasonStats={
+    ppg:gp>0?nbaSeasonTotals.pts/gp:0,
+    rpg:gp>0?nbaSeasonTotals.reb/gp:0,
+    apg:gp>0?nbaSeasonTotals.ast/gp:0,
+  };
+  // Previous season for MIP comparison
+  const prevSeasonStats=nbaSeasons.length>0?nbaSeasons[nbaSeasons.length-1]:null;
+  // Player's rotation slot — 0 = starter, 1 = 6th man, 2 = backup, etc.
+  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const seasonData=getNbaSeasonData(currentYear);
+  const rotationSlot=nbaTeam?calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons):0;
+  // Generate winners ONCE per mount — memoize via useState so it doesn't
+  // re-randomize on every render. Use a lazy initializer.
+  const [results]=useState(()=>pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear));
+  // Reveal index — 0 means none revealed yet, 4 means all revealed.
+  const [revealedIdx, setRevealedIdx]=useState(0);
+  // Whether we've finalized the saving of awards (avoid double-save on re-renders)
+  const savedRef=useRef(false);
+  // Once all 4 are revealed, persist player wins + stamp this year as awards-shown.
+  useEffect(()=>{
+    if(revealedIdx<results.length||savedRef.current) return;
+    savedRef.current=true;
+    const wins=results.filter(r=>r.winner.isPlayer).map(r=>({year:currentYear, type:r.awardId}));
+    setPlayer(p=>({
+      ...p,
+      awards:[...((p?.awards)||[]), ...wins],
+      awardsShownYear:currentYear,
+    }));
+  },[revealedIdx, results, setPlayer, currentYear]);
+
+  const revealNext=()=>{
+    setRevealedIdx(i=>Math.min(results.length, i+1));
+  };
+  const continueGame=()=>{
+    // Determine where to go based on playoff state
+    const season=getNbaSeasonData(currentYear);
+    const madePlayoffs=(season?.teams||[]).find(t=>t.k===nbaTeam)?.w>=41;
+    if(madePlayoffs && !playoffsDone){
+      go("nbaPlay"); // playoffs flow continues from Play screen
+    } else {
+      go("leagueHub"); // missed playoffs — back to hub for offseason
+    }
+  };
+  // Current award being revealed (the next one to flip)
+  const currentReveal=revealedIdx<results.length?results[revealedIdx]:null;
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:4,textTransform:"uppercase",fontWeight:700}}>🏆 End of Regular Season</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SEASON AWARDS</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{formatSeasonLabel(currentYear)} · {revealedIdx}/{results.length} revealed</div>
+      </div>
+
+      {/* Revealed awards stack — newest at the bottom */}
+      {results.slice(0,revealedIdx).map((r,i)=>{
+        const award=AWARD_TYPE_BY_ID[r.awardId];
+        const isPlayer=r.winner.isPlayer;
+        return(
+          <div key={r.awardId} style={{
+            background:isPlayer?`linear-gradient(135deg, ${award.color}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",
+            border:`1.5px solid ${isPlayer?award.color+"99":award.color+"33"}`,
+            borderRadius:12,padding:"12px 14px",marginBottom:8,
+            animation:"awardReveal 0.5s ease-out"
+          }}>
+            <div style={{display:"flex",alignItems:"center",gap:12}}>
+              <div style={{fontSize:34,width:50,textAlign:"center",flexShrink:0,filter:`drop-shadow(0 2px 6px ${award.color}88)`}}>{award.icon}</div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:9,letterSpacing:2,color:award.color,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{award.short}</div>
+                <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.winner.name}</div>
+                <div style={{fontSize:10,color:"#aaa",marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.winner.team}</div>
+              </div>
+              {isPlayer&&(
+                <div style={{fontSize:10,color:award.color,fontWeight:900,letterSpacing:1.5,padding:"4px 8px",background:`${award.color}22`,borderRadius:5,whiteSpace:"nowrap"}}>★ YOU</div>
+              )}
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Reveal-next or continue button */}
+      <div style={{marginTop:14}}>
+        {currentReveal?(
+          <button onClick={revealNext} style={{...btnS,width:"100%",padding:"16px 18px",fontSize:14,letterSpacing:2}}>
+            🎬 REVEAL {AWARD_TYPE_BY_ID[currentReveal.awardId].short}
+          </button>
+        ):(
+          <>
+            {results.some(r=>r.winner.isPlayer)&&(
+              <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.3) 100%)`,border:`1.5px solid ${GO}88`,borderRadius:12,padding:"12px 14px",marginBottom:10,textAlign:"center"}}>
+                <div style={{fontSize:28,marginBottom:4}}>👑</div>
+                <div style={{fontSize:13,fontWeight:900,color:GO,marginBottom:3,letterSpacing:1}}>
+                  YOU WON {results.filter(r=>r.winner.isPlayer).length} AWARD{results.filter(r=>r.winner.isPlayer).length===1?"":"S"}
+                </div>
+                <div style={{fontSize:11,color:"#ddd",lineHeight:1.5}}>Accolades saved to your career stats.</div>
+              </div>
+            )}
+            <button onClick={continueGame} style={{...btnS,width:"100%",padding:"14px 18px",fontSize:14,letterSpacing:2}}>
+              CONTINUE →
+            </button>
+          </>
+        )}
+      </div>
+
+      <style>{`@keyframes awardReveal{0%{opacity:0;transform:translateY(-10px) scale(0.95)}60%{transform:translateY(2px) scale(1.02)}100%{opacity:1;transform:translateY(0) scale(1)}}`}</style>
+    </div>
+  );
+}
+
 // ─── NBA STATS ─────────────────────────────────────────────────────────────────
 function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPlayed, nbaTeam, go}){
   const college=allYears||[];
@@ -6554,6 +7069,27 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
           {player.name||"You"} · {player.position||"--"} · Age {age}
         </div>
       </div>
+
+      {/* Accolades section — listed once at the top so the player can see
+          career totals at a glance. Per-season chips appear on the NBA table
+          rows below. */}
+      {((player?.awards)||[]).length>0&&(
+        <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {AWARD_TYPES.map(type=>{
+              const count=(player.awards||[]).filter(a=>a.type===type.id).length;
+              if(count===0) return null;
+              return(
+                <div key={type.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${type.color}22`,border:`1px solid ${type.color}66`,borderRadius:6}}>
+                  <span style={{fontSize:14}}>{type.icon}</span>
+                  <span style={{fontSize:10,color:type.color,fontWeight:900,letterSpacing:1}}>{count}× {type.short}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* College / Overseas section */}
       <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
@@ -6596,9 +7132,20 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
               const td=s.team?NBA_TEAM_DATA[s.team]:null;
               const abbr=td?.abbr || (s.team?s.team.split(" ").slice(-1)[0].slice(0,3).toUpperCase():"—");
               const teamColor=td?.p||"#888";
+              // Index → season-start year. allNba is [past seasons, optional live].
+              // Past seasons map directly to NBA_START_YEAR + i. Live season
+              // hasn't been awarded yet, so no chips for it.
+              const seasonYear=i<nbaSeasons.length?NBA_START_YEAR+i:null;
+              const seasonAwards=seasonYear!==null?(player?.awards||[]).filter(a=>a.year===seasonYear):[];
               return(
                 <div key={i} style={{display:"grid",gridTemplateColumns:"0.9fr 0.55fr 0.35fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<allNba.length-1?"1px solid rgba(255,255,255,0.04)":"none",alignItems:"center"}}>
-                  <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{s.year}</div>
+                  <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center",gap:4}}>
+                    {s.year}
+                    {seasonAwards.map(a=>{
+                      const t=AWARD_TYPE_BY_ID[a.type];
+                      return t?<span key={a.type} title={t.short} style={{fontSize:11,filter:`drop-shadow(0 1px 2px ${t.color}77)`}}>{t.icon}</span>:null;
+                    })}
+                  </div>
                   <div style={{display:"flex",alignItems:"center",gap:5,minWidth:0}}>
                     <div style={{width:7,height:7,borderRadius:"50%",background:teamColor,flexShrink:0}}/>
                     <span style={{fontSize:11,color:"#bbb",fontWeight:700,letterSpacing:0.5}}>{abbr}</span>
@@ -7316,6 +7863,18 @@ export default function App(){
       const needsFA=!player.contract||contractRemainingYears(player.contract,yr)===0;
       if(needsFA){
         setScreen("freeAgency");
+        return;
+      }
+    }
+    // Awards gate: if heading to nbaPlay AND the regular season is complete
+    // AND awards haven't been shown for this season yet, divert to the
+    // awards ceremony first. Player then continues to playoffs from there.
+    if(s==="nbaPlay"&&nbaTeam&&player&&!player.retired){
+      const yr=NBA_START_YEAR+(nbaSeasons?.length||0);
+      const regSeasonDone=(nbaGamesPlayed||0)>=82;
+      const awardsPending=regSeasonDone && player?.awardsShownYear!==yr;
+      if(awardsPending){
+        setScreen("nbaAwards");
         return;
       }
     }
@@ -8386,6 +8945,11 @@ export default function App(){
     shoeDesigner:(
       <MenuFrame sub="Signature Series" title="DESIGN STUDIO">
         <ShoeDesignerScreen player={player} setPlayer={setPlayer} signedShoeBrand={signedShoeBrand} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaAwards:(
+      <MenuFrame sub="Hardware" title="SEASON AWARDS">
+        <NbaAwardsScreen player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} nbaSeasonTotals={nbaSeasonTotals} nbaGamesPlayed={nbaGamesPlayed} nbaTeam={nbaTeam} playoffsDone={playoffsDone} go={go}/>
       </MenuFrame>
     ),
     nbaStats:(
