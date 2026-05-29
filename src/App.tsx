@@ -441,6 +441,249 @@ function agentMinOVR(rep){
   return 0; // rep 4-5 takes anyone
 }
 
+// ─── SHOP / PURCHASES ──────────────────────────────────────────────────────────
+// Items the player can buy with their NBA earnings. Some are pure flex (Kia),
+// others unlock new game features (Nokia → phone calls). Each item lives in
+// SHOP_ITEMS and gets stored on player.purchases.items by id after purchase.
+// Restaurants and album are separate top-level slots since they're configured
+// rather than just purchased.
+const SHOP_ITEMS = [
+  {
+    id:"nokia_7610", category:"phone",
+    name:"Nokia 7610", subtitle:"T-Mobile · Get More",
+    price:500, icon:"📱",
+    description:"The hottest swivel phone of 2004. Unlocks the Phone Calls feature — start with Cousin Kerry, more contacts coming.",
+    color:"#e20074",
+  },
+  {
+    id:"kia_sorento_2004", category:"car",
+    name:"2004 Kia Sorento", subtitle:"Reliable midsize SUV",
+    price:22000, icon:"🚙",
+    description:"Your first NBA car. Cloth seats, AM/FM, V6 power. Practical, dependable, and a far cry from the AMG you'll buy in a few years.",
+    color:"#888888",
+  },
+];
+// Lookup by id — used after purchase to display item details.
+const SHOP_ITEM_BY_ID = Object.fromEntries(SHOP_ITEMS.map(i=>[i.id,i]));
+
+// Convenience helpers — used across the spend screen + feature gates.
+function playerOwns(player, itemId){
+  return !!player?.purchases?.items?.includes(itemId);
+}
+function ensurePurchases(player){
+  // Returns the purchases object, lazily initializing if missing. Used by
+  // purchase handlers so we don't have to null-check everywhere.
+  return player.purchases||{items:[],restaurant:null,album:null};
+}
+
+// ─── RESTAURANT CHAINS ─────────────────────────────────────────────────────────
+// Two paths: passive (buy a stake in an existing chain for steady dividends)
+// or active (build your own, scale up with expansion, risk failure).
+// Existing chains the player can invest in. Each one trades off entry cost
+// against dividend size and risk profile (declining brands pay higher but may
+// shrink). All values are 2004 dollars. We keep this list short and recognizable.
+const RESTAURANT_CHAINS = [
+  {id:"mcdonalds",  name:"McDonald's",       icon:"🍟", color:"#FFC72C",
+   stake:5000000,  dividend:550000,
+   blurb:"Bulletproof. Steady dividends, low growth."},
+  {id:"subway",     name:"Subway",           icon:"🥪", color:"#008C15",
+   stake:3500000,  dividend:420000,
+   blurb:"Peak Jared era. Low entry, solid yield."},
+  {id:"starbucks",  name:"Starbucks",        icon:"☕", color:"#006241",
+   stake:6500000,  dividend:780000,
+   blurb:"Going up fast. Premium entry, growing dividends."},
+  {id:"krispy",     name:"Krispy Kreme",     icon:"🍩", color:"#006847",
+   stake:2000000,  dividend:320000,
+   blurb:"Hot brand, but volatile. Higher relative yield."},
+  {id:"chipotle",   name:"Chipotle",         icon:"🌯", color:"#A81612",
+   stake:4500000,  dividend:680000,
+   blurb:"Just got started. Best growth potential."},
+  {id:"outback",    name:"Outback Steakhouse", icon:"🥩", color:"#6A1B0A",
+   stake:3000000,  dividend:400000,
+   blurb:"Casual dining stalwart. Boring but reliable."},
+];
+const RESTAURANT_CHAIN_BY_ID = Object.fromEntries(RESTAURANT_CHAINS.map(c=>[c.id,c]));
+
+// Cost to start your own chain — scales by number of starting locations.
+const RESTAURANT_OWN_COSTS=[15000000,17000000,19000000,21000000,24000000];
+function ownChainCost(locations){
+  // locations is 1-5; clamp + look up
+  return RESTAURANT_OWN_COSTS[Math.max(0,Math.min(4,locations-1))];
+}
+// Annual income for your own chain — $1.5M per location, scaled down slightly
+// once you exceed 10 locations (diminishing returns on operating efficiency).
+function ownChainAnnualIncome(locations){
+  if(locations<=10) return locations*1500000;
+  return 10*1500000+(locations-10)*1200000;
+}
+// Cost to add new locations. Scales up so 1-by-1 is cheaper than big jumps —
+// but big jumps have higher failure chance (see ownChainExpansionFailChance).
+function ownChainExpansionCost(addLocations){
+  return addLocations*2200000;
+}
+// Probability that a big expansion FAILS this offseason. 1 location = 5%,
+// 2 = 12%, 3 = 22%, 4 = 35%, 5+ = 50%. Models the real-world reality that
+// trying to triple your chain in a year usually goes sideways.
+function ownChainExpansionFailChance(addLocations){
+  if(addLocations<=1) return 0.05;
+  if(addLocations===2) return 0.12;
+  if(addLocations===3) return 0.22;
+  if(addLocations===4) return 0.35;
+  return 0.50;
+}
+// When an expansion fails, how many locations do we LOSE (relative to the
+// pre-expansion count)? Bad bets cost roughly 1-3 locations depending on how
+// aggressive the expansion was.
+function ownChainExpansionLoss(addLocations){
+  return Math.min(addLocations, 1+Math.floor(addLocations/2));
+}
+
+// ─── MUSIC ALBUM ───────────────────────────────────────────────────────────────
+// Configurable vanity venture — pick a name, cover, style, producers, and
+// features. Cost scales with talent picks; outcome rolled at next offseason
+// produces flop/mid/hit/classic payouts.
+const ALBUM_BASE_COST = 18000000; // 2004 dollars — bigger than restaurant entry
+
+// Music styles — affects synergy with producers/features. Each style has a
+// list of producer/feature ids that "fit" particularly well; non-fitting picks
+// still work but contribute less to the outcome roll.
+const ALBUM_STYLES = [
+  {id:"hiphop", name:"Hip-Hop", icon:"🎤", description:"Bars, beats, bravado."},
+  {id:"rnb",    name:"R&B",     icon:"🎶", description:"Smooth grooves, vocal hooks."},
+  {id:"rock",   name:"Rock",    icon:"🎸", description:"Guitars, anthems, attitude."},
+];
+
+// Producer roster — all real 2004-prominent hip-hop/R&B producers. Tier 1 are
+// the most coveted (Pharrell, Dre, Timbaland); tier 2 are stalwarts.
+// Each has a `fits` array — styles they're a natural match for. Picking off-
+// style still works but reduces the outcome roll.
+const ALBUM_PRODUCERS = [
+  {id:"pharrell",    name:"Pharrell Williams",  tier:1, cost:3000000, fits:["hiphop","rnb"]},
+  {id:"dr-dre",      name:"Dr. Dre",            tier:1, cost:3000000, fits:["hiphop"]},
+  {id:"timbaland",   name:"Timbaland",          tier:1, cost:2800000, fits:["hiphop","rnb"]},
+  {id:"scott-storch",name:"Scott Storch",       tier:2, cost:1800000, fits:["hiphop","rnb"]},
+  {id:"jermaine-dupri",name:"Jermaine Dupri",   tier:2, cost:1500000, fits:["hiphop","rnb"]},
+  {id:"just-blaze",  name:"Just Blaze",         tier:2, cost:1500000, fits:["hiphop"]},
+  {id:"rick-rubin",  name:"Rick Rubin",         tier:1, cost:2500000, fits:["hiphop","rock"]},
+  {id:"swizz-beatz", name:"Swizz Beatz",        tier:2, cost:1400000, fits:["hiphop"]},
+];
+const ALBUM_PRODUCER_BY_ID = Object.fromEntries(ALBUM_PRODUCERS.map(p=>[p.id,p]));
+
+// Feature artists — same tier/cost/fits structure as producers.
+const ALBUM_FEATURES = [
+  {id:"jayz",       name:"Jay-Z",         tier:1, cost:4000000, fits:["hiphop"]},
+  {id:"beyonce",    name:"Beyoncé",       tier:1, cost:3500000, fits:["rnb","hiphop"]},
+  {id:"eminem",     name:"Eminem",        tier:1, cost:4000000, fits:["hiphop"]},
+  {id:"50cent",     name:"50 Cent",       tier:1, cost:3500000, fits:["hiphop"]},
+  {id:"outkast",    name:"Outkast",       tier:1, cost:3000000, fits:["hiphop","rnb"]},
+  {id:"usher",      name:"Usher",         tier:1, cost:3000000, fits:["rnb"]},
+  {id:"ludacris",   name:"Ludacris",      tier:2, cost:2200000, fits:["hiphop"]},
+  {id:"alicia-keys",name:"Alicia Keys",   tier:1, cost:2800000, fits:["rnb"]},
+  {id:"missy",      name:"Missy Elliott", tier:2, cost:2000000, fits:["hiphop","rnb"]},
+  {id:"linkin-park",name:"Linkin Park",   tier:1, cost:3000000, fits:["rock"]},
+];
+const ALBUM_FEATURE_BY_ID = Object.fromEntries(ALBUM_FEATURES.map(f=>[f.id,f]));
+
+// Cover design templates — visual variants for the album cover preview. The
+// preview is rendered as a small artwork tile with the album name on it.
+const ALBUM_DESIGNS = [
+  {id:"gradient",  name:"Gradient",  description:"Bold modern gradient"},
+  {id:"vinyl",     name:"Vinyl",     description:"Black record aesthetic"},
+  {id:"minimal",   name:"Minimal",   description:"Clean typography focus"},
+  {id:"neon",      name:"Neon",      description:"Glowing club vibes"},
+  {id:"portrait",  name:"Portrait",  description:"Classic photo style"},
+  {id:"graffiti",  name:"Graffiti",  description:"Street art energy"},
+];
+
+// Compute total cost of an album config
+function albumTotalCost(producers, features){
+  const prodCost=producers.reduce((sum,id)=>sum+(ALBUM_PRODUCER_BY_ID[id]?.cost||0),0);
+  const featCost=features.reduce((sum,id)=>sum+(ALBUM_FEATURE_BY_ID[id]?.cost||0),0);
+  return ALBUM_BASE_COST+prodCost+featCost;
+}
+
+// Roll the outcome at offseason — returns one of: flop / mid / hit / classic
+// and the dollar payout. The score is built from: tier of picks, style fit,
+// and a random roll. Designed so a maxed-out album has a real shot at classic.
+function rollAlbumOutcome(album){
+  const producers=(album.producers||[]).map(id=>ALBUM_PRODUCER_BY_ID[id]).filter(Boolean);
+  const features=(album.features||[]).map(id=>ALBUM_FEATURE_BY_ID[id]).filter(Boolean);
+  // Talent score: tier 1 = 30 pts, tier 2 = 18. Both slots filled with tier 1
+  // for both producers and features = 4 × 30 = 120 base.
+  let talent=0;
+  for(const p of producers) talent+=p.tier===1?30:18;
+  for(const f of features) talent+=f.tier===1?30:18;
+  // Style fit bonus: +8 per pick that fits the style, -10 per pick that doesn't
+  let fit=0;
+  for(const p of producers) fit+=p.fits.includes(album.style)?8:-10;
+  for(const f of features) fit+=f.fits.includes(album.style)?8:-10;
+  // Random roll: -30 to +50 (slight positive bias — most albums find an audience).
+  // Wider variance so even maxed albums occasionally flop, and modest ones occasionally hit.
+  const roll=Math.random()*80-30;
+  const score=talent+fit+roll;
+  // Thresholds — calibrated for varied outcomes across config quality:
+  //   maxed config (2 tier-1 prods + 2 tier-1 feats on-style): ~120+32+roll = ~122-202
+  //     → spread across HIT (most common) / CLASSIC / occasional MID
+  //   2 tier-2 prods only, on-style: 36+16+roll = ~22-102 → mostly FLOP/MID
+  //   bad style fit subtracts ~40 — usually demotes by a tier
+  let status, multiplier;
+  if(score>=180){       status="classic"; multiplier=3.5; }  // legendary album
+  else if(score>=130){  status="hit";     multiplier=1.8; }  // strong commercial success
+  else if(score>=80){   status="mid";     multiplier=0.95; } // breaks even-ish
+  else {                status="flop";    multiplier=0.35; } // commercial disaster
+  return {status, payout:Math.round(album.cost*multiplier)};
+}
+
+// Album cover renderer — used in the configurator preview AND on the status
+// card. Tiny self-contained component so the visual style is consistent.
+function AlbumCover({name, design, style, color="#FA5400", size=120}){
+  const safeName=(name||"UNTITLED").toUpperCase();
+  const styleData=ALBUM_STYLES.find(s=>s.id===style);
+  const designData=ALBUM_DESIGNS.find(d=>d.id===design);
+  // Each design has its own background treatment
+  let bg, textColor="#fff", overlay=null;
+  switch(design){
+    case "vinyl":
+      bg="radial-gradient(circle at center, #555 0%, #111 30%, #000 70%)";
+      overlay=<div style={{position:"absolute",inset:"15%",borderRadius:"50%",background:`radial-gradient(circle at center, ${color} 0%, ${color} 12%, #111 13%, #000 70%)`,boxShadow:"inset 0 0 20px rgba(0,0,0,0.8)"}}/>;
+      break;
+    case "minimal":
+      bg="#f0ede8"; textColor="#080c10";
+      break;
+    case "neon":
+      bg="linear-gradient(135deg, #0a0a2a 0%, #2a0a3e 100%)";
+      overlay=<div style={{position:"absolute",inset:0,background:`radial-gradient(circle at 30% 30%, ${color}66 0%, transparent 60%)`,filter:"blur(10px)"}}/>;
+      break;
+    case "portrait":
+      bg=`linear-gradient(180deg, ${color}33 0%, #1a0a0a 60%, #000 100%)`;
+      overlay=<div style={{position:"absolute",bottom:0,left:0,right:0,height:"40%",background:"linear-gradient(180deg, transparent, rgba(0,0,0,0.8))"}}/>;
+      break;
+    case "graffiti":
+      bg=`linear-gradient(135deg, ${color} 0%, #000 100%)`;
+      overlay=<div style={{position:"absolute",inset:0,background:"repeating-linear-gradient(45deg, transparent 0 10px, rgba(255,255,255,0.04) 10px 12px)"}}/>;
+      break;
+    default: // gradient
+      bg=`linear-gradient(135deg, ${color} 0%, #1a0a1a 100%)`;
+  }
+  return(
+    <div style={{position:"relative",width:size,height:size,borderRadius:8,overflow:"hidden",background:bg,flexShrink:0,boxShadow:"0 4px 18px rgba(0,0,0,0.4)"}}>
+      {overlay}
+      {size>=70&&(
+        <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",justifyContent:design==="portrait"?"flex-end":"center",alignItems:"center",padding:size*0.08,textAlign:"center"}}>
+          <div style={{fontSize:size*0.13,fontWeight:900,color:textColor,letterSpacing:1,lineHeight:1.1,textShadow:design==="minimal"?"none":"0 2px 8px rgba(0,0,0,0.6)",wordBreak:"break-word",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            {safeName}
+          </div>
+          {styleData&&(
+            <div style={{fontSize:size*0.07,color:textColor,opacity:0.7,letterSpacing:2,marginTop:size*0.04,fontWeight:700}}>
+              {styleData.name.toUpperCase()}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── NBA ROSTER DATA ─────────────────────────────────────────────────────────
 // Per-season rosters and records now live in `src/data/nbaRosters.ts`, keyed
 // by season-start year (2003 = 2003-04 season, 2004 = 2004-05, etc.).
@@ -4000,14 +4243,26 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
           </div>
         </button>
 
-        {/* Spend (formerly Bank) */}
-        <button onClick={()=>go("nbaSpend")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,opacity:0.7,fontFamily:"'Barlow Condensed',sans-serif"}}>
+        {/* Spend (the shop) */}
+        <button onClick={()=>go("nbaSpend")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:22,width:34,textAlign:"center"}}>💰</div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>SPEND</div>
-            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Bankroll · coming soon</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Bank & shop</div>
           </div>
         </button>
+
+        {/* Call — only appears once the player owns a phone. Currently scoped
+            to Cousin Kerry; future contacts will land on the same picker. */}
+        {playerOwns(player,"nokia_7610")&&(
+          <button onClick={()=>go("nbaCall")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(226,0,116,0.06)",border:"1px solid rgba(226,0,116,0.4)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:22,width:34,textAlign:"center"}}>📱</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:900,letterSpacing:2,color:"#e20074"}}>CALL</div>
+              <div style={{fontSize:11,fontWeight:400,color:"#aaa",marginTop:1}}>Check in with your contacts</div>
+            </div>
+          </button>
+        )}
 
         {/* Stats */}
         <button onClick={()=>go("nbaStats")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -4023,7 +4278,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
 }
 
 // ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
-function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, go, toast}){
+function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, go, toast}){
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const id=getTeamIdentity(nbaTeam,currentYear);
@@ -4085,6 +4340,36 @@ function NbaPlayScreen({player, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaS
           if(paycheck>0&&setMoney){
             setMoney(m=>(m||0)+paycheck);
             toast&&toast(`Paycheck deposited: ${fmtMoney(paycheck)}`,GR);
+          }
+          // Restaurant income — invested chains pay a flat dividend, own chains
+          // scale with location count. Paid once per offseason after salary.
+          const restaurant=player?.purchases?.restaurant;
+          if(restaurant&&setMoney){
+            const restaurantIncome=restaurant.type==="invested"
+              ?restaurant.dividend
+              :ownChainAnnualIncome(restaurant.locations);
+            if(restaurantIncome>0){
+              setMoney(m=>(m||0)+restaurantIncome);
+              const label=restaurant.type==="invested"?restaurant.chainName:restaurant.name;
+              setTimeout(()=>toast&&toast(`${label} earnings: ${fmtMoney(restaurantIncome)}`,YE), 600);
+            }
+          }
+          // Album outcome — if an album is "recording", it drops THIS offseason.
+          // Roll the result, deposit the payout, and flip its status. Player
+          // can manage / cash it out from the album screen afterwards.
+          const recordingAlbum=player?.purchases?.album;
+          if(recordingAlbum&&recordingAlbum.status==="recording"){
+            const outcome=rollAlbumOutcome(recordingAlbum);
+            setMoney(m=>(m||0)+outcome.payout);
+            setPlayer(p=>{
+              const purchases=ensurePurchases(p);
+              return {...p, purchases:{...purchases, album:{
+                ...recordingAlbum, status:outcome.status, payout:outcome.payout,
+              }}};
+            });
+            const tone=outcome.status==="flop"?RE:outcome.status==="classic"?YE:GR;
+            const label=outcome.status==="classic"?"💎 CLASSIC":outcome.status==="hit"?"🔥 HIT":outcome.status==="mid"?"📊 Mid":"💔 Flop";
+            setTimeout(()=>toast&&toast(`${recordingAlbum.name}: ${label} (${fmtMoney(outcome.payout)})`,tone), 1200);
           }
           setNbaSeasons(prev=>[...prev,seasonEntry]);
           setNbaGamesPlayed(0);
@@ -4339,8 +4624,12 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
   );
 }
 
-// ─── NBA SPEND (coming soon) ───────────────────────────────────────────────────
-function NbaSpendScreen({money, player, nbaSeasons, go}){
+// ─── NBA SPEND (the shop) ──────────────────────────────────────────────────────
+// Doubles as the bank account view and the shopping experience. Top shows
+// balance and contract snapshot; below that is the inventory section
+// (purchased items) followed by the shop browse with available items grouped
+// by category. Restaurant / album come in later batches.
+function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}){
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const contract=player?.contract;
@@ -4348,11 +4637,34 @@ function NbaSpendScreen({money, player, nbaSeasons, go}){
   const remainingYears=contract?contractRemainingYears(contract,currentYear):null;
   // Remaining contract value = sum of salaries from this year forward.
   const remainingValue=contract?contract.salaries.slice(currentYear-contract.signedYear).reduce((a,b)=>a+b,0):0;
+  // Owned items — the array of item ids on the player.
+  const ownedIds=player?.purchases?.items||[];
+  const ownedItems=ownedIds.map(id=>SHOP_ITEM_BY_ID[id]).filter(Boolean);
+
+  const buyItem=(item)=>{
+    if((money||0)<item.price){
+      toast&&toast("Not enough money in the bank","#888");
+      return;
+    }
+    if(playerOwns(player,item.id)){
+      toast&&toast(`You already own a ${item.name}`,"#888");
+      return;
+    }
+    // Atomic-ish update: subtract money + add item id to the player. Both are
+    // separate state slots so do them in lock step.
+    setMoney(m=>(m||0)-item.price);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, items:[...(purchases.items||[]), item.id]}};
+    });
+    toast&&toast(`Bought ${item.name}!`,GR);
+  };
+
   return(
     <div>
       <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
       <div style={{textAlign:"center",marginBottom:14}}>
-        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Bank Account</div>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Bank & Shop</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SPEND</div>
       </div>
 
@@ -4367,7 +4679,7 @@ function NbaSpendScreen({money, player, nbaSeasons, go}){
         )}
       </div>
 
-      {/* Contract snapshot — quick stats so the player understands their earning power */}
+      {/* Contract snapshot */}
       {contract&&(
         <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:"12px 14px",marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase",marginBottom:8}}>Contract Snapshot</div>
@@ -4384,12 +4696,984 @@ function NbaSpendScreen({money, player, nbaSeasons, go}){
         </div>
       )}
 
-      {/* Coming-soon placeholder for the spending menu */}
-      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"12px 14px",fontSize:11,color:"#888",lineHeight:1.6}}>
-        <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Coming Soon</div>
-        Cars, homes, charity, investments, family support — off-court spending opens up in a future update.
+      {/* Your stuff — inventory of owned items. Only renders if they've
+          bought something so the section doesn't take up empty space early. */}
+      {ownedItems.length>0&&(
+        <>
+          <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:GR,fontWeight:700,marginBottom:8}}>Your Stuff</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+            {ownedItems.map(item=>(
+              <div key={item.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",background:"rgba(0,220,100,0.05)",border:`1px solid ${GR}33`,borderRadius:8}}>
+                <div style={{fontSize:24,width:36,textAlign:"center"}}>{item.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:900,color:"#fff"}}>{item.name}</div>
+                  <div style={{fontSize:10,color:"#888"}}>{item.subtitle}</div>
+                </div>
+                <div style={{fontSize:9,color:GR,fontWeight:700,letterSpacing:1}}>✓ OWNED</div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Shop — items available to purchase, with availability gating */}
+      <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:OR,fontWeight:700,marginBottom:8}}>Shop</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+        {SHOP_ITEMS.map(item=>{
+          const owned=playerOwns(player,item.id);
+          const canAfford=(money||0)>=item.price;
+          // Owned items hide from the shop list since they appear in the
+          // inventory section above.
+          if(owned) return null;
+          return(
+            <div key={item.id} style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${canAfford?item.color+"55":"rgba(255,255,255,0.08)"}`,borderRadius:10,padding:"12px 14px"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:8}}>
+                <div style={{fontSize:32,width:46,textAlign:"center",flexShrink:0}}>{item.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{item.name}</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{item.subtitle}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>PRICE</div>
+                  <div style={{fontSize:14,fontWeight:900,color:canAfford?YE:RE,lineHeight:1}}>{fmtMoney(item.price)}</div>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:"#aaa",lineHeight:1.5,marginBottom:10,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+                {item.description}
+              </div>
+              <button onClick={()=>buyItem(item)} disabled={!canAfford} style={{
+                width:"100%",padding:"9px 0",
+                background:canAfford?item.color:"rgba(255,255,255,0.06)",
+                border:"none",borderRadius:7,
+                color:canAfford?(item.color==="#FFFFFF"||item.color==="#888888"?"#080c10":"#fff"):"#666",
+                cursor:canAfford?"pointer":"not-allowed",
+                fontSize:12,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"
+              }}>
+                {canAfford?`BUY · ${fmtMoney(item.price)}`:`NEED ${fmtMoney(item.price-(money||0))} MORE`}
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Ventures — bigger investments like restaurant chains. Their own
+          screens since they have configurators and management UI. */}
+      <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:YE,fontWeight:700,marginBottom:8}}>Ventures</div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
+        {/* Restaurant card */}
+        {(()=>{
+          const r=player?.purchases?.restaurant;
+          const minCost=Math.min(...RESTAURANT_CHAINS.map(c=>c.stake),ownChainCost(1));
+          const canAfford=(money||0)>=minCost;
+          if(r){
+            // Already owned — show status snapshot + manage button
+            const isOwn=r.type==="own";
+            return(
+              <button onClick={()=>go("nbaRestaurant")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(0,220,100,0.06)",border:`1.5px solid ${r.color||GR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>{isOwn?"🍔":r.icon}</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:9,color:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>✓ {isOwn?"YOUR CHAIN":"INVESTED"}</div>
+                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isOwn?r.name:r.chainName}</div>
+                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                      {isOwn?`${r.locations} location${r.locations===1?"":"s"} · ${fmtMoney(ownChainAnnualIncome(r.locations))}/yr`:`${fmtMoney(r.dividend)}/yr dividend`}
+                    </div>
+                  </div>
+                  <div style={{fontSize:18,color:"#888"}}>›</div>
+                </div>
+              </button>
+            );
+          }
+          // Not yet owned — entry card with min-cost teaser
+          return(
+            <button onClick={()=>{if(canAfford) go("nbaRestaurant"); else toast&&toast(`Restaurants start at ${fmtMoney(minCost)}`,"#888");}} disabled={!canAfford} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:`1px solid ${canAfford?OR+"55":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:canAfford?"pointer":"not-allowed",opacity:canAfford?1:0.55,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+                <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>🍔</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Restaurant Chain</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>Invest in an existing chain or build your own</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>FROM</div>
+                  <div style={{fontSize:13,fontWeight:900,color:canAfford?YE:RE,lineHeight:1}}>{fmtMoney(minCost)}</div>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:"#aaa",lineHeight:1.5,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+                {canAfford?"Earn annual income while you play.":`Need ${fmtMoney(minCost-(money||0))} more to start.`}
+              </div>
+            </button>
+          );
+        })()}
+
+        {/* Album card */}
+        {(()=>{
+          const a=player?.purchases?.album;
+          const minCost=ALBUM_BASE_COST+ALBUM_PRODUCERS[5].cost; // base + cheapest producer (one required)
+          const canAfford=(money||0)>=minCost;
+          if(a){
+            // Status snapshot
+            return(
+              <button onClick={()=>go("nbaAlbum")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(168,85,247,0.06)",border:`1.5px solid ${a.color||OR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <AlbumCover name={a.name} design={a.design} style={a.style} color={a.color||OR} size={46}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:9,color:a.status==="flop"?RE:a.status==="recording"?GO:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
+                      {a.status==="recording"?"🎙️ IN STUDIO":
+                       a.status==="classic"?"💎 CLASSIC":
+                       a.status==="hit"?"🔥 HIT":
+                       a.status==="mid"?"📊 MID":
+                       "💔 FLOP"}
+                    </div>
+                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
+                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                      {a.status==="recording"?"Drops at offseason":`Revenue: ${fmtMoney(a.payout||0)}`}
+                    </div>
+                  </div>
+                  <div style={{fontSize:18,color:"#888"}}>›</div>
+                </div>
+              </button>
+            );
+          }
+          return(
+            <button onClick={()=>{if(canAfford) go("nbaAlbum"); else toast&&toast(`Albums start at ${fmtMoney(minCost)}`,"#888");}} disabled={!canAfford} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:`1px solid ${canAfford?"#a855f7"+"55":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:canAfford?"pointer":"not-allowed",opacity:canAfford?1:0.55,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+                <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>🎤</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Music Album</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>Drop a record with real producers and features</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>FROM</div>
+                  <div style={{fontSize:13,fontWeight:900,color:canAfford?YE:RE,lineHeight:1}}>{fmtMoney(minCost)}</div>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:"#aaa",lineHeight:1.5,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+                {canAfford?"Configure your record. Outcome rolls at next offseason.":`Need ${fmtMoney(minCost-(money||0))} more to start.`}
+              </div>
+            </button>
+          );
+        })()}
       </div>
     </div>
+  );
+}
+
+// ─── PHONE CALLS ───────────────────────────────────────────────────────────────
+// Contacts are defined as a registry so future characters slot in easily.
+// Each contact has a name, role, portrait URL, and a list of dialogue topics.
+// Each topic has a `prompt` (what the player picks) and `responses` (an array
+// the contact randomly picks from on tap, so repeat calls have variety).
+const CALL_CONTACTS = [
+  {
+    id:"kerry_kittles",
+    name:"Kerry Kittles",
+    role:"Cousin · NBA Veteran",
+    portrait:KERRY_KITTLES_URL,
+    accentColor:"#e20074", // T-Mobile magenta to match the cameo
+    // Available regardless of player state. Future contacts may gate by team /
+    // OVR / season etc.
+    available:()=>true,
+    topics:[
+      {
+        prompt:"What's up cousin?",
+        responses:[
+          "Yo cuz! Just got back from the gym, working on that pull-up. Game still ain't where I want it but I'm grinding. How's the league treating you?",
+          "Cuz! Was just thinking about you. Saw your highlight on SportsCenter last night, that was nasty. Stay focused out there.",
+          "Hey now, look who finally remembered family exists. Just kidding cuz, glad you called. What's the move?",
+        ],
+      },
+      {
+        prompt:"Any advice for this season?",
+        responses:[
+          "Listen, the league is long. 82 games. Don't peak in October. Pace yourself, take care of your body, and when March rolls around you'll still have legs.",
+          "Watch film. I'm serious. The guys who study tape are the guys who eat. Everybody can run and jump, but only the smart ones stick.",
+          "Find a vet on your team who'll keep it real with you. Not the friendliest guy — the most honest one. He'll save your career.",
+          "Don't trust everybody who shows up with their hand out. You'll find out real quick who's family and who's just a fan.",
+        ],
+      },
+      {
+        prompt:"How's life off the court?",
+        responses:[
+          "Man, retirement's coming for all of us. I'm trying to set up some things — investments, businesses, you know. You should be doing the same.",
+          "I've been spending more time with the family. That's the real championship right there.",
+          "Just trying to enjoy the ride, cuz. We made it. Not many people from where we're from get to say that.",
+        ],
+      },
+      {
+        prompt:"What should I spend my money on?",
+        responses:[
+          "Look, ain't nothing wrong with a flex purchase here and there — get yourself a nice ride, treat your mom. But save more than you spend. The league only lasts so long.",
+          "A restaurant chain? An album? I've heard wilder ideas. Just don't put all your eggs in one basket. Diversify.",
+          "Honestly? Get a financial advisor you trust. I know it sounds boring but the guys who blow through their money all skipped that step.",
+        ],
+      },
+    ],
+  },
+];
+
+// Helper to pick a random response from a topic
+function pickResponse(topic){
+  return topic.responses[Math.floor(Math.random()*topic.responses.length)];
+}
+
+// Picker screen — list of contacts the player can call. Only shows contacts
+// that pass their `available()` check at the current moment.
+function CallPickerScreen({player, go}){
+  const available=CALL_CONTACTS.filter(c=>c.available());
+  const [picked,setPicked]=useState(null); // null | contact id
+  return(
+    <div>
+      <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:"#e20074",marginBottom:4,textTransform:"uppercase",fontWeight:700}}>📱 Nokia 7610</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>CONTACTS</div>
+        <div style={{fontSize:12,color:"#aaa",marginTop:4}}>{available.length} contact{available.length===1?"":"s"} · Tap to call</div>
+      </div>
+
+      {available.map(contact=>(
+        <button key={contact.id} onClick={()=>setPicked(contact.id)} style={{
+          display:"flex",width:"100%",alignItems:"center",gap:12,padding:"10px 12px",marginBottom:8,
+          background:"rgba(255,255,255,0.04)",border:`1px solid ${contact.accentColor}44`,
+          borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"
+        }}>
+          <div style={{width:44,height:44,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:`1.5px solid ${contact.accentColor}77`}}>
+            <img src={contact.portrait} alt={contact.name} style={{width:"100%",height:"100%",objectFit:"cover",objectPosition:"center top",background:"#2a1518"}}/>
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{contact.name}</div>
+            <div style={{fontSize:11,color:"#aaa",marginTop:2}}>{contact.role}</div>
+          </div>
+          <div style={{fontSize:18,color:contact.accentColor}}>📞</div>
+        </button>
+      ))}
+
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",marginTop:6,fontSize:11,color:"#888",lineHeight:1.5}}>
+        <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Coming Soon</div>
+        More contacts unlock as your career progresses — agents, teammates, family.
+      </div>
+
+      {picked&&<CallScreen contactId={picked} onHangUp={()=>setPicked(null)}/>}
+    </div>
+  );
+}
+
+// Active call view — full-screen overlay over the picker. Portrait at top,
+// dialogue area in the middle, topic buttons + End Call at the bottom.
+function CallScreen({contactId, onHangUp}){
+  const contact=CALL_CONTACTS.find(c=>c.id===contactId);
+  // Current line being spoken — starts with a greeting, updates when a topic
+  // is tapped. Using a counter so React re-mounts the line and the user sees
+  // the response change even if it happens to roll the same text twice.
+  const [lineSeq,setLineSeq]=useState(0);
+  const [currentLine,setCurrentLine]=useState(()=>pickResponse(contact.topics[0]));
+  const [callDuration,setCallDuration]=useState(0); // seconds for the timer display
+  // Timer tick — visual flourish that adds presence to the call
+  useEffect(()=>{
+    const i=setInterval(()=>setCallDuration(s=>s+1),1000);
+    return ()=>clearInterval(i);
+  },[]);
+  const fmtDuration=(s)=>{
+    const m=Math.floor(s/60); const sec=s%60;
+    return `${m}:${sec.toString().padStart(2,"0")}`;
+  };
+  if(!contact) return null;
+  const pickTopic=(topic)=>{
+    setLineSeq(seq=>seq+1);
+    setCurrentLine(pickResponse(topic));
+  };
+  return(
+    <div style={{position:"fixed",inset:0,background:"linear-gradient(180deg, #1a0a1f 0%, #0a0a0a 100%)",zIndex:1100,display:"flex",flexDirection:"column",padding:18,overflow:"hidden"}}>
+      <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:translateY(0)}}`}</style>
+      {/* Header — connection status + call timer */}
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:9,letterSpacing:3,color:GR,textTransform:"uppercase",fontWeight:700,marginBottom:3}}>● Connected · T-Mobile</div>
+        <div style={{fontSize:12,color:"#aaa",fontFamily:"monospace",letterSpacing:1}}>{fmtDuration(callDuration)}</div>
+      </div>
+
+      {/* Portrait — gradient ring with pulse animation while "talking" */}
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{display:"inline-block",position:"relative",padding:4,background:`linear-gradient(135deg, ${contact.accentColor}, #8a0046)`,borderRadius:"50%",boxShadow:`0 4px 30px ${contact.accentColor}55`}}>
+          <img src={contact.portrait} alt={contact.name} style={{display:"block",width:140,height:140,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"transparent"}}/>
+        </div>
+        <div style={{fontSize:18,fontWeight:900,color:"#fff",marginTop:10,letterSpacing:0.5}}>{contact.name}</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:2}}>{contact.role}</div>
+      </div>
+
+      {/* Current dialogue line — re-mounting via key=lineSeq triggers a fade-in */}
+      <div key={lineSeq} style={{flex:1,minHeight:120,background:"rgba(0,0,0,0.45)",border:`1px solid ${contact.accentColor}44`,borderRadius:14,padding:"14px 16px",marginBottom:14,position:"relative",overflow:"auto",animation:"fadeIn 0.35s ease-out"}}>
+        <div style={{position:"absolute",top:4,left:8,fontSize:32,color:contact.accentColor,opacity:0.25,lineHeight:1,fontFamily:"Georgia,serif"}}>“</div>
+        <div style={{fontSize:13,color:"#f0ede8",lineHeight:1.6,position:"relative",paddingLeft:6}}>{currentLine}</div>
+      </div>
+
+      {/* Topic buttons */}
+      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:10}}>
+        {contact.topics.map(topic=>(
+          <button key={topic.prompt} onClick={()=>pickTopic(topic)} style={{
+            padding:"9px 12px",textAlign:"left",
+            background:"rgba(255,255,255,0.06)",border:`1px solid ${contact.accentColor}33`,
+            borderRadius:8,color:"#fff",cursor:"pointer",
+            fontSize:12,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:0.5
+          }}>
+            {topic.prompt}
+          </button>
+        ))}
+      </div>
+
+      {/* End call */}
+      <button onClick={onHangUp} style={{
+        padding:"12px 0",background:RE,border:"none",borderRadius:10,
+        color:"#fff",cursor:"pointer",fontSize:13,fontWeight:900,letterSpacing:2,fontFamily:"'Barlow Condensed',sans-serif"
+      }}>
+        📵 END CALL
+      </button>
+    </div>
+  );
+}
+
+// ─── RESTAURANT CHAINS ─────────────────────────────────────────────────────────
+// Top-level restaurant management screen. Internal `mode` state controls the
+// view: picker (choose path) / invest (pick a chain) / configure (name+color+
+// locations for own) / status (already started, manage existing). The status
+// view shows expansion / cash-out options.
+function RestaurantScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}){
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed;
+  const restaurant=player?.purchases?.restaurant||null;
+  // Default mode: if no restaurant, show the path picker; otherwise the
+  // status panel for whatever they already have.
+  const [mode,setMode]=useState(restaurant?"status":"picker");
+  return(
+    <div>
+      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Investments</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>RESTAURANTS</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>Build a chain or invest in one</div>
+      </div>
+
+      {mode==="picker"&&<RestaurantPathPicker money={money} onChooseInvest={()=>setMode("invest")} onChooseOwn={()=>setMode("configure")}/>}
+      {mode==="invest"&&<RestaurantInvestPath money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} onBack={()=>setMode("picker")} onComplete={()=>{setMode("status");toast&&toast("Investment confirmed",GR);}} toast={toast}/>}
+      {mode==="configure"&&<RestaurantConfigurePath money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} onBack={()=>setMode("picker")} onComplete={()=>{setMode("status");toast&&toast("Chain launched!",GR);}} toast={toast}/>}
+      {mode==="status"&&<RestaurantStatusPanel restaurant={restaurant} currentYear={currentYear} money={money} setMoney={setMoney} setPlayer={setPlayer} toast={toast}/>}
+    </div>
+  );
+}
+
+// Two-option entry screen — INVEST (passive) or BUILD YOUR OWN (active).
+function RestaurantPathPicker({money, onChooseInvest, onChooseOwn}){
+  // Minimum entry costs — Krispy Kreme is cheapest stake, 1-location own chain
+  // is cheapest own option. Used to gate the buttons.
+  const minInvest=Math.min(...RESTAURANT_CHAINS.map(c=>c.stake));
+  const minOwn=ownChainCost(1);
+  const canInvest=(money||0)>=minInvest;
+  const canOwn=(money||0)>=minOwn;
+  return(
+    <>
+      <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${GR}44`,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+        <div style={{fontSize:11,letterSpacing:2,color:GR,fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>💼 Invest in a Chain</div>
+        <div style={{fontSize:12,color:"#ddd",lineHeight:1.5,marginBottom:10}}>Buy a stake in an existing restaurant chain. Steady annual dividends, no expansion risk — set it and forget it.</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:"#aaa",marginBottom:10}}>
+          <span>Entry as low as</span><span style={{color:YE,fontWeight:900,fontSize:13}}>{fmtMoney(minInvest)}</span>
+        </div>
+        <button onClick={onChooseInvest} disabled={!canInvest} style={{width:"100%",padding:"9px 0",background:canInvest?GR:"rgba(255,255,255,0.06)",border:"none",borderRadius:7,color:canInvest?"#fff":"#666",cursor:canInvest?"pointer":"not-allowed",fontSize:12,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          {canInvest?"BROWSE CHAINS →":`NEED ${fmtMoney(minInvest-(money||0))} MORE`}
+        </button>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${OR}44`,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+        <div style={{fontSize:11,letterSpacing:2,color:OR,fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>🍔 Build Your Own</div>
+        <div style={{fontSize:12,color:"#ddd",lineHeight:1.5,marginBottom:10}}>Launch your own chain. Pick a name, brand color, and starting locations. Earn more per location — but expand too fast and the whole thing can collapse.</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:11,color:"#aaa",marginBottom:10}}>
+          <span>Entry as low as</span><span style={{color:YE,fontWeight:900,fontSize:13}}>{fmtMoney(minOwn)}</span>
+        </div>
+        <button onClick={onChooseOwn} disabled={!canOwn} style={{width:"100%",padding:"9px 0",background:canOwn?OR:"rgba(255,255,255,0.06)",border:"none",borderRadius:7,color:canOwn?"#fff":"#666",cursor:canOwn?"pointer":"not-allowed",fontSize:12,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+          {canOwn?"CONFIGURE CHAIN →":`NEED ${fmtMoney(minOwn-(money||0))} MORE`}
+        </button>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",fontSize:11,color:"#888",lineHeight:1.5}}>
+        💡 You can only own ONE restaurant investment at a time. Pick wisely — passive's safer, own is bigger upside.
+      </div>
+    </>
+  );
+}
+
+// Invest-in-chain sub-screen — lists existing chains, lets you pick + confirm.
+function RestaurantInvestPath({money, setMoney, setPlayer, currentYear, onBack, onComplete, toast}){
+  const [picked,setPicked]=useState(null);
+  const confirm=()=>{
+    if(!picked) return;
+    const chain=RESTAURANT_CHAIN_BY_ID[picked];
+    if((money||0)<chain.stake){toast&&toast("Not enough money in the bank","#888");return;}
+    setMoney(m=>(m||0)-chain.stake);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, restaurant:{
+        type:"invested", chainId:chain.id, chainName:chain.name,
+        icon:chain.icon, color:chain.color, dividend:chain.dividend,
+        stake:chain.stake, yearInvested:currentYear,
+      }}};
+    });
+    onComplete();
+  };
+  return(
+    <>
+      <button onClick={onBack} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Back</button>
+      <div style={{fontSize:10,letterSpacing:3,color:GR,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Pick a Chain</div>
+      <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
+        {RESTAURANT_CHAINS.map(chain=>{
+          const isSelected=picked===chain.id;
+          const canAfford=(money||0)>=chain.stake;
+          // Approximate years to break even on the stake — helps the player compare offers
+          const breakEven=Math.ceil(chain.stake/chain.dividend);
+          return(
+            <button key={chain.id} onClick={()=>{if(canAfford) setPicked(chain.id);}} disabled={!canAfford} style={{
+              display:"block",width:"100%",textAlign:"left",padding:"10px 12px",
+              background:isSelected?`linear-gradient(135deg, ${chain.color}33 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",
+              border:`1.5px solid ${isSelected?chain.color:canAfford?"rgba(255,255,255,0.10)":"rgba(255,255,255,0.05)"}`,
+              borderRadius:9,color:"#fff",cursor:canAfford?"pointer":"not-allowed",
+              opacity:canAfford?1:0.5,fontFamily:"'Barlow Condensed',sans-serif"
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
+                <div style={{fontSize:24,width:32,textAlign:"center",flexShrink:0}}>{chain.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1}}>{chain.name}</div>
+                  <div style={{fontSize:10,color:"#888",marginTop:2}}>{chain.blurb}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>STAKE</div>
+                  <div style={{fontSize:13,fontWeight:900,color:canAfford?YE:RE,lineHeight:1}}>{fmtMoney(chain.stake)}</div>
+                </div>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#aaa",paddingTop:5,borderTop:"1px solid rgba(255,255,255,0.05)"}}>
+                <span>Annual dividend: <span style={{color:GR,fontWeight:700}}>{fmtMoney(chain.dividend)}</span></span>
+                <span style={{color:"#888"}}>~{breakEven}yr break-even</span>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={confirm} disabled={!picked} style={{...btnS,width:"100%",padding:12,fontSize:13,opacity:picked?1:0.45,cursor:picked?"pointer":"not-allowed"}}>
+        {picked?`INVEST ${fmtMoney(RESTAURANT_CHAIN_BY_ID[picked].stake)} →`:"SELECT A CHAIN"}
+      </button>
+    </>
+  );
+}
+
+// Build-your-own configurator — name, color, starting locations.
+function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBack, onComplete, toast}){
+  const [name,setName]=useState("");
+  const [color,setColor]=useState("#fb923c");
+  const [locations,setLocations]=useState(1);
+  const cost=ownChainCost(locations);
+  const annualIncome=ownChainAnnualIncome(locations);
+  const canAfford=(money||0)>=cost;
+  const ready=name.trim().length>=2&&canAfford;
+  const COLOR_OPTIONS=["#fb923c","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#14b8a6","#000000"];
+  const launch=()=>{
+    if(!ready) return;
+    setMoney(m=>(m||0)-cost);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, restaurant:{
+        type:"own", name:name.trim(), color, locations,
+        yearStarted:currentYear, failures:0,
+        // Track the cumulative invested so the status panel can show ROI
+        totalInvested:cost,
+      }}};
+    });
+    onComplete();
+  };
+  return(
+    <>
+      <button onClick={onBack} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Back</button>
+      <div style={{fontSize:10,letterSpacing:3,color:OR,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Configure Your Chain</div>
+
+      {/* Name input */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Restaurant Name</div>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mike's Wings" maxLength={28} style={{width:"100%",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1.5px solid ${name.trim().length>=2?OR+"66":"rgba(255,255,255,0.12)"}`,borderRadius:8,color:"#fff",fontSize:14,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}/>
+      </div>
+
+      {/* Color picker */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Brand Color</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {COLOR_OPTIONS.map(c=>(
+            <button key={c} onClick={()=>setColor(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Color ${c}`}/>
+          ))}
+        </div>
+      </div>
+
+      {/* Logo preview */}
+      <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",marginBottom:14,background:"rgba(0,0,0,0.3)",borderRadius:10}}>
+        <div style={{width:56,height:56,borderRadius:12,background:`linear-gradient(135deg, ${color}, ${color}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 4px 18px ${color}55`}}>🍔</div>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:10,color:"#888",letterSpacing:2,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Preview</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name.trim()||"Your Chain Name"}</div>
+        </div>
+      </div>
+
+      {/* Starting locations slider (1-5) */}
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase"}}>Starting Locations</div>
+          <div style={{fontSize:18,fontWeight:900,color:OR}}>{locations}</div>
+        </div>
+        <div style={{display:"flex",gap:5}}>
+          {[1,2,3,4,5].map(n=>(
+            <button key={n} onClick={()=>setLocations(n)} style={{flex:1,padding:"9px 0",background:locations===n?OR:"rgba(255,255,255,0.06)",border:"none",borderRadius:7,color:locations===n?"#fff":"#888",cursor:"pointer",fontSize:14,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              {n}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Cost summary */}
+      <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:10,padding:"10px 12px",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12,marginBottom:4}}>
+          <span style={{color:"#aaa"}}>Startup cost</span>
+          <span style={{color:canAfford?YE:RE,fontWeight:900,fontSize:15}}>{fmtMoney(cost)}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:12}}>
+          <span style={{color:"#aaa"}}>Estimated annual income</span>
+          <span style={{color:GR,fontWeight:900,fontSize:15}}>{fmtMoney(annualIncome)}</span>
+        </div>
+      </div>
+
+      <button onClick={launch} disabled={!ready} style={{...btnS,width:"100%",padding:12,fontSize:13,opacity:ready?1:0.45,cursor:ready?"pointer":"not-allowed"}}>
+        {name.trim().length<2?"NAME YOUR CHAIN":canAfford?`LAUNCH ${name.trim().toUpperCase()} →`:`NEED ${fmtMoney(cost-(money||0))} MORE`}
+      </button>
+    </>
+  );
+}
+
+// Status panel — shows current restaurant + lets the player expand or sell.
+function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPlayer, toast}){
+  if(!restaurant) return null;
+  const [expandQty,setExpandQty]=useState(1);
+  // Common cash-out: sell the restaurant for a return based on its remaining
+  // valuation. Invested chains return ~75% of stake; own chains return
+  // (locations × $4M) — a rough resale value reflecting going-concern worth.
+  const cashOut=()=>{
+    let payout=0;
+    if(restaurant.type==="invested"){
+      payout=Math.round(restaurant.stake*0.75);
+    } else {
+      payout=restaurant.locations*4000000;
+    }
+    setMoney(m=>(m||0)+payout);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, restaurant:null}};
+    });
+    toast&&toast(`Sold for ${fmtMoney(payout)}`,YE);
+  };
+
+  if(restaurant.type==="invested"){
+    const yearsHeld=Math.max(0,currentYear-restaurant.yearInvested);
+    const totalEarned=yearsHeld*restaurant.dividend;
+    return(
+      <>
+        <div style={{background:"rgba(255,255,255,0.04)",border:`1.5px solid ${restaurant.color}55`,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+            <div style={{fontSize:36,width:50,textAlign:"center",flexShrink:0}}>{restaurant.icon}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:9,letterSpacing:2,color:GR,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Invested · Passive Income</div>
+              <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1}}>{restaurant.chainName}</div>
+            </div>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+            <div>
+              <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>ANNUAL DIVIDEND</div>
+              <div style={{fontSize:15,fontWeight:900,color:GR,lineHeight:1.1}}>{fmtMoney(restaurant.dividend)}</div>
+            </div>
+            <div>
+              <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>EARNED TO DATE</div>
+              <div style={{fontSize:15,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(totalEarned)}</div>
+            </div>
+          </div>
+        </div>
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",fontSize:11,color:"#888",lineHeight:1.5,marginBottom:12}}>
+          Dividends auto-deposit at the end of each season. No further actions needed — sit back and collect.
+        </div>
+        <button onClick={cashOut} style={{...ghostS,width:"100%",padding:"10px 0",fontSize:12}}>SELL STAKE · {fmtMoney(Math.round(restaurant.stake*0.75))}</button>
+      </>
+    );
+  }
+
+  // Own chain — show locations, expansion controls, cumulative payouts
+  const annualIncome=ownChainAnnualIncome(restaurant.locations);
+  const yearsRunning=Math.max(0,currentYear-restaurant.yearStarted);
+  const expandCost=ownChainExpansionCost(expandQty);
+  const failChance=ownChainExpansionFailChance(expandQty);
+  const canExpand=(money||0)>=expandCost;
+  const expand=()=>{
+    if(!canExpand) return;
+    setMoney(m=>(m||0)-expandCost);
+    const failed=Math.random()<failChance;
+    if(failed){
+      const loss=ownChainExpansionLoss(expandQty);
+      const newLocations=Math.max(1,restaurant.locations-loss);
+      setPlayer(p=>{
+        const purchases=ensurePurchases(p);
+        return {...p, purchases:{...purchases, restaurant:{
+          ...restaurant, locations:newLocations, failures:(restaurant.failures||0)+1,
+          totalInvested:(restaurant.totalInvested||0)+expandCost,
+        }}};
+      });
+      toast&&toast(`Expansion failed — lost ${loss} location${loss===1?"":"s"}`,RE);
+    } else {
+      setPlayer(p=>{
+        const purchases=ensurePurchases(p);
+        return {...p, purchases:{...purchases, restaurant:{
+          ...restaurant, locations:restaurant.locations+expandQty,
+          totalInvested:(restaurant.totalInvested||0)+expandCost,
+        }}};
+      });
+      toast&&toast(`Opened ${expandQty} new location${expandQty===1?"":"s"}!`,GR);
+    }
+    setExpandQty(1);
+  };
+  return(
+    <>
+      {/* Restaurant header card with logo + name */}
+      <div style={{background:"rgba(255,255,255,0.04)",border:`1.5px solid ${restaurant.color}55`,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
+          <div style={{width:56,height:56,borderRadius:12,background:`linear-gradient(135deg, ${restaurant.color}, ${restaurant.color}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 4px 18px ${restaurant.color}55`}}>🍔</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Your Chain · Year {yearsRunning+1}</div>
+            <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{restaurant.name}</div>
+          </div>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>LOCATIONS</div>
+            <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1}}>{restaurant.locations}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>ANNUAL</div>
+            <div style={{fontSize:16,fontWeight:900,color:GR,lineHeight:1.1}}>{fmtMoney(annualIncome)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>INVESTED</div>
+            <div style={{fontSize:16,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(restaurant.totalInvested||0)}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Expansion controls */}
+      <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Expand</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:11,color:"#aaa"}}>Add locations</div>
+          <div style={{fontSize:16,fontWeight:900,color:OR}}>+{expandQty}</div>
+        </div>
+        <div style={{display:"flex",gap:5,marginBottom:10}}>
+          {[1,2,3,4,5].map(n=>(
+            <button key={n} onClick={()=>setExpandQty(n)} style={{flex:1,padding:"8px 0",background:expandQty===n?OR:"rgba(255,255,255,0.06)",border:"none",borderRadius:6,color:expandQty===n?"#fff":"#888",cursor:"pointer",fontSize:13,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              {n}
+            </button>
+          ))}
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#aaa",marginBottom:4}}>
+          <span>Cost</span><span style={{color:canExpand?YE:RE,fontWeight:700}}>{fmtMoney(expandCost)}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,color:"#aaa",marginBottom:10}}>
+          <span>Failure chance</span><span style={{color:failChance>=0.30?RE:failChance>=0.15?OR:GR,fontWeight:700}}>{Math.round(failChance*100)}%</span>
+        </div>
+        {failChance>=0.30&&(
+          <div style={{fontSize:10,color:RE,fontStyle:"italic",marginBottom:8,padding:"5px 8px",background:"rgba(232,64,64,0.08)",borderRadius:6}}>⚠ Aggressive expansion — could lose {ownChainExpansionLoss(expandQty)} locations if it fails</div>
+        )}
+        <button onClick={expand} disabled={!canExpand} style={{...btnS,width:"100%",padding:10,fontSize:12,opacity:canExpand?1:0.45,cursor:canExpand?"pointer":"not-allowed"}}>
+          {canExpand?`OPEN ${expandQty} LOCATION${expandQty===1?"":"S"} →`:`NEED ${fmtMoney(expandCost-(money||0))} MORE`}
+        </button>
+      </div>
+
+      <button onClick={cashOut} style={{...ghostS,width:"100%",padding:"10px 0",fontSize:12}}>SELL CHAIN · {fmtMoney(restaurant.locations*4000000)}</button>
+    </>
+  );
+}
+
+// ─── MUSIC ALBUM SCREEN ────────────────────────────────────────────────────────
+// Configurator + status panel for the album venture. Internal mode flips
+// between "configure" (pre-recording) and "status" (recording or released).
+function AlbumScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}){
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed;
+  const album=player?.purchases?.album||null;
+  return(
+    <div>
+      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Ventures</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>MUSIC ALBUM</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{album?"Manage your record":"Drop a record · cross over to music"}</div>
+      </div>
+      {album
+        ? <AlbumStatusPanel album={album} currentYear={currentYear} setMoney={setMoney} setPlayer={setPlayer} toast={toast}/>
+        : <AlbumConfigurator money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} toast={toast}/>}
+    </div>
+  );
+}
+
+// Configurator — name, design, style, producers, features, cost preview, drop button.
+function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
+  const [name,setName]=useState("");
+  const [design,setDesign]=useState("gradient");
+  const [style,setStyle]=useState("hiphop");
+  const [color,setColor]=useState("#FA5400"); // accent color used by cover art
+  const [producers,setProducers]=useState([]); // ids
+  const [features,setFeatures]=useState([]);
+  const cost=albumTotalCost(producers,features);
+  const canAfford=(money||0)>=cost;
+  const ready=name.trim().length>=2&&producers.length>0&&canAfford;
+
+  const toggleProducer=(id)=>{
+    setProducers(prev=>{
+      if(prev.includes(id)) return prev.filter(p=>p!==id);
+      if(prev.length>=2) return prev; // cap at 2
+      return [...prev,id];
+    });
+  };
+  const toggleFeature=(id)=>{
+    setFeatures(prev=>{
+      if(prev.includes(id)) return prev.filter(p=>p!==id);
+      if(prev.length>=2) return prev;
+      return [...prev,id];
+    });
+  };
+  const COLOR_OPTIONS=["#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#14b8a6"];
+
+  const dropAlbum=()=>{
+    if(!ready) return;
+    setMoney(m=>(m||0)-cost);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, album:{
+        name:name.trim(), design, style, color,
+        producers:[...producers], features:[...features],
+        cost, yearStarted:currentYear,
+        status:"recording", payout:0,
+      }}};
+    });
+    toast&&toast(`${name.trim()} is recording!`,GR);
+  };
+
+  return(
+    <>
+      {/* Live cover preview */}
+      <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",marginBottom:14,background:"rgba(0,0,0,0.3)",borderRadius:10}}>
+        <AlbumCover name={name} design={design} style={style} color={color} size={96}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:10,color:"#888",letterSpacing:2,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>Live Preview</div>
+          <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{name.trim()||"Untitled"}</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:3}}>{ALBUM_STYLES.find(s=>s.id===style)?.name} · {ALBUM_DESIGNS.find(d=>d.id===design)?.name}</div>
+        </div>
+      </div>
+
+      {/* Album name */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Album Name</div>
+        <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. The Mike Mixtape" maxLength={32} style={{width:"100%",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1.5px solid ${name.trim().length>=2?OR+"66":"rgba(255,255,255,0.12)"}`,borderRadius:8,color:"#fff",fontSize:14,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}/>
+      </div>
+
+      {/* Style picker */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Style</div>
+        <div style={{display:"flex",gap:5}}>
+          {ALBUM_STYLES.map(s=>(
+            <button key={s.id} onClick={()=>setStyle(s.id)} style={{flex:1,padding:"10px 4px",background:style===s.id?`linear-gradient(135deg, ${OR} 0%, #c66520 100%)`:"rgba(255,255,255,0.06)",border:"none",borderRadius:7,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{fontSize:20,marginBottom:2}}>{s.icon}</div>
+              <div style={{fontSize:11,fontWeight:900,letterSpacing:1}}>{s.name}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Design picker */}
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Cover Design</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:5}}>
+          {ALBUM_DESIGNS.map(d=>(
+            <button key={d.id} onClick={()=>setDesign(d.id)} style={{padding:"7px 4px",background:design===d.id?OR:"rgba(255,255,255,0.06)",border:"none",borderRadius:6,color:design===d.id?"#fff":"#aaa",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:0.5}}>
+              {d.name}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Accent color */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Accent Color</div>
+        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+          {COLOR_OPTIONS.map(c=>(
+            <button key={c} onClick={()=>setColor(c)} style={{width:32,height:32,borderRadius:6,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Color ${c}`}/>
+          ))}
+        </div>
+      </div>
+
+      {/* Producers (up to 2) */}
+      <div style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase"}}>Producers</div>
+          <div style={{fontSize:10,color:"#888"}}>{producers.length}/2 · pick at least 1</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          {ALBUM_PRODUCERS.map(p=>{
+            const selected=producers.includes(p.id);
+            const fits=p.fits.includes(style);
+            return(
+              <button key={p.id} onClick={()=>toggleProducer(p.id)} style={{
+                display:"flex",alignItems:"center",gap:8,padding:"7px 10px",
+                background:selected?"rgba(232,135,58,0.15)":"rgba(255,255,255,0.04)",
+                border:`1px solid ${selected?OR+"88":"rgba(255,255,255,0.06)"}`,
+                borderRadius:6,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"
+              }}>
+                <div style={{flex:1,minWidth:0,fontSize:12,fontWeight:700}}>{p.name}{p.tier===1&&<span style={{fontSize:9,color:YE,marginLeft:6,letterSpacing:1}}>★ TIER 1</span>}</div>
+                {!fits&&<div style={{fontSize:9,color:RE,letterSpacing:0.5,fontWeight:700}}>OFF-STYLE</div>}
+                <div style={{fontSize:11,color:YE,fontWeight:700,minWidth:50,textAlign:"right"}}>{fmtMoney(p.cost)}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Features (up to 2) */}
+      <div style={{marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:6}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase"}}>Features</div>
+          <div style={{fontSize:10,color:"#888"}}>{features.length}/2 · optional</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:4}}>
+          {ALBUM_FEATURES.map(f=>{
+            const selected=features.includes(f.id);
+            const fits=f.fits.includes(style);
+            return(
+              <button key={f.id} onClick={()=>toggleFeature(f.id)} style={{
+                display:"flex",alignItems:"center",gap:8,padding:"7px 10px",
+                background:selected?"rgba(232,135,58,0.15)":"rgba(255,255,255,0.04)",
+                border:`1px solid ${selected?OR+"88":"rgba(255,255,255,0.06)"}`,
+                borderRadius:6,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"
+              }}>
+                <div style={{flex:1,minWidth:0,fontSize:12,fontWeight:700}}>{f.name}{f.tier===1&&<span style={{fontSize:9,color:YE,marginLeft:6,letterSpacing:1}}>★ TIER 1</span>}</div>
+                {!fits&&<div style={{fontSize:9,color:RE,letterSpacing:0.5,fontWeight:700}}>OFF-STYLE</div>}
+                <div style={{fontSize:11,color:YE,fontWeight:700,minWidth:50,textAlign:"right"}}>{fmtMoney(f.cost)}</div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Cost summary */}
+      <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:10,padding:"10px 12px",marginBottom:12}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+          <span style={{color:"#aaa"}}>Base recording + marketing</span>
+          <span style={{color:"#ddd"}}>{fmtMoney(ALBUM_BASE_COST)}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:3}}>
+          <span style={{color:"#aaa"}}>Producers ({producers.length})</span>
+          <span style={{color:"#ddd"}}>{fmtMoney(producers.reduce((s,id)=>s+(ALBUM_PRODUCER_BY_ID[id]?.cost||0),0))}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:11,marginBottom:6}}>
+          <span style={{color:"#aaa"}}>Features ({features.length})</span>
+          <span style={{color:"#ddd"}}>{fmtMoney(features.reduce((s,id)=>s+(ALBUM_FEATURE_BY_ID[id]?.cost||0),0))}</span>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",fontSize:13,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+          <span style={{color:"#fff",fontWeight:700}}>Total</span>
+          <span style={{color:canAfford?YE:RE,fontWeight:900,fontSize:17}}>{fmtMoney(cost)}</span>
+        </div>
+      </div>
+
+      <button onClick={dropAlbum} disabled={!ready} style={{...btnS,width:"100%",padding:14,fontSize:14,opacity:ready?1:0.45,cursor:ready?"pointer":"not-allowed"}}>
+        {name.trim().length<2?"NAME YOUR ALBUM"
+          :producers.length<1?"PICK AT LEAST ONE PRODUCER"
+          :!canAfford?`NEED ${fmtMoney(cost-(money||0))} MORE`
+          :`🎤 DROP THE ALBUM · ${fmtMoney(cost)}`}
+      </button>
+
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",fontSize:11,color:"#888",lineHeight:1.5,marginTop:10}}>
+        💡 The album drops at the end of next season. Off-style picks tank the roll. Tier 1 talent gives you a real shot at a classic.
+      </div>
+    </>
+  );
+}
+
+// Status panel — shows recording state or released outcome.
+function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, toast}){
+  const isReleased=album.status!=="recording";
+  const cashOutCollectorsItem=()=>{
+    // Even a flop has some residual value as a collector's item — return 20%
+    // of cost OR the assigned payout, whichever is larger.
+    const value=Math.max(Math.round(album.cost*0.20), album.payout||0);
+    setMoney(m=>(m||0)+value);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, album:null}};
+    });
+    toast&&toast(`Sold catalog rights for ${fmtMoney(value)}`,YE);
+  };
+  return(
+    <>
+      {/* Cover + headline status */}
+      <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:12,background:"rgba(255,255,255,0.04)",border:`1.5px solid ${album.color||OR}55`,borderRadius:12}}>
+        <AlbumCover name={album.name} design={album.design} style={album.style} color={album.color||OR} size={100}/>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>
+            {album.status==="recording"?"In Studio":
+             album.status==="classic"?"💎 Classic":
+             album.status==="hit"?"🔥 Hit":
+             album.status==="mid"?"📊 Mid-Tier":
+             "💔 Flop"}
+          </div>
+          <div style={{fontSize:17,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{album.name}</div>
+          <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{ALBUM_STYLES.find(s=>s.id===album.style)?.name} · Started {formatSeasonLabel(album.yearStarted).split(" ")[0]}</div>
+        </div>
+      </div>
+
+      {/* Recording state — just a "wait for offseason" notice */}
+      {album.status==="recording"&&(
+        <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:10,padding:"12px 14px",marginBottom:12,textAlign:"center"}}>
+          <div style={{fontSize:30,marginBottom:6}}>🎙️</div>
+          <div style={{fontSize:13,fontWeight:900,color:GO,marginBottom:4,letterSpacing:1}}>IN PRODUCTION</div>
+          <div style={{fontSize:11,color:"#aaa",lineHeight:1.5}}>
+            The album drops at the end of this season.<br/>
+            Sales reviews + payout posted at offseason.
+          </div>
+        </div>
+      )}
+
+      {/* Released state — outcome card with payout */}
+      {isReleased&&(
+        <div style={{background:album.status==="flop"?"rgba(232,64,64,0.08)":"rgba(0,220,100,0.08)",border:`1px solid ${album.status==="flop"?RE:GR}44`,borderRadius:10,padding:"12px 14px",marginBottom:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontSize:11,color:"#aaa",letterSpacing:1}}>Total revenue</span>
+            <span style={{fontSize:18,fontWeight:900,color:album.status==="flop"?RE:GR}}>{fmtMoney(album.payout||0)}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <span style={{fontSize:11,color:"#aaa",letterSpacing:1}}>Production cost</span>
+            <span style={{fontSize:13,color:"#ddd"}}>{fmtMoney(album.cost)}</span>
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+            <span style={{fontSize:12,color:"#fff",fontWeight:700}}>Net</span>
+            <span style={{fontSize:15,fontWeight:900,color:(album.payout||0)>=album.cost?GR:RE}}>{(album.payout||0)>=album.cost?"+":""}{fmtMoney((album.payout||0)-album.cost)}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Credits */}
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#888",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Credits</div>
+        <div style={{fontSize:11,color:"#aaa",marginBottom:4}}><span style={{color:"#666"}}>Produced by:</span> {album.producers.map(id=>ALBUM_PRODUCER_BY_ID[id]?.name).filter(Boolean).join(", ")||"—"}</div>
+        <div style={{fontSize:11,color:"#aaa"}}><span style={{color:"#666"}}>Features:</span> {album.features.length>0?album.features.map(id=>ALBUM_FEATURE_BY_ID[id]?.name).filter(Boolean).join(", "):"None"}</div>
+      </div>
+
+      {isReleased&&(
+        <button onClick={cashOutCollectorsItem} style={{...ghostS,width:"100%",padding:"10px 0",fontSize:12}}>
+          SELL CATALOG · {fmtMoney(Math.max(Math.round(album.cost*0.20), album.payout||0))}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -6731,7 +8015,7 @@ export default function App(){
     ),
     nbaPlay:(
       <MenuFrame sub={`${nbaTeam?getTeamIdentity(nbaTeam,NBA_START_YEAR+nbaSeasons.length).name:"Team"} · Season`} title="GAMETIME">
-        <NbaPlayScreen player={player} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} go={go} toast={toast}/>
+        <NbaPlayScreen player={player} setPlayer={setPlayer} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaSkills:(
@@ -6755,8 +8039,23 @@ export default function App(){
       </MenuFrame>
     ),
     nbaSpend:(
-      <MenuFrame sub="Bank Account" title="SPEND">
-        <NbaSpendScreen money={money} player={player} nbaSeasons={nbaSeasons} go={go}/>
+      <MenuFrame sub="Bank & Shop" title="SPEND">
+        <NbaSpendScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaCall:(
+      <MenuFrame sub="Phone" title="CONTACTS">
+        <CallPickerScreen player={player} go={go}/>
+      </MenuFrame>
+    ),
+    nbaRestaurant:(
+      <MenuFrame sub="Ventures" title="RESTAURANTS">
+        <RestaurantScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaAlbum:(
+      <MenuFrame sub="Ventures" title="ALBUM">
+        <AlbumScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaStats:(
