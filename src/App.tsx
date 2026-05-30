@@ -1139,6 +1139,43 @@ const GOODEN_PIC_DATA_URL = "/gooden.webp";
 // Override this constant if your file is hosted elsewhere.
 const AC_CARR_DATA_URL = "/ac-carr.webp";
 const KERRY_KITTLES_URL = "/kerry-kittles.webp"; // Cousin Kerry — welcome-to-the-league cameo
+
+// ─── DID YOU KNOW FACTS ────────────────────────────────────────────────────────
+// Shown on a loading screen between offseasons. Each fact has one image except
+// the last one which has three (Dahntay Jones, Damon Jones, Rashad McCants).
+// The screen cycles through the facts in order using player.didYouKnowIdx so
+// the user never gets the same fact back-to-back.
+const DID_YOU_KNOW_FACTS = [
+  {
+    text:"Joel Przybilla had 26 rebounds against the Clippers in March of 2008.",
+    images:["/pryzbilla.webp"],
+  },
+  {
+    text:"Hakim Warrick is 45th all-time in free throw attempts per 100 possessions.",
+    images:["/warrick.webp"],
+  },
+  {
+    text:"Ira Newble is not in the NBA Hall of Fame.",
+    images:["/newble.webp"],
+  },
+  {
+    text:"Raja Bell placed top 15 in All-Defense voting shares from 2005 to 2009.",
+    images:["/bell.webp"],
+  },
+  {
+    text:"Drew Gooden was 17th in 2-pt FG attempts per 100 possessions in 2011-12 at 21 per 100.",
+    images:["/gooden.webp"],
+  },
+  {
+    text:"Tony Battie had 8 blocks as a member of the Nuggets against the Celtics in 1998, then two years later had 4 blocks as a member of the Celtics against the Nuggets in 2000.",
+    images:["/battie.webp"],
+  },
+  {
+    text:"Dahntay Jones and Damon Jones are not related to Rashad McCants or each other.",
+    images:["/dahntay.webp","/damon.webp","/rashad.webp"],
+    captions:["Dahntay Jones","Damon Jones","Rashad McCants"],
+  },
+];
 const MUSIC_SRC = "/soundtrack.mp3";
 // Silent 1×1 MP4 with a (silent) audio track — used to flip iOS Safari out of
 // silent-switch-mute mode so the actual music plays even when the ringer is off.
@@ -4666,17 +4703,11 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
           setNbaGamesPlayed(0);
           setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
           setPlayoffsDone(false);
-          // Did this season exhaust the contract? After the push above,
-          // seasonsPlayed is going to be (seasonsPlayed + 1) on next render.
-          // That means currentYear advances by 1 too. Check whether the
-          // upcoming year would put us past the contract's last year.
-          const nextYear=currentYear+1;
-          const expired=!player.contract || contractRemainingYears(player.contract,nextYear)===0;
-          if(expired){
-            go("freeAgency");
-          } else {
-            go("leagueHub");
-          }
+          // Flag a pending "Did You Know" interlude so the next leagueHub
+          // navigation diverts there first. We stamp it on the player so it
+          // survives saves/reloads. The interceptor in go() picks it up.
+          setPlayer(p=>({...p, didYouKnowPending:true}));
+          go("leagueHub");
         }} style={{...btnS,padding:"12px 32px"}}>NEXT SEASON →</button>
       </div>
     );
@@ -6142,6 +6173,11 @@ const SHOE_DESIGN_ICONS = {
 // for show their OVR requirement instead. Tapping a qualifying brand signs you.
 function ShoeDealPicker({ovr, currentBrandId, shoeContract, currentYear, onClose, onSign}){
   const [picked,setPicked]=useState(null);
+  // Signature confirmation step — when the user taps SIGN WITH X, we surface
+  // a signature modal in the same picker. They draw their signature, then
+  // CONFIRM commits the deal via onSign.
+  const [pendingOffer,setPendingOffer]=useState(null);
+  const [hasInk,setHasInk]=useState(false);
   const remainingYears=shoeContract?shoeDealRemainingYears(shoeContract,currentYear):0;
   const locked=remainingYears>0;
   return(
@@ -6203,11 +6239,53 @@ function ShoeDealPicker({ovr, currentBrandId, shoeContract, currentYear, onClose
             if(!picked) return;
             const brand=PRO_SHOE_BRAND_BY_ID[picked];
             const offer=buildShoeOffer(brand,ovr);
-            if(offer) onSign(offer);
+            if(offer){
+              // Open signature step rather than signing directly
+              setPendingOffer(offer);
+              setHasInk(false);
+            }
           }} disabled={!picked} style={{flex:2,padding:"9px 0",background:picked?btnS.background:"rgba(255,255,255,0.06)",border:"none",borderRadius:7,color:picked?"#080c10":"#666",cursor:picked?"pointer":"not-allowed",fontSize:12,fontWeight:900,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
             {picked?`SIGN WITH ${PRO_SHOE_BRAND_BY_ID[picked].name.toUpperCase()}`:"SELECT A BRAND"}
           </button>
         </div>
+
+        {/* Signature confirmation modal — nested inside the picker overlay
+            so the picker still renders behind it. Drawing + tapping CONFIRM
+            actually commits the deal. */}
+        {pendingOffer&&(()=>{
+          const brand=PRO_SHOE_BRAND_BY_ID[pendingOffer.brandId];
+          // White brands need dark text on the contrast accents
+          const onLight=brand.color==="#FFFFFF";
+          return(
+            <div onClick={()=>setPendingOffer(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.92)",zIndex:1100,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:20,maxWidth:380,width:"100%",border:`1px solid ${brand.color}55`}}>
+                <div style={{textAlign:"center",marginBottom:14}}>
+                  <div style={{fontSize:9,letterSpacing:3,color:GO,textTransform:"uppercase",marginBottom:4}}>Endorsement Contract</div>
+                  <div style={{fontSize:24,fontWeight:900,color:onLight?"#fff":brand.color,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase",textShadow:brand.color==="#000000"?"0 0 6px rgba(255,255,255,0.5)":"none"}}>{brand.name}</div>
+                  <div style={{fontSize:11,color:"#aaa",marginTop:4}}>
+                    {fmtMoney(pendingOffer.bonus)} signing bonus{pendingOffer.qualifiesForSignature?" · ★ Signature shoe":""}
+                  </div>
+                </div>
+                <div style={{fontSize:11,color:"#ccc",lineHeight:1.5,marginBottom:10,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,border:"1px dashed rgba(255,255,255,0.1)"}}>
+                  I, the undersigned, hereby agree to wear <strong style={{color:"#fff"}}>{brand.name}</strong> footwear on the court and accept the terms of this {SHOE_DEAL_YEARS}-year endorsement contract.
+                </div>
+                <SignaturePad onChange={setHasInk}/>
+                <div style={{display:"flex",gap:8,marginTop:14}}>
+                  <button onClick={()=>setPendingOffer(null)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                    CANCEL
+                  </button>
+                  <button onClick={()=>{
+                    const o=pendingOffer;
+                    setPendingOffer(null);
+                    onSign(o);
+                  }} disabled={!hasInk} style={{flex:2,padding:"10px 0",background:hasInk?GO:"rgba(255,215,0,0.2)",border:"none",borderRadius:8,color:hasInk?"#000":"#666",cursor:hasInk?"pointer":"not-allowed",fontSize:13,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                    CONFIRM ✓
+                  </button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
       </div>
     </div>
   );
@@ -6818,6 +6896,10 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
   // the random appreciation values mid-decision.
   const [offers,setOffers]=useState(()=>buildFAOffers(player,nbaTeam,currentYear,seasonsPlayed,age));
   const [selected,setSelected]=useState(null);
+  // Pending offer awaiting signature confirmation — when set, the signature
+  // modal renders. Mirrors the rookie-deal signing UX.
+  const [pendingOffer,setPendingOffer]=useState(null);
+  const [hasInk,setHasInk]=useState(false);
 
   const signOffer=(offer)=>{
     setPlayer(p=>({...p,contract:offer}));
@@ -6916,10 +6998,46 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
 
       <button onClick={()=>{
         if(selected===null){toast&&toast("Tap an offer to select it first","#888");return;}
-        signOffer(offers[selected]);
+        // Open the signature modal — confirming there triggers signOffer.
+        setPendingOffer(offers[selected]);
+        setHasInk(false);
       }} disabled={selected===null} style={{...btnS,padding:14,marginTop:6,fontSize:15,opacity:selected!==null?1:0.45,cursor:selected!==null?"pointer":"not-allowed"}}>
         {selected!==null?`SIGN WITH ${getTeamIdentity(offers[selected].team,currentYear).name.toUpperCase()} →`:"SELECT AN OFFER"}
       </button>
+
+      {/* Contract signature modal — mirrors the rookie deal flow visually. */}
+      {pendingOffer&&(()=>{
+        const teamId=getTeamIdentity(pendingOffer.team,currentYear);
+        return(
+          <div onClick={()=>setPendingOffer(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:20,maxWidth:380,width:"100%",border:`1px solid ${teamId.p}55`}}>
+              <div style={{textAlign:"center",marginBottom:14}}>
+                <div style={{fontSize:9,letterSpacing:3,color:GO,textTransform:"uppercase",marginBottom:4}}>Player Contract</div>
+                <div style={{fontSize:22,fontWeight:900,color:"#fff",letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif",textTransform:"uppercase"}}>{teamId.name}</div>
+                <div style={{fontSize:11,color:"#aaa",marginTop:4}}>
+                  {pendingOffer.years}yr · {fmtMoney(pendingOffer.salaries.reduce((a,b)=>a+b,0))} total · {fmtMoney(pendingOffer.signingBonus)} bonus
+                </div>
+              </div>
+              <div style={{fontSize:11,color:"#ccc",lineHeight:1.5,marginBottom:10,padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,border:"1px dashed rgba(255,255,255,0.1)"}}>
+                I, the undersigned, hereby agree to play for <strong style={{color:"#fff"}}>{teamId.name}</strong> and accept the full terms of this {pendingOffer.years}-year contract.
+              </div>
+              <SignaturePad onChange={setHasInk}/>
+              <div style={{display:"flex",gap:8,marginTop:14}}>
+                <button onClick={()=>setPendingOffer(null)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  CANCEL
+                </button>
+                <button onClick={()=>{
+                  const o=pendingOffer;
+                  setPendingOffer(null);
+                  signOffer(o);
+                }} disabled={!hasInk} style={{flex:2,padding:"10px 0",background:hasInk?GO:"rgba(255,215,0,0.2)",border:"none",borderRadius:8,color:hasInk?"#000":"#666",cursor:hasInk?"pointer":"not-allowed",fontSize:13,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  CONFIRM ✓
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -7038,6 +7156,64 @@ function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGam
       </div>
 
       <style>{`@keyframes awardReveal{0%{opacity:0;transform:translateY(-10px) scale(0.95)}60%{transform:translateY(2px) scale(1.02)}100%{opacity:1;transform:translateY(0) scale(1)}}`}</style>
+    </div>
+  );
+}
+
+// ─── DID YOU KNOW (LOADING SCREEN) ─────────────────────────────────────────────
+// Shown between offseasons. Picks the next fact from DID_YOU_KNOW_FACTS using
+// player.didYouKnowIdx so the same fact never appears twice in a row. The
+// player advances by tapping the dismiss button — no auto-dismiss timer.
+function DidYouKnowScreen({player, setPlayer, go}){
+  // Pick the fact for THIS visit. The index was already incremented by the
+  // offseason transition that routed us here (or starts at 0 the first time).
+  // We use a ref so React strict-mode double-mounting doesn't cause skips.
+  const idx=(player?.didYouKnowIdx||0)%DID_YOU_KNOW_FACTS.length;
+  const fact=DID_YOU_KNOW_FACTS[idx];
+  const isMultiImage=fact.images.length>1;
+  const dismiss=()=>{
+    // Advance the index for next time AND clear the pending flag so the
+    // go() gate doesn't re-trap us on the way to leagueHub. Wraps via
+    // modulo on the next read so we don't need to clamp here.
+    setPlayer(p=>({...p,
+      didYouKnowIdx:((p?.didYouKnowIdx||0)+1),
+      didYouKnowPending:false,
+    }));
+    go("leagueHub");
+  };
+  return(
+    <div style={{padding:"10px 0 20px",textAlign:"center"}}>
+      {/* Image(s) — single circular portrait OR a triptych for the last fact */}
+      {!isMultiImage&&(
+        <div style={{display:"flex",justifyContent:"center",marginBottom:18}}>
+          <div style={{padding:4,background:`linear-gradient(135deg, ${OR}, #c66520)`,borderRadius:"50%",boxShadow:`0 4px 30px ${OR}55`}}>
+            <img src={fact.images[0]} alt="" style={{display:"block",width:160,height:160,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"#2a1518"}}/>
+          </div>
+        </div>
+      )}
+      {isMultiImage&&(
+        <div style={{display:"flex",justifyContent:"center",gap:10,marginBottom:18,flexWrap:"wrap",padding:"0 4px"}}>
+          {fact.images.map((src,i)=>(
+            <div key={i} style={{textAlign:"center",flexShrink:0}}>
+              <div style={{padding:3,background:`linear-gradient(135deg, ${OR}, #c66520)`,borderRadius:"50%",boxShadow:`0 3px 18px ${OR}44`,marginBottom:6}}>
+                <img src={src} alt="" style={{display:"block",width:90,height:90,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"#2a1518"}}/>
+              </div>
+              {fact.captions&&fact.captions[i]&&(
+                <div style={{fontSize:10,color:"#aaa",fontWeight:700,letterSpacing:0.5,fontFamily:"'Barlow Condensed',sans-serif"}}>{fact.captions[i]}</div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* The fact itself */}
+      <div style={{padding:"0 8px",marginBottom:24}}>
+        <div style={{fontSize:15,color:"#f0ede8",lineHeight:1.55,fontWeight:600}}>{fact.text}</div>
+      </div>
+
+      <button onClick={dismiss} style={{...btnS,width:"100%",padding:"14px 14px",fontSize:12,letterSpacing:1.5,lineHeight:1.3}}>
+        OH, YEAH I GUESS THAT'S PRETTY COOL
+      </button>
     </div>
   );
 }
@@ -7851,6 +8027,14 @@ export default function App(){
   // resumed). Also intercepts when the player has an expired contract — they
   // need to handle free agency before going back to the hub.
   const go=(s)=>{
+    // Did You Know gate: if a season just finished, the offseason transition
+    // sets player.didYouKnowPending so the next leagueHub-bound navigation
+    // diverts to the trivia loading screen first. The DidYouKnowScreen
+    // clears the flag on dismiss and continues to the hub.
+    if(s==="leagueHub"&&player?.didYouKnowPending){
+      setScreen("didYouKnow");
+      return;
+    }
     if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.metKerry&&!testingMode){
       setScreen("kerryWelcome");
       return;
@@ -8950,6 +9134,11 @@ export default function App(){
     nbaAwards:(
       <MenuFrame sub="Hardware" title="SEASON AWARDS">
         <NbaAwardsScreen player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} nbaSeasonTotals={nbaSeasonTotals} nbaGamesPlayed={nbaGamesPlayed} nbaTeam={nbaTeam} playoffsDone={playoffsDone} go={go}/>
+      </MenuFrame>
+    ),
+    didYouKnow:(
+      <MenuFrame sub="NBA Trivia" title="DID YOU KNOW?">
+        <DidYouKnowScreen player={player} setPlayer={setPlayer} go={go}/>
       </MenuFrame>
     ),
     nbaStats:(
