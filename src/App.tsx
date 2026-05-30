@@ -752,10 +752,11 @@ function getDefaultAwardWinner(awardId, year){
 function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr){
   const skills=player?.skills||{};
   const out={};
-  // MVP — needs to be elite scorer with elite OVR. Score combines PPG +
-  // efficiency proxy + OVR. The default real-world MVP has a high score, so
-  // the player must really be elite to take it.
-  const mvpEligible=ovr>=88 && currentSeasonStats.ppg>=25;
+  // MVP — elite OVR + elite scoring + meaningful impact beyond just buckets.
+  // Threshold raised from 88→90 OVR and 25→27 PPG since 90 OVR was sweeping
+  // MVP too easily. Real MVPs are typically 95+ OVR-equivalent superstars
+  // with 28+ PPG AND something else (assists, triple-double pace, etc).
+  const mvpEligible=ovr>=90 && currentSeasonStats.ppg>=27;
   out.mvp={
     eligible:mvpEligible,
     score: currentSeasonStats.ppg*2 + ovr + currentSeasonStats.apg + currentSeasonStats.rpg*0.5,
@@ -776,11 +777,12 @@ function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, ro
     score: ppgJump*5 + currentSeasonStats.ppg,
   };
   // DPOY — defense skills. Avg of perim + post defense, with rebounding
-  // and steals/blocks proxy via post defense.
+  // and steals/blocks proxy via post defense. Threshold raised 86→90 so only
+  // true defensive specialists clear; baseline also bumped to keep it rare.
   const perimD=skills.perimDefense||50;
   const postD=skills.postDefense||50;
   const defAvg=(perimD+postD)/2;
-  const dpoyEligible=defAvg>=86;
+  const dpoyEligible=defAvg>=90;
   out.dpoy={
     eligible:dpoyEligible,
     score: defAvg + (skills.rebounding||50)*0.3 + ovr*0.2,
@@ -789,14 +791,15 @@ function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, ro
 }
 
 // Default real-world winner gets a baseline score so the player has to
-// actually beat them. Roughly: average MVP-caliber score is ~150, average
-// 6MOY ~75, etc. We add a small random jitter so it's not deterministic.
+// actually beat them. Calibrated so a 90 OVR scoring 27/6/5 (~152 score)
+// does NOT clear MVP; you need either elite OVR (95+) or elite stat lines
+// (Westbrook-triple-double tier) to take the trophy.
 function defaultWinnerScore(awardId){
   switch(awardId){
-    case "mvp":  return 150 + (Math.random()*10-5);
-    case "6moy": return 70  + (Math.random()*8-4);
-    case "mip":  return 50  + (Math.random()*8-4);
-    case "dpoy": return 95  + (Math.random()*6-3);
+    case "mvp":  return 170 + (Math.random()*16-8); // range 162-178
+    case "6moy": return 80  + (Math.random()*10-5); // range 75-85
+    case "mip":  return 55  + (Math.random()*10-5); // range 50-60
+    case "dpoy": return 130 + (Math.random()*10-5); // range 125-135
     default: return 100;
   }
 }
@@ -7043,10 +7046,9 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
 }
 
 // ─── SEASON AWARDS SCREEN ──────────────────────────────────────────────────────
-// Ceremonial reveal of MVP, 6MOY, MIP, DPOY between regular season and
-// playoffs. Each award reveals on tap with a brief ceremony. After all 4 are
-// shown, a CONTINUE button advances to playoffs or offseason as appropriate.
-// Player wins stored to player.awards = [{year, type}, ...].
+// All 4 awards revealed at once — MVP, 6MOY, MIP, DPOY — in a compact 2x2
+// grid that fits on screen without scrolling. Continue button advances to
+// playoffs or offseason as appropriate. Player wins stored to player.awards.
 function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGamesPlayed, nbaTeam, playoffsDone, go}){
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
@@ -7066,13 +7068,11 @@ function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGam
   // Generate winners ONCE per mount — memoize via useState so it doesn't
   // re-randomize on every render. Use a lazy initializer.
   const [results]=useState(()=>pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear));
-  // Reveal index — 0 means none revealed yet, 4 means all revealed.
-  const [revealedIdx, setRevealedIdx]=useState(0);
-  // Whether we've finalized the saving of awards (avoid double-save on re-renders)
+  // Persist player wins + stamp this year as awards-shown on mount. Guarded
+  // by a ref so React strict-mode double-mount doesn't double-save.
   const savedRef=useRef(false);
-  // Once all 4 are revealed, persist player wins + stamp this year as awards-shown.
   useEffect(()=>{
-    if(revealedIdx<results.length||savedRef.current) return;
+    if(savedRef.current) return;
     savedRef.current=true;
     const wins=results.filter(r=>r.winner.isPlayer).map(r=>({year:currentYear, type:r.awardId}));
     setPlayer(p=>({
@@ -7080,11 +7080,8 @@ function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGam
       awards:[...((p?.awards)||[]), ...wins],
       awardsShownYear:currentYear,
     }));
-  },[revealedIdx, results, setPlayer, currentYear]);
+  },[results, setPlayer, currentYear]);
 
-  const revealNext=()=>{
-    setRevealedIdx(i=>Math.min(results.length, i+1));
-  };
   const continueGame=()=>{
     // Determine where to go based on playoff state
     const season=getNbaSeasonData(currentYear);
@@ -7095,67 +7092,56 @@ function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGam
       go("leagueHub"); // missed playoffs — back to hub for offseason
     }
   };
-  // Current award being revealed (the next one to flip)
-  const currentReveal=revealedIdx<results.length?results[revealedIdx]:null;
+  const wonCount=results.filter(r=>r.winner.isPlayer).length;
   return(
     <div>
-      <div style={{textAlign:"center",marginBottom:14}}>
+      <div style={{textAlign:"center",marginBottom:12}}>
         <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:4,textTransform:"uppercase",fontWeight:700}}>🏆 End of Regular Season</div>
-        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SEASON AWARDS</div>
-        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{formatSeasonLabel(currentYear)} · {revealedIdx}/{results.length} revealed</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>SEASON AWARDS</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:3}}>{formatSeasonLabel(currentYear)}</div>
       </div>
 
-      {/* Revealed awards stack — newest at the bottom */}
-      {results.slice(0,revealedIdx).map((r,i)=>{
-        const award=AWARD_TYPE_BY_ID[r.awardId];
-        const isPlayer=r.winner.isPlayer;
-        return(
-          <div key={r.awardId} style={{
-            background:isPlayer?`linear-gradient(135deg, ${award.color}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",
-            border:`1.5px solid ${isPlayer?award.color+"99":award.color+"33"}`,
-            borderRadius:12,padding:"12px 14px",marginBottom:8,
-            animation:"awardReveal 0.5s ease-out"
-          }}>
-            <div style={{display:"flex",alignItems:"center",gap:12}}>
-              <div style={{fontSize:34,width:50,textAlign:"center",flexShrink:0,filter:`drop-shadow(0 2px 6px ${award.color}88)`}}>{award.icon}</div>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:9,letterSpacing:2,color:award.color,fontWeight:700,textTransform:"uppercase",marginBottom:2}}>{award.short}</div>
-                <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.winner.name}</div>
-                <div style={{fontSize:10,color:"#aaa",marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.winner.team}</div>
-              </div>
+      {/* All four awards in a compact 2x2 grid — no reveal mechanic */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:12}}>
+        {results.map((r,i)=>{
+          const award=AWARD_TYPE_BY_ID[r.awardId];
+          const isPlayer=r.winner.isPlayer;
+          return(
+            <div key={r.awardId} style={{
+              background:isPlayer?`linear-gradient(135deg, ${award.color}33 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",
+              border:`1.5px solid ${isPlayer?award.color+"99":award.color+"33"}`,
+              borderRadius:10,padding:"10px 10px",
+              animation:`awardReveal 0.45s ease-out ${i*0.08}s both`,
+              position:"relative",
+            }}>
               {isPlayer&&(
-                <div style={{fontSize:10,color:award.color,fontWeight:900,letterSpacing:1.5,padding:"4px 8px",background:`${award.color}22`,borderRadius:5,whiteSpace:"nowrap"}}>★ YOU</div>
+                <div style={{position:"absolute",top:-7,right:6,fontSize:9,color:"#080c10",fontWeight:900,letterSpacing:1.2,padding:"2px 7px",background:award.color,borderRadius:4,whiteSpace:"nowrap",boxShadow:`0 1px 4px ${award.color}88`}}>★ YOU</div>
               )}
-            </div>
-          </div>
-        );
-      })}
-
-      {/* Reveal-next or continue button */}
-      <div style={{marginTop:14}}>
-        {currentReveal?(
-          <button onClick={revealNext} style={{...btnS,width:"100%",padding:"16px 18px",fontSize:14,letterSpacing:2}}>
-            🎬 REVEAL {AWARD_TYPE_BY_ID[currentReveal.awardId].short}
-          </button>
-        ):(
-          <>
-            {results.some(r=>r.winner.isPlayer)&&(
-              <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.3) 100%)`,border:`1.5px solid ${GO}88`,borderRadius:12,padding:"12px 14px",marginBottom:10,textAlign:"center"}}>
-                <div style={{fontSize:28,marginBottom:4}}>👑</div>
-                <div style={{fontSize:13,fontWeight:900,color:GO,marginBottom:3,letterSpacing:1}}>
-                  YOU WON {results.filter(r=>r.winner.isPlayer).length} AWARD{results.filter(r=>r.winner.isPlayer).length===1?"":"S"}
-                </div>
-                <div style={{fontSize:11,color:"#ddd",lineHeight:1.5}}>Accolades saved to your career stats.</div>
+              <div style={{display:"flex",flexDirection:"column",alignItems:"center",textAlign:"center",gap:2}}>
+                <div style={{fontSize:30,filter:`drop-shadow(0 2px 6px ${award.color}88)`,marginBottom:2}}>{award.icon}</div>
+                <div style={{fontSize:9,letterSpacing:1.5,color:award.color,fontWeight:700,textTransform:"uppercase"}}>{award.short}</div>
+                <div style={{fontSize:12,fontWeight:900,color:"#fff",lineHeight:1.15,marginTop:3,wordBreak:"break-word"}}>{r.winner.name}</div>
+                <div style={{fontSize:9,color:"#888",marginTop:1,lineHeight:1.2,wordBreak:"break-word"}}>{r.winner.team}</div>
               </div>
-            )}
-            <button onClick={continueGame} style={{...btnS,width:"100%",padding:"14px 18px",fontSize:14,letterSpacing:2}}>
-              CONTINUE →
-            </button>
-          </>
-        )}
+            </div>
+          );
+        })}
       </div>
 
-      <style>{`@keyframes awardReveal{0%{opacity:0;transform:translateY(-10px) scale(0.95)}60%{transform:translateY(2px) scale(1.02)}100%{opacity:1;transform:translateY(0) scale(1)}}`}</style>
+      {/* Player celebration if they won anything */}
+      {wonCount>0&&(
+        <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.3) 100%)`,border:`1.5px solid ${GO}88`,borderRadius:10,padding:"10px 14px",marginBottom:10,textAlign:"center"}}>
+          <div style={{fontSize:13,fontWeight:900,color:GO,letterSpacing:1}}>
+            👑 YOU WON {wonCount} AWARD{wonCount===1?"":"S"} — saved to career stats.
+          </div>
+        </div>
+      )}
+
+      <button onClick={continueGame} style={{...btnS,width:"100%",padding:"14px 18px",fontSize:14,letterSpacing:2}}>
+        CONTINUE →
+      </button>
+
+      <style>{`@keyframes awardReveal{0%{opacity:0;transform:translateY(-8px) scale(0.92)}60%{transform:translateY(2px) scale(1.02)}100%{opacity:1;transform:translateY(0) scale(1)}}`}</style>
     </div>
   );
 }
@@ -7172,14 +7158,15 @@ function DidYouKnowScreen({player, setPlayer, go}){
   const fact=DID_YOU_KNOW_FACTS[idx];
   const isMultiImage=fact.images.length>1;
   const dismiss=()=>{
-    // Advance the index for next time AND clear the pending flag so the
-    // go() gate doesn't re-trap us on the way to leagueHub. Wraps via
-    // modulo on the next read so we don't need to clamp here.
+    // Advance the index for next time AND clear the pending flag so future
+    // navigations (after setPlayer flushes) don't re-trigger the gate. Pass
+    // bypassTrivia=true to go() so THIS leagueHub trip doesn't get diverted
+    // back to didYouKnow from the still-stale closure read of player.
     setPlayer(p=>({...p,
       didYouKnowIdx:((p?.didYouKnowIdx||0)+1),
       didYouKnowPending:false,
     }));
-    go("leagueHub");
+    go("leagueHub",{bypassTrivia:true});
   };
   return(
     <div style={{padding:"10px 0 20px",textAlign:"center"}}>
@@ -7488,6 +7475,14 @@ export default function App(){
       // should trigger it.
       if(migrated.metKerry===undefined&&data.nbaTeam){
         migrated.metKerry=true;
+      }
+      // Defensive: clear a stuck didYouKnowPending flag if the player isn't
+      // actually mid-offseason. Earlier builds could leave it set in some
+      // races. The flag should only persist between an offseason transition
+      // and the next leagueHub navigation — if the save was taken mid-season
+      // (games played in current year) it shouldn't be set.
+      if(migrated.didYouKnowPending&&(data.nbaGamesPlayed||0)>0){
+        migrated.didYouKnowPending=false;
       }
       setPlayer(migrated);
     }
@@ -8026,12 +8021,14 @@ export default function App(){
   // Cousin Kerry cameo fires (even if a player closed the tab mid-cameo and
   // resumed). Also intercepts when the player has an expired contract — they
   // need to handle free agency before going back to the hub.
-  const go=(s)=>{
+  const go=(s,opts)=>{
+    opts=opts||{};
     // Did You Know gate: if a season just finished, the offseason transition
     // sets player.didYouKnowPending so the next leagueHub-bound navigation
-    // diverts to the trivia loading screen first. The DidYouKnowScreen
-    // clears the flag on dismiss and continues to the hub.
-    if(s==="leagueHub"&&player?.didYouKnowPending){
+    // diverts to the trivia loading screen first. The dismiss handler passes
+    // opts.bypassTrivia=true so it can complete the trip without re-triggering
+    // the gate before its setPlayer({didYouKnowPending:false}) has flushed.
+    if(s==="leagueHub"&&player?.didYouKnowPending&&!opts.bypassTrivia){
       setScreen("didYouKnow");
       return;
     }
