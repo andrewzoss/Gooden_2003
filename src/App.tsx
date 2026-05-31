@@ -4706,11 +4706,10 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
           setNbaGamesPlayed(0);
           setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
           setPlayoffsDone(false);
-          // Flag a pending "Did You Know" interlude so the next leagueHub
-          // navigation diverts there first. We stamp it on the player so it
-          // survives saves/reloads. The interceptor in go() picks it up.
-          setPlayer(p=>({...p, didYouKnowPending:true}));
-          go("leagueHub");
+          // Route directly to the trivia loading screen — go() has no
+          // interceptor for "didYouKnow" so this is unconditional. From there,
+          // dismiss returns to leagueHub (FA gate handles expired contracts).
+          go("didYouKnow");
         }} style={{...btnS,padding:"12px 32px"}}>NEXT SEASON →</button>
       </div>
     );
@@ -7158,28 +7157,48 @@ function DidYouKnowScreen({player, setPlayer, go}){
   const fact=DID_YOU_KNOW_FACTS[idx];
   const isMultiImage=fact.images.length>1;
   const dismiss=()=>{
-    // Advance the index for next time AND clear the pending flag so future
-    // navigations (after setPlayer flushes) don't re-trigger the gate. Pass
-    // bypassTrivia=true to go() so THIS leagueHub trip doesn't get diverted
-    // back to didYouKnow from the still-stale closure read of player.
-    setPlayer(p=>({...p,
-      didYouKnowIdx:((p?.didYouKnowIdx||0)+1),
-      didYouKnowPending:false,
-    }));
-    go("leagueHub",{bypassTrivia:true});
+    // Advance the rotation index for next visit. The flag-clearing dance
+    // is no longer needed — go() has no interceptor for didYouKnow, so we
+    // can navigate to leagueHub cleanly. FA gate there handles expired deals.
+    setPlayer(p=>({...p, didYouKnowIdx:((p?.didYouKnowIdx||0)+1)}));
+    go("leagueHub");
   };
   return(
     <div style={{padding:"10px 0 20px",textAlign:"center"}}>
+      {/* Animated "Did You Know?" heading — each letter cascades in with a
+          bounce + glow. Spaces use non-breaking space so flex doesn't collapse
+          them. The "?" gets its own delayed pop for emphasis. */}
+      <div style={{marginBottom:20,position:"relative",lineHeight:1.05}}>
+        {(()=>{
+          const heading="Did You Know?";
+          // Map to spans with staggered animation delays. 60ms between letters
+          // gives a nice "ticker" feel without dragging.
+          return heading.split("").map((ch,i)=>(
+            <span key={i} style={{
+              display:"inline-block",
+              fontSize:34,
+              fontWeight:900,
+              color:ch==="?"?GO:"#fff",
+              fontFamily:"'Barlow Condensed',sans-serif",
+              letterSpacing:0.5,
+              whiteSpace:"pre",
+              textShadow:ch==="?"?`0 0 18px ${GO}88`:"0 2px 12px rgba(0,0,0,0.5)",
+              animation:`dykLetter 0.55s cubic-bezier(0.34, 1.56, 0.64, 1) ${i*0.06}s both`,
+            }}>{ch}</span>
+          ));
+        })()}
+      </div>
+
       {/* Image(s) — single circular portrait OR a triptych for the last fact */}
       {!isMultiImage&&(
-        <div style={{display:"flex",justifyContent:"center",marginBottom:18}}>
+        <div style={{display:"flex",justifyContent:"center",marginBottom:18,animation:"dykFadeIn 0.5s ease-out 0.6s both"}}>
           <div style={{padding:4,background:`linear-gradient(135deg, ${OR}, #c66520)`,borderRadius:"50%",boxShadow:`0 4px 30px ${OR}55`}}>
             <img src={fact.images[0]} alt="" style={{display:"block",width:160,height:160,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"#2a1518"}}/>
           </div>
         </div>
       )}
       {isMultiImage&&(
-        <div style={{display:"flex",justifyContent:"center",gap:10,marginBottom:18,flexWrap:"wrap",padding:"0 4px"}}>
+        <div style={{display:"flex",justifyContent:"center",gap:10,marginBottom:18,flexWrap:"wrap",padding:"0 4px",animation:"dykFadeIn 0.5s ease-out 0.6s both"}}>
           {fact.images.map((src,i)=>(
             <div key={i} style={{textAlign:"center",flexShrink:0}}>
               <div style={{padding:3,background:`linear-gradient(135deg, ${OR}, #c66520)`,borderRadius:"50%",boxShadow:`0 3px 18px ${OR}44`,marginBottom:6}}>
@@ -7194,13 +7213,28 @@ function DidYouKnowScreen({player, setPlayer, go}){
       )}
 
       {/* The fact itself */}
-      <div style={{padding:"0 8px",marginBottom:24}}>
+      <div style={{padding:"0 8px",marginBottom:24,animation:"dykFadeIn 0.5s ease-out 0.85s both"}}>
         <div style={{fontSize:15,color:"#f0ede8",lineHeight:1.55,fontWeight:600}}>{fact.text}</div>
       </div>
 
-      <button onClick={dismiss} style={{...btnS,width:"100%",padding:"14px 14px",fontSize:12,letterSpacing:1.5,lineHeight:1.3}}>
+      <button onClick={dismiss} style={{...btnS,width:"100%",padding:"14px 14px",fontSize:12,letterSpacing:1.5,lineHeight:1.3,animation:"dykFadeIn 0.5s ease-out 1.05s both"}}>
         OH, YEAH I GUESS THAT'S PRETTY COOL
       </button>
+
+      {/* Animations — letter cascade for the heading + simple fade-in for
+          the supporting content. The cubic-bezier on dykLetter gives a slight
+          overshoot/bounce for a TV-station-ID feel. */}
+      <style>{`
+        @keyframes dykLetter {
+          0%   { opacity: 0; transform: translateY(-14px) scale(0.7) rotate(-6deg); }
+          60%  { opacity: 1; transform: translateY(2px) scale(1.05) rotate(0); }
+          100% { opacity: 1; transform: translateY(0) scale(1) rotate(0); }
+        }
+        @keyframes dykFadeIn {
+          from { opacity: 0; transform: translateY(8px); }
+          to   { opacity: 1; transform: translateY(0); }
+        }
+      `}</style>
     </div>
   );
 }
@@ -7476,14 +7510,9 @@ export default function App(){
       if(migrated.metKerry===undefined&&data.nbaTeam){
         migrated.metKerry=true;
       }
-      // Defensive: clear a stuck didYouKnowPending flag if the player isn't
-      // actually mid-offseason. Earlier builds could leave it set in some
-      // races. The flag should only persist between an offseason transition
-      // and the next leagueHub navigation — if the save was taken mid-season
-      // (games played in current year) it shouldn't be set.
-      if(migrated.didYouKnowPending&&(data.nbaGamesPlayed||0)>0){
-        migrated.didYouKnowPending=false;
-      }
+      // Defensive: clear any legacy didYouKnowPending flag from older builds.
+      // The trivia screen no longer uses this flag — it's invoked directly.
+      delete migrated.didYouKnowPending;
       setPlayer(migrated);
     }
     if(data.starTier!==undefined) setStarTier(data.starTier);
@@ -8021,17 +8050,7 @@ export default function App(){
   // Cousin Kerry cameo fires (even if a player closed the tab mid-cameo and
   // resumed). Also intercepts when the player has an expired contract — they
   // need to handle free agency before going back to the hub.
-  const go=(s,opts)=>{
-    opts=opts||{};
-    // Did You Know gate: if a season just finished, the offseason transition
-    // sets player.didYouKnowPending so the next leagueHub-bound navigation
-    // diverts to the trivia loading screen first. The dismiss handler passes
-    // opts.bypassTrivia=true so it can complete the trip without re-triggering
-    // the gate before its setPlayer({didYouKnowPending:false}) has flushed.
-    if(s==="leagueHub"&&player?.didYouKnowPending&&!opts.bypassTrivia){
-      setScreen("didYouKnow");
-      return;
-    }
+  const go=(s)=>{
     if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.metKerry&&!testingMode){
       setScreen("kerryWelcome");
       return;
@@ -9134,7 +9153,7 @@ export default function App(){
       </MenuFrame>
     ),
     didYouKnow:(
-      <MenuFrame sub="NBA Trivia" title="DID YOU KNOW?">
+      <MenuFrame sub="" title="">
         <DidYouKnowScreen player={player} setPlayer={setPlayer} go={go}/>
       </MenuFrame>
     ),
