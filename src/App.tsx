@@ -1159,7 +1159,7 @@ const DID_YOU_KNOW_FACTS = [
   },
   {
     text:"Ira Newble is not in the NBA Hall of Fame.",
-    images:["/newble.webp"],
+    images:["/newble.jpg"],
   },
   {
     text:"Raja Bell placed top 15 in All-Defense voting shares from 2005 to 2009.",
@@ -1175,7 +1175,7 @@ const DID_YOU_KNOW_FACTS = [
   },
   {
     text:"Dahntay Jones and Damon Jones are not related to Rashad McCants or each other.",
-    images:["/dahntay.webp","/damon.webp","/rashad.webp"],
+    images:["/dahntay.jpg","/damon.jpg","/rashad.webp"],
     captions:["Dahntay Jones","Damon Jones","Rashad McCants"],
   },
 ];
