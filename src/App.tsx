@@ -741,10 +741,37 @@ const REAL_AWARDS_DPOY = {
   2023:{name:"Rudy Gobert",team:"Minnesota Timberwolves"},
   2024:{name:"Victor Wembanyama",team:"San Antonio Spurs"},
 };
+// Rookie of the Year — only contested in the player's first NBA season.
+// Real winners are keyed by season-start year (2003 = 2003-04 season).
+const REAL_AWARDS_ROY = {
+  2003:{name:"LeBron James",team:"Cleveland Cavaliers"},
+  2004:{name:"Emeka Okafor",team:"Charlotte Bobcats"},
+  2005:{name:"Chris Paul",team:"New Orleans Hornets"},
+  2006:{name:"Brandon Roy",team:"Portland Trail Blazers"},
+  2007:{name:"Kevin Durant",team:"Seattle SuperSonics"},
+  2008:{name:"Derrick Rose",team:"Chicago Bulls"},
+  2009:{name:"Tyreke Evans",team:"Sacramento Kings"},
+  2010:{name:"Blake Griffin",team:"LA Clippers"},
+  2011:{name:"Kyrie Irving",team:"Cleveland Cavaliers"},
+  2012:{name:"Damian Lillard",team:"Portland Trail Blazers"},
+  2013:{name:"Michael Carter-Williams",team:"Philadelphia 76ers"},
+  2014:{name:"Andrew Wiggins",team:"Minnesota Timberwolves"},
+  2015:{name:"Karl-Anthony Towns",team:"Minnesota Timberwolves"},
+  2016:{name:"Malcolm Brogdon",team:"Milwaukee Bucks"},
+  2017:{name:"Ben Simmons",team:"Philadelphia 76ers"},
+  2018:{name:"Luka Dončić",team:"Dallas Mavericks"},
+  2019:{name:"Ja Morant",team:"Memphis Grizzlies"},
+  2020:{name:"LaMelo Ball",team:"Charlotte Hornets"},
+  2021:{name:"Scottie Barnes",team:"Toronto Raptors"},
+  2022:{name:"Paolo Banchero",team:"Orlando Magic"},
+  2023:{name:"Victor Wembanyama",team:"San Antonio Spurs"},
+  2024:{name:"Stephon Castle",team:"San Antonio Spurs"},
+};
 
 // Award type metadata for display + eligibility checks.
 const AWARD_TYPES = [
   {id:"mvp",  name:"Most Valuable Player",     short:"MVP",  icon:"🏆", color:"#FFD700", table:REAL_AWARDS_MVP},
+  {id:"roy",  name:"Rookie of the Year",       short:"ROY",  icon:"🌱", color:"#84cc16", table:REAL_AWARDS_ROY},
   {id:"6moy", name:"Sixth Man of the Year",    short:"6MOY", icon:"🪑", color:"#22c55e", table:REAL_AWARDS_6MOY},
   {id:"mip",  name:"Most Improved Player",     short:"MIP",  icon:"📈", color:"#3b82f6", table:REAL_AWARDS_MIP},
   {id:"dpoy", name:"Defensive Player of the Year", short:"DPOY", icon:"🛡️", color:"#ef4444", table:REAL_AWARDS_DPOY},
@@ -768,7 +795,7 @@ function getDefaultAwardWinner(awardId, year){
 // Compute player's eligibility for each award given their current season
 // stats + skills + previous season stats. Returns an object keyed by award id
 // with `eligible` bool and `score` number (higher = more deserving).
-function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr){
+function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, isRookie){
   const skills=player?.skills||{};
   const out={};
   // MVP — elite OVR + elite scoring + meaningful impact beyond just buckets.
@@ -779,6 +806,13 @@ function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, ro
   out.mvp={
     eligible:mvpEligible,
     score: currentSeasonStats.ppg*2 + ovr + currentSeasonStats.apg + currentSeasonStats.rpg*0.5,
+  };
+  // ROY — only contested in the player's first NBA season. Lower OVR/PPG bar
+  // since rookies rarely match veterans. Score weighs PPG heavily plus OVR.
+  const royEligible=!!isRookie && ovr>=75 && currentSeasonStats.ppg>=14;
+  out.roy={
+    eligible:royEligible,
+    score: currentSeasonStats.ppg*2.5 + ovr*0.8 + currentSeasonStats.apg*1.2 + currentSeasonStats.rpg*0.7,
   };
   // 6MOY — bench player with strong PPG. slot 0=starter, 1=6th man, etc.
   // Players in slot 1 (first off the bench) score highest.
@@ -816,6 +850,7 @@ function evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, ro
 function defaultWinnerScore(awardId){
   switch(awardId){
     case "mvp":  return 170 + (Math.random()*16-8); // range 162-178
+    case "roy":  return 90  + (Math.random()*12-6); // range 84-96 — real ROYs avg ~14-22 ppg
     case "6moy": return 80  + (Math.random()*10-5); // range 75-85
     case "mip":  return 55  + (Math.random()*10-5); // range 50-60
     case "dpoy": return 130 + (Math.random()*10-5); // range 125-135
@@ -826,9 +861,14 @@ function defaultWinnerScore(awardId){
 // Pick winners for all 4 awards for a given season. Returns an array of
 // {awardId, winner:{name,team,isPlayer}}. If the player is eligible and
 // outscores the real-world default, they get it; otherwise the default wins.
-function pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear){
-  const playerEval=evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr);
-  return AWARD_TYPES.map(award=>{
+// `isRookie` gates the ROY award — non-rookies never see it appear, since
+// only first-year players can win it.
+function pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear, isRookie){
+  const playerEval=evaluatePlayerForAwards(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, isRookie);
+  // ROY only appears in the rookie season — veterans see the original 4-award
+  // grid (MVP/6MOY/MIP/DPOY) unchanged.
+  const types=isRookie?AWARD_TYPES:AWARD_TYPES.filter(a=>a.id!=="roy");
+  return types.map(award=>{
     const def=getDefaultAwardWinner(award.id, currentYear);
     const pEval=playerEval[award.id];
     if(pEval.eligible && pEval.score > defaultWinnerScore(award.id)){
@@ -2324,12 +2364,10 @@ function OffensivePossessionGame({player, difficulty, onResult}){
     const passBoost=1+Math.min(passCount,3)*0.2;
     const step=()=>{
       setMeter(m=>{
-        // Meter base speed bumped from 0.85+0.2x to 2.0+0.7x — old values were
-        // sluggish (~3.3s per full cycle at easy) and the difficulty curve was
-        // too flat (only 14% gap from easy to NBA). New range: ~0.7s/cycle at
-        // easy school, ~0.4s/cycle at NBA — feels responsive AND difficulty
-        // is meaningfully harder at higher tiers.
-        const n=m+meterDir.current*(2.0+difficulty*0.7)*passBoost;
+        // Meter speed: base + difficulty modifier. Tuned to feel responsive
+        // without being a blink-and-miss. At easy school: ~0.9s per cycle;
+        // at NBA: ~0.55s. Was previously 2.0+0.7x — a hair too snappy.
+        const n=m+meterDir.current*(1.5+difficulty*0.5)*passBoost;
         let next;
         if(n>=100){meterDir.current=-1;next=100;}
         else if(n<=0){meterDir.current=1;next=0;}
@@ -4715,11 +4753,13 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
           </div>
         </button>
 
-        {/* Spend (the shop) */}
+        {/* Lifestyle (the shop) — was "Spend"; renamed to reflect that it
+            covers more than purchases (ventures, foundation, etc). Internal
+            route names like `nbaSpend` left untouched so saves aren't broken. */}
         <button onClick={()=>go("nbaSpend")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:22,width:34,textAlign:"center"}}>💰</div>
           <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>SPEND</div>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2}}>LIFESTYLE</div>
             <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Bank & shop</div>
           </div>
         </button>
@@ -5334,7 +5374,7 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
       <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Bank & Shop</div>
-        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>SPEND</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>LIFESTYLE</div>
       </div>
 
       {/* Big balance hero */}
@@ -5606,7 +5646,7 @@ function NbaFoundationScreen({money, setMoney, player, setPlayer, nbaSeasons, go
 
   return(
     <div>
-      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
+      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Lifestyle</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:48,marginBottom:6}}>🕊️</div>
         <div style={{fontSize:10,letterSpacing:3,color:"#a855f7",marginBottom:4,textTransform:"uppercase"}}>Giving Back</div>
@@ -5648,7 +5688,7 @@ function NbaFoundationScreen({money, setMoney, player, setPlayer, nbaSeasons, go
           </div>
 
           <button onClick={found} disabled={!ready} style={{...btnS,width:"100%",padding:13,fontSize:14,opacity:ready?1:0.5,cursor:ready?"pointer":"not-allowed"}}>
-            {(money||0)<FOUNDATION_COST?`NEED ${fmtMoney(FOUNDATION_COST-(money||0))} MORE`:name.trim().length<3?"ENTER A NAME":"🕊️ FOUND IT"}
+            {(money||0)<FOUNDATION_COST?`NEED ${fmtMoney(FOUNDATION_COST-(money||0))} MORE`:name.trim().length<3?"ENTER A NAME":"🕊️ ETHICAL HOOPER"}
           </button>
         </>
       )}
@@ -6018,7 +6058,7 @@ function RestaurantScreen({money, setMoney, player, setPlayer, nbaSeasons, go, t
   const selectedRestaurant=selectedId?restaurants.find(r=>r.id===selectedId):null;
   return(
     <div>
-      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
+      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Lifestyle</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Investments</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>RESTAURANTS</div>
@@ -6507,7 +6547,7 @@ function AlbumScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}
   const selectedAlbum=selectedId?albums.find(a=>a.id===selectedId):null;
   return(
     <div>
-      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
+      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Lifestyle</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Ventures</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>MUSIC</div>
@@ -6963,7 +7003,7 @@ function ShoeSignaturePreview({shoeSignature}){
   return(
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginTop:8,background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:8}}>
       <div style={{width:46,height:32,borderRadius:6,background:"rgba(0,0,0,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:"2px 4px"}}>
-        <ShoeIcon design={shoeSignature.design} color={shoeSignature.color||OR} size={40}/>
+        <ShoeIcon design={shoeSignature.design} color={shoeSignature.color||OR} accent={shoeSignature.accent||"#FFFFFF"} size={40}/>
       </div>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:9,letterSpacing:1.5,color:GO,fontWeight:700,marginBottom:1}}>★ SIGNATURE SHOE</div>
@@ -6973,72 +7013,134 @@ function ShoeSignaturePreview({shoeSignature}){
   );
 }
 
-// Shoe silhouette icons — three inline SVGs (low/mid/high) drawn to suggest
-// actual basketball-shoe profiles instead of generic emojis. Each takes a
-// `color` prop (the colorway primary) and a `size` prop. Drawn at 100×60
-// viewBox so the side profile reads cleanly.
+// Shoe silhouette icons — three inline SVGs (low/mid/high) rendered as
+// proper basketball-shoe side profiles. Each takes:
+//   - color:  primary upper color
+//   - accent: secondary color used for midsole, swoosh-style side panel,
+//             heel pull tab, and inner lining accents
+//   - size:   pixel size (height is auto-scaled to 0.6 * size since viewBox is 100×60)
 //
-// Construction notes for each:
-//   - low-top  : collar dips well below the ankle, sole slightly thinner
-//   - mid-top  : collar sits at the ankle bone, padded with a midfoot strap
-//   - high-top : collar wraps above the ankle, taller padded throat
-function ShoeIcon({design, color="#FA5400", size=42}){
-  const stroke="rgba(0,0,0,0.35)";
-  const laces="rgba(255,255,255,0.85)";
+// Anatomy each shoe shares (drawn back-to-front for proper z-order):
+//   1. Outsole       — dark base with tread lines
+//   2. Midsole       — accent-colored contrast band sitting above the outsole
+//   3. Upper         — primary color, shape varies by silhouette (collar height)
+//   4. Heel counter  — darker shadow on the back of the upper
+//   5. Toe-box highlight — subtle white wash on the rounded front
+//   6. Swoosh panel  — accent-colored stripe curving from heel toward toe
+//   7. Eyestay panel — darker recessed area where the laces sit
+//   8. Tongue        — peeks up between the laces (primary color, slight darker tint)
+//   9. Laces         — white horizontal strokes
+//   10. Heel pull tab — accent-colored loop sticking up from the back top
+function ShoeIcon({design, color="#FA5400", accent="#FFFFFF", size=42}){
+  const stroke="rgba(0,0,0,0.45)";
   const sole="#1a1a1a";
-  // Common sole rectangle — runs the full length, slight toe lift
-  const Sole=()=>(<path d="M5,48 Q4,52 8,53 L88,53 Q96,53 96,46 L95,44 L5,44 Z" fill={sole} stroke={stroke} strokeWidth="0.5"/>);
-  // Common toebox + midfoot upper — same curve for all three silhouettes
+  const laces="rgba(255,255,255,0.95)";
+
+  // Outsole — bottom contact patch with traction lines. Same shape for all
+  // three silhouettes since the bottom of the shoe doesn't change.
+  const Outsole=()=>(
+    <g>
+      <path d="M 6,52 Q 5,55 9,55 L 87,55 Q 95,55 96,51 Q 96,49 92,49 L 8,49 Q 5,49 6,52 Z" fill={sole} stroke={stroke} strokeWidth="0.5"/>
+      {/* Tread lines — small vertical hashes suggesting grip pattern */}
+      {[16,26,36,46,56,66,76,86].map(x=>(
+        <line key={x} x1={x} y1={50.5} x2={x} y2={54} stroke="rgba(255,255,255,0.18)" strokeWidth="0.4"/>
+      ))}
+    </g>
+  );
+
+  // Midsole — the contrast band between outsole and upper. Takes the accent
+  // color so the player's secondary choice is visible from across the room.
+  // Curves up at the toe (toe spring) and back at the heel.
+  const Midsole=()=>(
+    <path d="M 6,49 Q 4,46 9,44 L 88,44 Q 95,45 96,49 Z" fill={accent} stroke={stroke} strokeWidth="0.5"/>
+  );
+
   if(design==="lowtop"){
     return(
       <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
-        {/* upper body — low collar that sits below the ankle */}
-        <path d="M14,44 Q12,32 22,28 L46,24 Q58,22 70,28 L80,38 Q83,42 80,44 Z" fill={color} stroke={stroke} strokeWidth="1"/>
-        {/* heel pad */}
-        <path d="M70,28 Q78,30 82,38 L80,44 L70,44 Z" fill={color} stroke={stroke} strokeWidth="0.5" opacity="0.85"/>
-        {/* lace panel */}
-        <path d="M30,30 L60,26 L60,40 L34,42 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.3"/>
-        {/* laces */}
+        <Outsole/>
+        <Midsole/>
+        {/* Upper — main color. Low collar dips below the ankle bone (top at
+            y=22 in the front, y=24 at the back). Toe box rounds at the right. */}
+        <path d="M 14,44 Q 11,32 18,28 Q 24,25 32,25 L 56,22 Q 70,22 78,28 Q 86,33 88,40 L 88,44 Z" fill={color} stroke={stroke} strokeWidth="0.9"/>
+        {/* Heel counter — darker shadow on the back third */}
+        <path d="M 14,44 Q 11,32 18,28 Q 24,25 30,25 L 30,30 Q 22,34 24,44 Z" fill="rgba(0,0,0,0.22)"/>
+        {/* Toe box highlight — subtle white wash on the rounded front */}
+        <path d="M 64,24 Q 78,26 86,34 Q 88,40 84,42 L 78,38 Q 72,32 64,28 Z" fill="rgba(255,255,255,0.1)"/>
+        {/* Swoosh panel — accent stripe curving from low at heel up to toe */}
+        <path d="M 22,40 Q 38,30 60,32 Q 72,32 80,36 Q 82,38 80,40 Q 60,36 40,40 Q 28,42 24,44 Q 20,42 22,40 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
+        {/* Eyestay — recessed lace panel */}
+        <path d="M 30,30 Q 42,26 58,26 L 60,34 Q 44,32 32,38 Z" fill="rgba(0,0,0,0.28)" stroke={stroke} strokeWidth="0.3"/>
+        {/* Tongue — peeks up out of the eyestay */}
+        <path d="M 42,26 Q 50,22 58,24 L 58,30 L 42,32 Z" fill={color} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
+        {/* Laces — 4 horizontal strokes across the eyestay */}
         {[0,1,2,3].map(i=>(
-          <line key={i} x1={32+i*7} y1={40-i*0.5} x2={56-i*1.5} y2={29-i*0.3} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+          <line key={i} x1={32+i*7} y1={35-i*1.3} x2={56-i*1.5} y2={29-i*0.7} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
         ))}
-        <Sole/>
+        {/* Heel pull tab — small accent loop sticking up from the back */}
+        <path d="M 12,24 Q 11,20 15,20 L 19,20 Q 22,20 21,24 L 19,24 Q 18,22 16,22 Q 14,22 14,24 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
       </svg>
     );
   }
   if(design==="midtop"){
     return(
       <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
-        {/* upper — mid collar that wraps the ankle bone, taller back panel */}
-        <path d="M14,44 Q12,28 22,24 L46,20 Q58,18 70,22 L78,22 Q83,28 84,38 L80,44 Z" fill={color} stroke={stroke} strokeWidth="1"/>
-        {/* mid strap */}
-        <path d="M52,21 L72,19 L72,33 L52,35 Z" fill="rgba(0,0,0,0.2)" stroke={stroke} strokeWidth="0.4"/>
-        {/* lace panel */}
-        <path d="M28,28 L54,23 L54,38 L32,40 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.3"/>
-        {/* laces */}
+        <Outsole/>
+        <Midsole/>
+        {/* Upper — main color. Mid collar wraps the ankle bone (top y=18). */}
+        <path d="M 14,44 Q 10,26 18,22 Q 24,18 30,18 L 56,18 Q 70,18 78,24 Q 86,30 88,40 L 88,44 Z" fill={color} stroke={stroke} strokeWidth="0.9"/>
+        {/* Padded ankle collar — soft pillow at the top of the back panel */}
+        <path d="M 14,28 Q 10,20 18,18 Q 24,16 32,16 L 32,22 Q 22,24 18,30 Z" fill="rgba(0,0,0,0.18)"/>
+        {/* Heel counter shadow */}
+        <path d="M 14,44 Q 10,26 18,22 Q 22,20 28,20 L 28,28 Q 22,32 24,44 Z" fill="rgba(0,0,0,0.2)"/>
+        {/* Toe box highlight */}
+        <path d="M 64,20 Q 78,22 86,32 Q 88,40 84,42 L 78,36 Q 72,28 64,24 Z" fill="rgba(255,255,255,0.1)"/>
+        {/* Midfoot strap — extra support band in accent across the side */}
+        <path d="M 50,20 L 72,20 L 72,32 L 50,34 Z" fill={accent} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
+        {/* Swoosh panel — runs along the lower side */}
+        <path d="M 22,40 Q 40,30 64,34 Q 76,34 82,38 Q 84,40 82,42 Q 64,38 44,42 Q 28,44 24,44 Q 20,42 22,40 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
+        {/* Eyestay */}
+        <path d="M 30,26 Q 42,22 54,22 L 56,32 Q 42,30 32,36 Z" fill="rgba(0,0,0,0.28)" stroke={stroke} strokeWidth="0.3"/>
+        {/* Tongue */}
+        <path d="M 40,22 Q 48,18 54,20 L 54,28 L 40,30 Z" fill={color} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
+        {/* Laces */}
         {[0,1,2,3,4].map(i=>(
-          <line key={i} x1={30+i*6} y1={38-i*0.5} x2={52-i*1} y2={26-i*0.2} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+          <line key={i} x1={30+i*6} y1={34-i*1.3} x2={52-i*1} y2={26-i*0.6} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
         ))}
-        <Sole/>
+        {/* Heel pull tab — taller for mid-top */}
+        <path d="M 12,18 Q 11,14 15,14 L 19,14 Q 22,14 21,18 L 19,18 Q 18,16 16,16 Q 14,16 14,18 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
       </svg>
     );
   }
-  // high-top — collar wraps above the ankle, taller padded throat
+  // high-top — collar wraps high above the ankle (top y=10-12)
   return(
     <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
-      {/* upper — high collar with notch for ankle articulation */}
-      <path d="M14,44 Q12,26 22,22 L42,16 Q56,12 68,14 L78,14 Q84,18 86,30 L86,40 Q86,44 80,44 Z" fill={color} stroke={stroke} strokeWidth="1"/>
-      {/* collar notch / ankle scoop */}
-      <path d="M70,14 Q66,18 70,22 L82,22 Q86,20 86,16 Q82,13 70,14 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.4"/>
-      {/* padded throat */}
-      <path d="M58,16 L78,15 L78,28 L58,30 Z" fill="rgba(0,0,0,0.18)" stroke={stroke} strokeWidth="0.3"/>
-      {/* lace panel */}
-      <path d="M26,28 L58,18 L58,36 L30,42 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.3"/>
-      {/* laces — taller for high-top */}
+      <Outsole/>
+      <Midsole/>
+      {/* Upper — main color. High collar with ankle scoop at the front. */}
+      <path d="M 14,44 Q 10,22 18,16 Q 24,12 30,12 L 64,12 Q 76,12 82,18 Q 88,26 88,40 L 88,44 Z" fill={color} stroke={stroke} strokeWidth="0.9"/>
+      {/* Ankle scoop — small inset at the top-front to relieve flex */}
+      <path d="M 64,12 Q 60,14 60,18 L 78,18 Q 84,16 84,13 Q 78,11 64,12 Z" fill="rgba(0,0,0,0.2)"/>
+      {/* Padded high collar — back of ankle area */}
+      <path d="M 14,30 Q 10,16 18,12 Q 24,10 32,10 L 32,18 Q 22,20 18,32 Z" fill="rgba(0,0,0,0.18)"/>
+      {/* Heel counter shadow */}
+      <path d="M 14,44 Q 10,22 18,16 Q 22,14 26,14 L 26,26 Q 22,32 24,44 Z" fill="rgba(0,0,0,0.2)"/>
+      {/* Toe box highlight */}
+      <path d="M 64,14 Q 78,18 86,30 Q 88,40 84,42 L 78,34 Q 72,24 64,18 Z" fill="rgba(255,255,255,0.1)"/>
+      {/* Padded throat — front of ankle with extra cushion in accent */}
+      <path d="M 54,14 L 72,14 L 72,26 L 54,28 Z" fill={accent} stroke={stroke} strokeWidth="0.4" opacity="0.78"/>
+      {/* Swoosh panel — lower side stripe */}
+      <path d="M 24,40 Q 42,30 66,34 Q 78,34 84,38 Q 86,40 84,42 Q 66,38 46,42 Q 30,44 26,44 Q 22,42 24,40 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
+      {/* Eyestay */}
+      <path d="M 28,28 Q 42,18 58,18 L 60,30 Q 42,28 30,38 Z" fill="rgba(0,0,0,0.28)" stroke={stroke} strokeWidth="0.3"/>
+      {/* Tongue */}
+      <path d="M 38,18 Q 50,14 58,16 L 58,24 L 38,28 Z" fill={color} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
+      {/* Laces — 6 strokes for high-top */}
       {[0,1,2,3,4,5].map(i=>(
-        <line key={i} x1={28+i*5.5} y1={40-i*0.6} x2={56-i*1} y2={22-i*0.2} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+        <line key={i} x1={30+i*5.5} y1={36-i*1.3} x2={56-i*1} y2={22-i*0.4} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
       ))}
-      <Sole/>
+      {/* Heel pull tab — tallest for high-top */}
+      <path d="M 12,12 Q 11,8 15,8 L 19,8 Q 22,8 21,12 L 19,12 Q 18,10 16,10 Q 14,10 14,12 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
     </svg>
   );
 }
@@ -7184,6 +7286,10 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
   const [name,setName]=useState(defaultName);
   const [design,setDesign]=useState("lowtop");
   const [color,setColor]=useState(brandColor);
+  // Accent (secondary) color — drives the midsole, swoosh panel, heel pull
+  // tab, and ankle accent. Defaults to white for the classic black/white +
+  // primary look most shoes ship in.
+  const [accent,setAccent]=useState("#FFFFFF");
   // Three core basketball silhouettes — emoji icons retired in favor of
   // proper SVG drawings rendered by <ShoeIcon>.
   const SILHOUETTES=[
@@ -7191,7 +7297,11 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
     {id:"midtop",   name:"Mid-Top",  description:"Balanced support"},
     {id:"hightop",  name:"High-Top", description:"Lockdown ankle"},
   ];
-  const COLORS=[brandColor,"#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#000000","#FFFFFF"];
+  // Two parallel palettes — primary leads with the brand's signature color,
+  // accent leads with the classics (white, black) since those are most common
+  // as secondary hits on real shoes.
+  const PRIMARY_COLORS=[brandColor,"#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#000000","#FFFFFF"];
+  const ACCENT_COLORS =["#FFFFFF","#000000","#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#9ca3af"];
   const ready=name.trim().length>=2;
 
   const finalize=()=>{
@@ -7199,7 +7309,7 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
     setPlayer(p=>({
       ...p,
       shoeSignature:{
-        name:name.trim(), design, color,
+        name:name.trim(), design, color, accent,
         brandId:pending?.brandId,
         brandName:pending?.brandName,
       },
@@ -7228,7 +7338,7 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
           actually swaps the visual (not just the label). */}
       <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:14,background:`linear-gradient(135deg, ${color}22 0%, rgba(0,0,0,0.5) 100%)`,border:`1.5px solid ${color}55`,borderRadius:12}}>
         <div style={{width:100,height:80,borderRadius:14,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 4px 22px ${color}55`,padding:"4px 6px"}}>
-          <ShoeIcon design={design} color={color} size={88}/>
+          <ShoeIcon design={design} color={color} accent={accent} size={88}/>
         </div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:700,marginBottom:3}}>{brandName.toUpperCase()} PRESENTS</div>
@@ -7251,7 +7361,7 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
           {SILHOUETTES.map(s=>(
             <button key={s.id} onClick={()=>setDesign(s.id)} style={{padding:"10px 14px",textAlign:"left",background:design===s.id?`linear-gradient(135deg, ${color}33 0%, ${color}11 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${design===s.id?color+"88":"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",display:"flex",alignItems:"center",gap:12}}>
               <div style={{width:60,height:42,background:"rgba(0,0,0,0.25)",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:"2px 4px"}}>
-                <ShoeIcon design={s.id} color={color} size={54}/>
+                <ShoeIcon design={s.id} color={color} accent={accent} size={54}/>
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:14,fontWeight:900,letterSpacing:0.5}}>{s.name}</div>
@@ -7262,12 +7372,20 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
         </div>
       </div>
 
-      {/* Colorway */}
-      <div style={{marginBottom:14}}>
+      {/* Colorways — primary (upper) + accent (midsole, swoosh, heel tab) */}
+      <div style={{marginBottom:12}}>
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Primary Colorway</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-          {COLORS.map((c,i)=>(
-            <button key={c+i} onClick={()=>setColor(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Color ${c}`}/>
+          {PRIMARY_COLORS.map((c,i)=>(
+            <button key={c+i} onClick={()=>setColor(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Primary ${c}`}/>
+          ))}
+        </div>
+      </div>
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Accent Colorway</div>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {ACCENT_COLORS.map((c,i)=>(
+            <button key={c+i} onClick={()=>setAccent(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${accent===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Accent ${c}`}/>
           ))}
         </div>
       </div>
@@ -8240,7 +8358,7 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
           ):teamsPlayedFor.length===1?(
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"8px 0"}}>
               {(()=>{const td=NBA_TEAM_DATA[teamsPlayedFor[0]]||{p:"#444",s:"#888",abbr:"???"};return(
-                <div style={{width:32,height:32,borderRadius:"50%",overflow:"hidden",border:"1px solid rgba(255,255,255,0.2)"}}>
+                <div style={{width:32,height:32,borderRadius:"50%",overflow:"hidden",display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.2)"}}>
                   <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={teamsPlayedFor[0]} size={32} decorative={false} logoUrl={td.logoUrl}/>
                 </div>
               );})()}
@@ -8255,7 +8373,7 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
                 const td=NBA_TEAM_DATA[team]||{p:"#444",s:"#888",abbr:"???"};
                 return(
                   <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
-                    <div style={{width:28,height:28,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>
+                    <div style={{width:28,height:28,borderRadius:"50%",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.15)"}}>
                       <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={team} size={28} decorative={false} logoUrl={td.logoUrl}/>
                     </div>
                     <span style={{flex:1,fontSize:13,fontWeight:900}}>{team}</span>
@@ -8314,7 +8432,7 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
               const td=NBA_TEAM_DATA[team]||{p:"#444",s:"#888",abbr:"???"};
               return(
                 <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
-                  <div style={{width:28,height:28,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>
+                  <div style={{width:28,height:28,borderRadius:"50%",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.15)"}}>
                     <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={team} size={28} decorative={false} logoUrl={td.logoUrl}/>
                   </div>
                   <span style={{flex:1,fontSize:13,fontWeight:900}}>{team}</span>
@@ -8363,15 +8481,19 @@ function PastCareersScreen({entries, openCareer, deleteCareer, go}){
             <div key={entry.id} style={{display:"flex",alignItems:"stretch",background:entry.hof?`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",border:`1.5px solid ${entry.hof?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,overflow:"hidden",fontFamily:"'Barlow Condensed',sans-serif"}}>
               <button onClick={()=>openCareer(entry.id)} style={{flex:1,display:"block",textAlign:"left",padding:"12px 14px",background:"transparent",border:"none",color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  {/* Team logo bubble — shows who they retired with. HOF inductees
-                      get a small gold rim around the bubble to signal status. */}
-                  {td?(
-                    <div style={{width:42,height:42,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:entry.hof?`2px solid ${GO}`:"1px solid rgba(255,255,255,0.2)",boxShadow:entry.hof?`0 2px 12px ${GO}55`:"0 2px 8px rgba(0,0,0,0.4)"}}>
-                      <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={retireTeam} size={42} decorative={false} logoUrl={td.logoUrl}/>
+                  {/* Player face primary avatar with a small team logo badge
+                      in the bottom-right corner. HOF inductees get a gold rim
+                      around the face circle to signal status. */}
+                  <div style={{position:"relative",width:46,height:46,flexShrink:0}}>
+                    <div style={{width:46,height:46,borderRadius:"50%",overflow:"hidden",background:"#3a1a08",display:"flex",alignItems:"center",justifyContent:"center",border:entry.hof?`2px solid ${GO}`:"1px solid rgba(255,255,255,0.2)",boxShadow:entry.hof?`0 2px 12px ${GO}55`:"0 2px 8px rgba(0,0,0,0.4)"}}>
+                      <PlayerAvatar app={entry.appearance} size={46}/>
                     </div>
-                  ):(
-                    <div style={{width:42,height:42,borderRadius:"50%",background:entry.hof?`linear-gradient(135deg, ${GO}, ${GO}aa)`:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:entry.hof?22:18,flexShrink:0,color:entry.hof?"#fff":"#aaa"}}>{entry.hof?"🏛️":"🏀"}</div>
-                  )}
+                    {td&&(
+                      <div style={{position:"absolute",bottom:-3,right:-3,width:20,height:20,borderRadius:"50%",overflow:"hidden",border:"1.5px solid #1a1a1a",background:"#fff",display:"flex",alignItems:"center",justifyContent:"center",boxShadow:"0 1px 4px rgba(0,0,0,0.5)"}}>
+                        <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={retireTeam} size={18} decorative={false} logoUrl={td.logoUrl}/>
+                      </div>
+                    )}
+                  </div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:9,color:entry.hof?GO:"#888",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
                       {entry.hof?"★ HALL OF FAMER":`${entry.seasonsPlayed}-YEAR CAREER`}
@@ -8447,7 +8569,14 @@ function PastCareerStatsScreen({entry, go}){
     <div>
       <button onClick={()=>go("pastCareers")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← All Careers</button>
       <div style={{textAlign:"center",marginBottom:14}}>
-        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Retired Career</div>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:8,textTransform:"uppercase"}}>Retired Career</div>
+        {/* Player portrait — centered, prominent. HOF inductees get a gold
+            rim treatment; everyone else gets the standard orange tint. */}
+        <div style={{display:"flex",justifyContent:"center",marginBottom:10}}>
+          <div style={{width:104,height:104,borderRadius:"50%",overflow:"hidden",background:"#3a1a08",display:"flex",alignItems:"center",justifyContent:"center",border:entry.hof?`3px solid ${GO}`:`2px solid ${OR}55`,boxShadow:entry.hof?`0 4px 20px ${GO}66`:"0 4px 14px rgba(0,0,0,0.5)"}}>
+            <PlayerAvatar app={entry.appearance} size={104}/>
+          </div>
+        </div>
         <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>{entry.name}</div>
         <div style={{fontSize:11,color:"#aaa",marginTop:4,letterSpacing:1}}>
           {entry.position} · Retired age {entry.age} · {entry.seasonsPlayed} seasons
@@ -8461,7 +8590,7 @@ function PastCareerStatsScreen({entry, go}){
         return(
           <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`,border:`1.5px solid ${GO}66`,borderRadius:12,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
             {td?(
-              <div style={{width:54,height:54,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:`2px solid ${GO}`,boxShadow:`0 2px 14px ${GO}66`}}>
+              <div style={{width:54,height:54,borderRadius:"50%",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",border:`2px solid ${GO}`,boxShadow:`0 2px 14px ${GO}66`}}>
                 <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={retireTeam} size={54} decorative={false} logoUrl={td.logoUrl}/>
               </div>
             ):(
@@ -8482,7 +8611,7 @@ function PastCareerStatsScreen({entry, go}){
         const td=NBA_TEAM_DATA[entry.retirementTeam]||{p:"#444",s:"#888",abbr:"???"};
         return(
           <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${td.p}55`,borderRadius:12,padding:12,marginBottom:14,display:"flex",alignItems:"center",gap:12}}>
-            <div style={{width:46,height:46,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 2px 8px rgba(0,0,0,0.4)"}}>
+            <div style={{width:46,height:46,borderRadius:"50%",overflow:"hidden",flexShrink:0,display:"flex",alignItems:"center",justifyContent:"center",border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 2px 8px rgba(0,0,0,0.4)"}}>
               <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={entry.retirementTeam} size={46} decorative={false} logoUrl={td.logoUrl}/>
             </div>
             <div style={{flex:1,minWidth:0}}>
@@ -8576,6 +8705,78 @@ function PastCareerStatsScreen({entry, go}){
           </div>
         )}
       </div>
+
+      {/* Off-Court Legacy — restaurants opened, albums released, foundation
+          founded. Only renders sections that have content. The data lives on
+          entry.purchases (frozen at retirement). Invested chains aren't
+          listed here — only ventures the player created themselves. */}
+      {(()=>{
+        const purchases=entry.purchases||{};
+        const ownChains=(purchases.restaurants||[]).filter(r=>r.type==="own");
+        const releasedAlbums=(purchases.albums||[]).filter(a=>a.status&&a.status!=="recording");
+        const foundation=purchases.foundation||null;
+        const hasAny=ownChains.length>0 || releasedAlbums.length>0 || !!foundation;
+        if(!hasAny) return null;
+        return(
+          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
+            <Lbl color="#ddd">Off-Court Legacy</Lbl>
+            {/* Restaurants — player-built chains only */}
+            {ownChains.length>0&&(
+              <div style={{marginBottom:releasedAlbums.length>0||foundation?12:0,paddingTop:8}}>
+                <div style={{fontSize:9,letterSpacing:1.5,color:OR,fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>🍔 Restaurants Founded · {ownChains.length}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {ownChains.map(r=>(
+                    <div key={r.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 9px",background:"rgba(0,0,0,0.25)",border:`1px solid ${r.color||OR}33`,borderRadius:7}}>
+                      <div style={{width:30,height:30,borderRadius:6,background:`linear-gradient(135deg, ${r.color||OR}, ${(r.color||OR)}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{r.logoEmoji||"🍔"}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:12,fontWeight:900,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{r.name}</div>
+                        <div style={{fontSize:10,color:"#888",marginTop:1}}>{r.locations} location{r.locations===1?"":"s"} · Founded {r.yearStarted} · Earned {fmtMoney(r.totalEarned||0)}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {/* Albums — every released record (not in-studio) */}
+            {releasedAlbums.length>0&&(
+              <div style={{marginBottom:foundation?12:0,paddingTop:ownChains.length>0?8:8,borderTop:ownChains.length>0?"1px solid rgba(255,255,255,0.06)":"none"}}>
+                <div style={{fontSize:9,letterSpacing:1.5,color:"#a855f7",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>🎵 Albums Released · {releasedAlbums.length}</div>
+                <div style={{display:"flex",flexDirection:"column",gap:5}}>
+                  {releasedAlbums.map(a=>{
+                    const statusLbl=a.status==="classic"?"💎 CLASSIC":a.status==="hit"?"🔥 HIT":a.status==="mid"?"📊 MID":"💔 FLOP";
+                    const statusColor=a.status==="classic"?YE:a.status==="hit"?GR:a.status==="mid"?"#aaa":RE;
+                    return(
+                      <div key={a.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 9px",background:"rgba(0,0,0,0.25)",border:`1px solid ${(a.color||OR)}33`,borderRadius:7}}>
+                        <AlbumCover name={a.name} design={a.design} style={a.style} color={a.color||OR} emoji={a.emoji} size={30}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12,fontWeight:900,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
+                          <div style={{fontSize:10,color:"#888",marginTop:1}}>
+                            <span style={{color:statusColor,fontWeight:700,letterSpacing:0.8}}>{statusLbl}</span>
+                            <span> · {fmtMoney(a.payout||0)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+            {/* Foundation — single one-time entry */}
+            {foundation&&(
+              <div style={{paddingTop:8,borderTop:ownChains.length>0||releasedAlbums.length>0?"1px solid rgba(255,255,255,0.06)":"none"}}>
+                <div style={{fontSize:9,letterSpacing:1.5,color:"#a855f7",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>🕊️ Foundation</div>
+                <div style={{display:"flex",alignItems:"center",gap:10,padding:"7px 9px",background:"rgba(0,0,0,0.25)",border:"1px solid #a855f733",borderRadius:7}}>
+                  <div style={{width:30,height:30,borderRadius:6,background:"linear-gradient(135deg, #a855f7, #a855f799)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>🕊️</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:12,fontWeight:900,color:"#fff",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{foundation.name}</div>
+                    <div style={{fontSize:10,color:"#888",marginTop:1}}>Founded {foundation.yearStarted} · Contributed {fmtMoney(foundation.totalGiven||0)}</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       <button onClick={()=>go("pastCareers")} style={ghostS}>← Back to Past Careers</button>
     </div>
@@ -8734,7 +8935,10 @@ function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGam
   const rotationSlot=nbaTeam?calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons):0;
   // Generate winners ONCE per mount — memoize via useState so it doesn't
   // re-randomize on every render. Use a lazy initializer.
-  const [results]=useState(()=>pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear));
+  // Rookie status: at the awards screen, nbaSeasons hasn't been pushed yet,
+  // so length===0 means the player just finished their first NBA season.
+  const isRookie=(nbaSeasons||[]).length===0;
+  const [results]=useState(()=>pickSeasonAwardWinners(player, currentSeasonStats, prevSeasonStats, rotationSlot, ovr, currentYear, isRookie));
   // Persist player wins + stamp this year as awards-shown on mount. Guarded
   // by a ref so React strict-mode double-mount doesn't double-save.
   const savedRef=useRef(false);
@@ -10948,7 +11152,7 @@ export default function App(){
       </MenuFrame>
     ),
     nbaSpend:(
-      <MenuFrame sub="Bank & Shop" title="SPEND">
+      <MenuFrame sub="Bank & Shop" title="LIFESTYLE">
         <NbaSpendScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
       </MenuFrame>
     ),
