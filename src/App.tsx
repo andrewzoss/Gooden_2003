@@ -1748,9 +1748,13 @@ function PlayerAvatar({app, size=80}){
 
       {/* Beard — drawn AFTER face features */}
       {beard==="Mustache"&&<g>
-        {/* Simple horseshoe mustache — thick, droops down the sides of the
-            mouth. Sits above the lip, sides curl downward past the corners. */}
-        <path d="M 39 64 Q 50 68 61 64 Q 60 69 58 71 L 55 72 L 54 69 Q 50 70 46 69 L 45 72 L 42 71 Q 40 69 39 64 Z" fill={hairDark}/>
+        {/* Simple horseshoe mustache — built from three primitives instead of
+            one complex path so it renders cleanly without self-intersection.
+            Main horizontal body sits above the lip; two angled droops extend
+            down past the mouth corners. */}
+        <ellipse cx="50" cy="66" rx="11" ry="2.4" fill={hairDark}/>
+        <ellipse cx="42" cy="70" rx="2" ry="3.4" fill={hairDark} transform="rotate(18 42 70)"/>
+        <ellipse cx="58" cy="70" rx="2" ry="3.4" fill={hairDark} transform="rotate(-18 58 70)"/>
       </g>}
 
       {beard==="Goatee"&&<g>
