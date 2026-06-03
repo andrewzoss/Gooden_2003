@@ -7014,133 +7014,122 @@ function ShoeSignaturePreview({shoeSignature}){
 }
 
 // Shoe silhouette icons — three inline SVGs (low/mid/high) rendered as
-// proper basketball-shoe side profiles. Each takes:
-//   - color:  primary upper color
-//   - accent: secondary color used for midsole, swoosh-style side panel,
-//             heel pull tab, and inner lining accents
-//   - size:   pixel size (height is auto-scaled to 0.6 * size since viewBox is 100×60)
+// AJ1-style basketball shoe side profiles. Each takes:
+//   - color:  PRIMARY color, drives the eyestay + heel wing (the "wings")
+//   - accent: SECONDARY color, drives the toebox + midfoot mudguard panel
+//   - size:   pixel size (height auto-scaled to 0.6 * size since viewBox is 100×60)
 //
 // Anatomy each shoe shares (drawn back-to-front for proper z-order):
-//   1. Outsole       — dark base with tread lines
-//   2. Midsole       — accent-colored contrast band sitting above the outsole
-//   3. Upper         — primary color, shape varies by silhouette (collar height)
-//   4. Heel counter  — darker shadow on the back of the upper
-//   5. Toe-box highlight — subtle white wash on the rounded front
-//   6. Swoosh panel  — accent-colored stripe curving from heel toward toe
-//   7. Eyestay panel — darker recessed area where the laces sit
-//   8. Tongue        — peeks up between the laces (primary color, slight darker tint)
-//   9. Laces         — white horizontal strokes
-//   10. Heel pull tab — accent-colored loop sticking up from the back top
+//   1. Outsole         — thin dark band at the very bottom
+//   2. Midsole         — white sole, always white (real shoes too)
+//   3. Upper (PRIMARY) — the wing/eyestay/collar — full upper silhouette
+//   4. Mudguard (ACCENT) — wraps the lower portion of the upper. Its top edge
+//                          is a wavy curve that creates the AJ1 "wing" effect
+//                          where the primary color rises above it
+//   5. Toe perforations — small dots on the toe (where the foot bends)
+//   6. Eyestay shadow  — subtle darker recess where the laces sit
+//   7. Laces           — dark strokes across the eyestay
+//   8. Heel pull tab   — small loop at the back top (matches accent)
 function ShoeIcon({design, color="#FA5400", accent="#FFFFFF", size=42}){
-  const stroke="rgba(0,0,0,0.45)";
+  const stroke="rgba(0,0,0,0.5)";
   const sole="#1a1a1a";
-  const laces="rgba(255,255,255,0.95)";
+  const laces="rgba(0,0,0,0.88)";
 
-  // Outsole — bottom contact patch with traction lines. Same shape for all
-  // three silhouettes since the bottom of the shoe doesn't change.
-  const Outsole=()=>(
+  // Outsole + white midsole — same for all silhouettes. The midsole is always
+  // white because real basketball shoes almost always have a white midsole;
+  // it's not part of the customization. The black outsole sits below it.
+  const Sole=()=>(
     <g>
-      <path d="M 6,52 Q 5,55 9,55 L 87,55 Q 95,55 96,51 Q 96,49 92,49 L 8,49 Q 5,49 6,52 Z" fill={sole} stroke={stroke} strokeWidth="0.5"/>
-      {/* Tread lines — small vertical hashes suggesting grip pattern */}
-      {[16,26,36,46,56,66,76,86].map(x=>(
-        <line key={x} x1={x} y1={50.5} x2={x} y2={54} stroke="rgba(255,255,255,0.18)" strokeWidth="0.4"/>
-      ))}
+      {/* Black outsole edge — thin strip at the very bottom */}
+      <path d="M 6,52 Q 4,55 9,55 L 88,55 Q 94,55 95,52 Z" fill={sole}/>
+      {/* White midsole — taller white band above the outsole */}
+      <path d="M 5,45 L 5,52 L 95,52 L 95,45 L 92,43 L 8,43 Z" fill="#FFFFFF" stroke={stroke} strokeWidth="0.6"/>
     </g>
   );
 
-  // Midsole — the contrast band between outsole and upper. Takes the accent
-  // color so the player's secondary choice is visible from across the room.
-  // Curves up at the toe (toe spring) and back at the heel.
-  const Midsole=()=>(
-    <path d="M 6,49 Q 4,46 9,44 L 88,44 Q 95,45 96,49 Z" fill={accent} stroke={stroke} strokeWidth="0.5"/>
+  // Toe perforations — small holes in the toe box. Position varies by silhouette.
+  const Perfs=({startX,startY})=>(
+    <g fill="rgba(0,0,0,0.4)">
+      {[[0,0],[4,0],[8,0],[0,2.5],[4,2.5],[8,2.5]].map(([dx,dy],i)=>(
+        <circle key={i} cx={startX+dx} cy={startY+dy} r="0.55"/>
+      ))}
+    </g>
   );
 
   if(design==="lowtop"){
     return(
       <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
-        <Outsole/>
-        <Midsole/>
-        {/* Upper — main color. Low collar dips below the ankle bone (top at
-            y=22 in the front, y=24 at the back). Toe box rounds at the right. */}
-        <path d="M 14,44 Q 11,32 18,28 Q 24,25 32,25 L 56,22 Q 70,22 78,28 Q 86,33 88,40 L 88,44 Z" fill={color} stroke={stroke} strokeWidth="0.9"/>
-        {/* Heel counter — darker shadow on the back third */}
-        <path d="M 14,44 Q 11,32 18,28 Q 24,25 30,25 L 30,30 Q 22,34 24,44 Z" fill="rgba(0,0,0,0.22)"/>
-        {/* Toe box highlight — subtle white wash on the rounded front */}
-        <path d="M 64,24 Q 78,26 86,34 Q 88,40 84,42 L 78,38 Q 72,32 64,28 Z" fill="rgba(255,255,255,0.1)"/>
-        {/* Swoosh panel — accent stripe curving from low at heel up to toe */}
-        <path d="M 22,40 Q 38,30 60,32 Q 72,32 80,36 Q 82,38 80,40 Q 60,36 40,40 Q 28,42 24,44 Q 20,42 22,40 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
-        {/* Eyestay — recessed lace panel */}
-        <path d="M 30,30 Q 42,26 58,26 L 60,34 Q 44,32 32,38 Z" fill="rgba(0,0,0,0.28)" stroke={stroke} strokeWidth="0.3"/>
-        {/* Tongue — peeks up out of the eyestay */}
-        <path d="M 42,26 Q 50,22 58,24 L 58,30 L 42,32 Z" fill={color} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
-        {/* Laces — 4 horizontal strokes across the eyestay */}
+        <Sole/>
+        {/* PRIMARY upper — full silhouette. Mudguard will cover the bottom
+            portion, leaving only the wing/eyestay/collar visible in primary. */}
+        <path d="M 8,30 Q 8,24 14,23 Q 22,22 28,23 L 40,23 Q 48,21 60,22 Q 72,23 78,27 L 84,30 Q 88,34 88,40 L 88,43 L 8,43 Z" fill={color} stroke={stroke} strokeWidth="0.8"/>
+        {/* ACCENT mudguard — covers lower portion. The wavy top edge is what
+            creates the wing shape (primary color is visible above it). */}
+        <path d="M 8,43 L 8,38 Q 14,36 18,37 Q 24,38 28,36 Q 36,33 42,33 Q 48,33 52,36 Q 60,38 66,36 Q 74,34 80,34 Q 86,34 90,38 L 90,43 Z" fill={accent} stroke={stroke} strokeWidth="0.5"/>
+        {/* Eyestay shadow — recessed lace bed */}
+        <path d="M 22,28 Q 32,26 42,27 L 42,36 Q 32,35 24,38 Z" fill="rgba(0,0,0,0.22)"/>
+        {/* Laces */}
         {[0,1,2,3].map(i=>(
-          <line key={i} x1={32+i*7} y1={35-i*1.3} x2={56-i*1.5} y2={29-i*0.7} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+          <line key={i} x1={24+i*4} y1={36-i*1.4} x2={40-i*0.5} y2={28-i*0.4} stroke={laces} strokeWidth="1.5" strokeLinecap="round"/>
         ))}
-        {/* Heel pull tab — small accent loop sticking up from the back */}
-        <path d="M 12,24 Q 11,20 15,20 L 19,20 Q 22,20 21,24 L 19,24 Q 18,22 16,22 Q 14,22 14,24 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
+        {/* Tongue tip — peeks up from front of eyestay */}
+        <path d="M 38,24 Q 44,22 50,24 L 50,28 L 38,29 Z" fill={color} stroke={stroke} strokeWidth="0.3" opacity="0.92"/>
+        {/* Toe perforations — on the accent toe box */}
+        <Perfs startX={66} startY={36}/>
+        {/* Heel pull tab */}
+        <path d="M 11,21 Q 10,18 14,18 L 18,18 Q 21,18 20,21 L 18,22 Q 17,20 15,20 Q 13,20 13,22 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
       </svg>
     );
   }
   if(design==="midtop"){
     return(
       <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
-        <Outsole/>
-        <Midsole/>
-        {/* Upper — main color. Mid collar wraps the ankle bone (top y=18). */}
-        <path d="M 14,44 Q 10,26 18,22 Q 24,18 30,18 L 56,18 Q 70,18 78,24 Q 86,30 88,40 L 88,44 Z" fill={color} stroke={stroke} strokeWidth="0.9"/>
-        {/* Padded ankle collar — soft pillow at the top of the back panel */}
-        <path d="M 14,28 Q 10,20 18,18 Q 24,16 32,16 L 32,22 Q 22,24 18,30 Z" fill="rgba(0,0,0,0.18)"/>
-        {/* Heel counter shadow */}
-        <path d="M 14,44 Q 10,26 18,22 Q 22,20 28,20 L 28,28 Q 22,32 24,44 Z" fill="rgba(0,0,0,0.2)"/>
-        {/* Toe box highlight */}
-        <path d="M 64,20 Q 78,22 86,32 Q 88,40 84,42 L 78,36 Q 72,28 64,24 Z" fill="rgba(255,255,255,0.1)"/>
-        {/* Midfoot strap — extra support band in accent across the side */}
-        <path d="M 50,20 L 72,20 L 72,32 L 50,34 Z" fill={accent} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
-        {/* Swoosh panel — runs along the lower side */}
-        <path d="M 22,40 Q 40,30 64,34 Q 76,34 82,38 Q 84,40 82,42 Q 64,38 44,42 Q 28,44 24,44 Q 20,42 22,40 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
-        {/* Eyestay */}
-        <path d="M 30,26 Q 42,22 54,22 L 56,32 Q 42,30 32,36 Z" fill="rgba(0,0,0,0.28)" stroke={stroke} strokeWidth="0.3"/>
-        {/* Tongue */}
-        <path d="M 40,22 Q 48,18 54,20 L 54,28 L 40,30 Z" fill={color} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
-        {/* Laces */}
+        <Sole/>
+        {/* PRIMARY upper — taller collar wraps the ankle bone */}
+        <path d="M 8,28 Q 8,18 16,16 Q 24,15 32,16 L 40,16 Q 50,14 62,16 Q 74,17 80,22 L 84,28 Q 88,34 88,40 L 88,43 L 8,43 Z" fill={color} stroke={stroke} strokeWidth="0.8"/>
+        {/* Padded ankle collar — top of the back panel */}
+        <path d="M 8,22 Q 8,16 16,15 L 32,15 L 32,20 Q 22,21 14,24 Z" fill="rgba(0,0,0,0.15)"/>
+        {/* ACCENT mudguard — same wavy top edge effect */}
+        <path d="M 8,43 L 8,38 Q 14,36 18,37 Q 24,38 28,36 Q 36,33 42,33 Q 48,33 52,36 Q 60,38 66,36 Q 74,34 80,34 Q 86,34 90,38 L 90,43 Z" fill={accent} stroke={stroke} strokeWidth="0.5"/>
+        {/* Eyestay shadow */}
+        <path d="M 22,24 Q 32,20 42,21 L 42,33 Q 32,31 24,36 Z" fill="rgba(0,0,0,0.22)"/>
+        {/* Laces — more rows for mid-top */}
         {[0,1,2,3,4].map(i=>(
-          <line key={i} x1={30+i*6} y1={34-i*1.3} x2={52-i*1} y2={26-i*0.6} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+          <line key={i} x1={24+i*3.5} y1={34-i*1.3} x2={40-i*0.4} y2={22-i*0.3} stroke={laces} strokeWidth="1.5" strokeLinecap="round"/>
         ))}
-        {/* Heel pull tab — taller for mid-top */}
-        <path d="M 12,18 Q 11,14 15,14 L 19,14 Q 22,14 21,18 L 19,18 Q 18,16 16,16 Q 14,16 14,18 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
+        {/* Tongue tip — taller for mid-top */}
+        <path d="M 38,18 Q 44,15 50,18 L 50,25 L 38,26 Z" fill={color} stroke={stroke} strokeWidth="0.3" opacity="0.92"/>
+        {/* Toe perforations */}
+        <Perfs startX={66} startY={36}/>
+        {/* Heel pull tab */}
+        <path d="M 11,14 Q 10,11 14,11 L 18,11 Q 21,11 20,14 L 18,15 Q 17,13 15,13 Q 13,13 13,15 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
       </svg>
     );
   }
-  // high-top — collar wraps high above the ankle (top y=10-12)
+  // high-top — collar wraps above the ankle
   return(
     <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
-      <Outsole/>
-      <Midsole/>
-      {/* Upper — main color. High collar with ankle scoop at the front. */}
-      <path d="M 14,44 Q 10,22 18,16 Q 24,12 30,12 L 64,12 Q 76,12 82,18 Q 88,26 88,40 L 88,44 Z" fill={color} stroke={stroke} strokeWidth="0.9"/>
-      {/* Ankle scoop — small inset at the top-front to relieve flex */}
-      <path d="M 64,12 Q 60,14 60,18 L 78,18 Q 84,16 84,13 Q 78,11 64,12 Z" fill="rgba(0,0,0,0.2)"/>
-      {/* Padded high collar — back of ankle area */}
-      <path d="M 14,30 Q 10,16 18,12 Q 24,10 32,10 L 32,18 Q 22,20 18,32 Z" fill="rgba(0,0,0,0.18)"/>
-      {/* Heel counter shadow */}
-      <path d="M 14,44 Q 10,22 18,16 Q 22,14 26,14 L 26,26 Q 22,32 24,44 Z" fill="rgba(0,0,0,0.2)"/>
-      {/* Toe box highlight */}
-      <path d="M 64,14 Q 78,18 86,30 Q 88,40 84,42 L 78,34 Q 72,24 64,18 Z" fill="rgba(255,255,255,0.1)"/>
-      {/* Padded throat — front of ankle with extra cushion in accent */}
-      <path d="M 54,14 L 72,14 L 72,26 L 54,28 Z" fill={accent} stroke={stroke} strokeWidth="0.4" opacity="0.78"/>
-      {/* Swoosh panel — lower side stripe */}
-      <path d="M 24,40 Q 42,30 66,34 Q 78,34 84,38 Q 86,40 84,42 Q 66,38 46,42 Q 30,44 26,44 Q 22,42 24,40 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
-      {/* Eyestay */}
-      <path d="M 28,28 Q 42,18 58,18 L 60,30 Q 42,28 30,38 Z" fill="rgba(0,0,0,0.28)" stroke={stroke} strokeWidth="0.3"/>
-      {/* Tongue */}
-      <path d="M 38,18 Q 50,14 58,16 L 58,24 L 38,28 Z" fill={color} stroke={stroke} strokeWidth="0.4" opacity="0.85"/>
-      {/* Laces — 6 strokes for high-top */}
+      <Sole/>
+      {/* PRIMARY upper — high collar, with ankle scoop at the front */}
+      <path d="M 8,24 Q 8,12 16,10 Q 24,9 32,10 L 40,10 Q 50,8 62,10 Q 74,11 80,18 L 84,24 Q 88,32 88,40 L 88,43 L 8,43 Z" fill={color} stroke={stroke} strokeWidth="0.8"/>
+      {/* Ankle scoop — inset at top-front for foot flex */}
+      <path d="M 56,10 Q 54,12 54,16 L 78,16 Q 82,14 82,11 Q 74,8 56,10 Z" fill="rgba(0,0,0,0.16)"/>
+      {/* Padded high collar */}
+      <path d="M 8,18 Q 8,10 16,9 L 32,9 L 32,16 Q 20,17 14,22 Z" fill="rgba(0,0,0,0.15)"/>
+      {/* ACCENT mudguard — same wing curve */}
+      <path d="M 8,43 L 8,38 Q 14,36 18,37 Q 24,38 28,36 Q 36,33 42,33 Q 48,33 52,36 Q 60,38 66,36 Q 74,34 80,34 Q 86,34 90,38 L 90,43 Z" fill={accent} stroke={stroke} strokeWidth="0.5"/>
+      {/* Eyestay shadow */}
+      <path d="M 22,20 Q 32,16 42,17 L 42,33 Q 32,30 24,36 Z" fill="rgba(0,0,0,0.22)"/>
+      {/* Laces — most rows for high-top */}
       {[0,1,2,3,4,5].map(i=>(
-        <line key={i} x1={30+i*5.5} y1={36-i*1.3} x2={56-i*1} y2={22-i*0.4} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+        <line key={i} x1={24+i*3} y1={34-i*1.3} x2={40-i*0.4} y2={18-i*0.2} stroke={laces} strokeWidth="1.5" strokeLinecap="round"/>
       ))}
+      {/* Tongue — tall for high-top */}
+      <path d="M 38,14 Q 44,11 50,14 L 50,22 L 38,24 Z" fill={color} stroke={stroke} strokeWidth="0.3" opacity="0.92"/>
+      {/* Toe perforations */}
+      <Perfs startX={66} startY={36}/>
       {/* Heel pull tab — tallest for high-top */}
-      <path d="M 12,12 Q 11,8 15,8 L 19,8 Q 22,8 21,12 L 19,12 Q 18,10 16,10 Q 14,10 14,12 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
+      <path d="M 11,8 Q 10,5 14,5 L 18,5 Q 21,5 20,8 L 18,9 Q 17,7 15,7 Q 13,7 13,9 Z" fill={accent} stroke={stroke} strokeWidth="0.4"/>
     </svg>
   );
 }
