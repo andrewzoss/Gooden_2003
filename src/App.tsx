@@ -10098,9 +10098,14 @@ export default function App(){
             <path d="M 25 0 Q 125 350 25 700" fill="none" stroke="rgba(255,255,255,0.15)" strokeWidth="1"/>
           </svg>
 
-          {/* Logo emblem — cover art top-left, smaller */}
-          <div style={{position:"relative",zIndex:2,paddingTop:24,paddingLeft:14}}>
-            <Logo size={88}/>
+          {/* Logo emblem — chrome Gooden 2003 logo, top-left of homepage only.
+              Other Logo() usages (menu top bars, app frame) still render the
+              circular cover-art.webp portrait — this swap is title-screen-only. */}
+          <div style={{position:"relative",zIndex:2,paddingTop:18,paddingLeft:10}}>
+            <img src="/logo.png" alt="GOODEN 2003" style={{
+              width:130,height:"auto",display:"block",
+              filter:"drop-shadow(0 4px 14px rgba(0,0,0,0.5))",
+            }}/>
           </div>
 
           {/* Cover art player — large, decorative, right side */}
