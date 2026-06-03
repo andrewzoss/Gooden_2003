@@ -505,7 +505,7 @@ const SHOP_ITEMS = [
     id:"nokia_7610", category:"phone",
     name:"Nokia 7610", subtitle:"T-Mobile · Get More",
     price:500, icon:"📱",
-    description:"The hottest swivel phone of 2004. Unlocks the Phone Calls feature — start with Cousin Kerry, more contacts coming.",
+    description:"The hottest swivel phone of 2004. Unlocks the Phone Calls feature — chat with Cousin Kerry, the Van Gundy brothers, Seal, and Nigel Thornberry.",
     color:"#e20074",
   },
   {
@@ -5532,7 +5532,136 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
             </button>
           );
         })()}
+
+        {/* Foundation card — $5M one-time legacy purchase. Just a name and
+            you're a philanthropist. No mechanics, just bragging rights and
+            a permanent mark on the player profile. */}
+        {(()=>{
+          const FOUNDATION_COST=5000000;
+          const existing=player?.purchases?.foundation;
+          const canAfford=(money||0)>=FOUNDATION_COST;
+          if(existing){
+            return(
+              <div style={{display:"block",width:"100%",padding:"12px 14px",background:"rgba(168,85,247,0.06)",border:`1.5px solid #a855f755`,borderRadius:10,color:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>🕊️</div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:9,color:"#a855f7",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>✓ PHILANTHROPIST</div>
+                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{existing.name}</div>
+                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>Founded {existing.yearStarted} · Giving back to the community</div>
+                  </div>
+                </div>
+              </div>
+            );
+          }
+          return(
+            <button onClick={()=>{if(canAfford) go("nbaFoundation"); else toast&&toast(`Foundation costs ${fmtMoney(FOUNDATION_COST)}`,"#888");}} disabled={!canAfford} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:`1px solid ${canAfford?"#a855f7"+"55":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:canAfford?"pointer":"not-allowed",opacity:canAfford?1:0.55,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
+                <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>🕊️</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Start a Foundation</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>Make a real impact off the court</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>COST</div>
+                  <div style={{fontSize:13,fontWeight:900,color:canAfford?YE:RE,lineHeight:1}}>{fmtMoney(FOUNDATION_COST)}</div>
+                </div>
+              </div>
+              <div style={{fontSize:11,color:"#aaa",lineHeight:1.5,paddingTop:6,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+                {canAfford?"Name your charity and put your name on something that matters.":`Need ${fmtMoney(FOUNDATION_COST-(money||0))} more to give back.`}
+              </div>
+            </button>
+          );
+        })()}
       </div>
+    </div>
+  );
+}
+
+// ─── FOUNDATION ────────────────────────────────────────────────────────────────
+// One-time $5M legacy purchase. Name a charity, attach your name to something
+// that matters. No mechanics, no income, no expansion — just a permanent mark
+// on the player profile that says you gave back.
+function NbaFoundationScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}){
+  const FOUNDATION_COST=5000000;
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const currentYear=NBA_START_YEAR+seasonsPlayed;
+  const existing=player?.purchases?.foundation;
+  const [name,setName]=useState("");
+  const ready=name.trim().length>=3 && (money||0)>=FOUNDATION_COST && !existing;
+
+  // Quick-fill suggestions based on the player's name so the user doesn't have
+  // to think too hard. The placeholder hint also rotates.
+  const suggestions=player.name?[
+    `The ${player.name.split(" ").slice(-1)[0]} Foundation`,
+    `${player.name.split(" ")[0]}'s Kids`,
+    `Hoops for Hope`,
+    `Each One Teach One`,
+  ]:["Hoops for Hope","Each One Teach One","The Family First Foundation"];
+
+  const found=()=>{
+    if(!ready) return;
+    setMoney(m=>(m||0)-FOUNDATION_COST);
+    setPlayer(p=>{
+      const purchases=ensurePurchases(p);
+      return {...p, purchases:{...purchases, foundation:{
+        name:name.trim(),
+        yearStarted:currentYear,
+        totalGiven:FOUNDATION_COST,
+      }}};
+    });
+    toast&&toast(`${name.trim()} founded!`,"#a855f7");
+    go("nbaSpend");
+  };
+
+  return(
+    <div>
+      <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:48,marginBottom:6}}>🕊️</div>
+        <div style={{fontSize:10,letterSpacing:3,color:"#a855f7",marginBottom:4,textTransform:"uppercase"}}>Giving Back</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>START A FOUNDATION</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:6,padding:"0 16px",lineHeight:1.5}}>
+          {existing?`You already founded ${existing.name} back in ${existing.yearStarted}. One foundation per career — make it count.`:"A one-time $5M endowment puts your name on something that matters. No expansion, no income — just legacy."}
+        </div>
+      </div>
+
+      {existing?(
+        <div style={{background:"rgba(168,85,247,0.08)",border:"1px solid #a855f755",borderRadius:12,padding:16,textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:8}}>🕊️</div>
+          <div style={{fontSize:9,letterSpacing:2,color:"#a855f7",fontWeight:700,marginBottom:4}}>FOUNDED {existing.yearStarted}</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>{existing.name}</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:6}}>Total contributed: {fmtMoney(existing.totalGiven||FOUNDATION_COST)}</div>
+        </div>
+      ):(
+        <>
+          {/* Name input */}
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Foundation Name</div>
+            <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. The Smith Foundation" maxLength={50} style={{width:"100%",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1.5px solid ${name.trim().length>=3?"#a855f766":"rgba(255,255,255,0.12)"}`,borderRadius:8,color:"#fff",fontSize:14,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}/>
+          </div>
+
+          {/* Quick suggestions */}
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:9,letterSpacing:2,color:"#666",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Quick Picks</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+              {suggestions.map(s=>(
+                <button key={s} onClick={()=>setName(s)} style={{padding:"6px 11px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.1)",borderRadius:14,color:"#aaa",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"'Barlow Condensed',sans-serif"}}>{s}</button>
+              ))}
+            </div>
+          </div>
+
+          {/* Cost callout */}
+          <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:12,marginBottom:14,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div style={{fontSize:11,color:"#aaa"}}>One-time endowment</div>
+            <div style={{fontSize:18,fontWeight:900,color:(money||0)>=FOUNDATION_COST?YE:RE}}>{fmtMoney(FOUNDATION_COST)}</div>
+          </div>
+
+          <button onClick={found} disabled={!ready} style={{...btnS,width:"100%",padding:13,fontSize:14,opacity:ready?1:0.5,cursor:ready?"pointer":"not-allowed"}}>
+            {(money||0)<FOUNDATION_COST?`NEED ${fmtMoney(FOUNDATION_COST-(money||0))} MORE`:name.trim().length<3?"ENTER A NAME":"🕊️ FOUND IT"}
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -5588,6 +5717,184 @@ const CALL_CONTACTS = [
       },
     ],
   },
+  {
+    id:"jeff_van_gundy",
+    name:"Jeff Van Gundy",
+    role:"Coach · Analyst",
+    portrait:"/jeff-van-gundy.jpg",
+    accentColor:"#1d4ed8", // Knicks blue — JVG's signature era
+    available:()=>true,
+    topics:[
+      {
+        prompt:"Got any war stories?",
+        responses:[
+          "Oh I've got stories. Listen — back in '98 we're playing Miami, Game 4, things escalate. I'm trying to break it up and the next thing I know I'm holding onto Alonzo Mourning's leg for dear life. I'm not letting go. I'm not letting go.",
+          "People bring up the Alonzo Mourning thing constantly. CONSTANTLY. And you know what? I'd do it again. That's coaching. You go down with your guys.",
+          "When you're a 5'9\" head coach in the Eastern Conference Finals and somebody's swinging on your players, you do what you have to do. You grab the leg. You hold on.",
+          "I was just trying to keep the peace. The leg-grab — I don't recommend it as a coaching technique, but in the moment, you commit to it.",
+        ],
+      },
+      {
+        prompt:"How's Stan doing?",
+        responses:[
+          "Stan's doing great. Great. My brother's a better coach than me and I'll say that on the record. Don't tell him I said that or he'll never let me hear the end of it.",
+          "Look, growing up with Stan — he was always the smarter one. Always. I had to outwork him because I couldn't outthink him. That's just facts.",
+          "Stan called me last week. We talked for an hour about a baseline out-of-bounds play. An HOUR. That's the Van Gundy household. That's how we grew up.",
+          "I love my brother. He's relentless. And he boxes out — even at the dinner table. You sit down to eat and Stan's already got position.",
+        ],
+      },
+      {
+        prompt:"What should I focus on?",
+        responses:[
+          "Defense. Defense, defense, defense. Score 30 a night, but if you can guard somebody, you'll have a long career. Trust me on that.",
+          "Don't take possessions off. Every possession matters. EVERY. POSSESSION. I'll die on this hill.",
+          "Listen to your coaches. I know that sounds boring but the guys who tune out their coaches are the guys who flame out in three years.",
+        ],
+      },
+      {
+        prompt:"Thoughts on the game today?",
+        responses:[
+          "The three-point shot has changed everything. EVERYTHING. And I'm not sure it's all for the better, but it is what it is.",
+          "These officials — I'm not gonna get into it. I'll get fined again. But you know how I feel.",
+          "Best advice I can give? Watch the game. Not just YOUR game. ALL the games. The more basketball you see, the better basketball you play.",
+        ],
+      },
+    ],
+  },
+  {
+    id:"stan_van_gundy",
+    name:"Stan Van Gundy",
+    role:"Coach · Analyst",
+    portrait:"/stan-van-gundy.webp",
+    accentColor:"#0ea5e9", // Magic blue from his Orlando years
+    available:()=>true,
+    topics:[
+      {
+        prompt:"Coaching tips?",
+        responses:[
+          "Box out. Box. Out. I'm serious. You wanna know the difference between a winning team and a losing team? It's not talent. It's who finishes possessions on defense by boxing out.",
+          "If I had a dollar for every time I yelled BOX OUT in a huddle, I could buy a small island. And I'd retire there. And I'd still yell BOX OUT at the seagulls.",
+          "Every offensive rebound your opponent gets is a stab in the heart. Every. One. You can shoot 50% from the field and still lose if you don't box out.",
+          "Boxing out isn't a skill. It's a CHOICE. It's effort. If you're not doing it you're telling the world you don't care about winning.",
+        ],
+      },
+      {
+        prompt:"How's Jeff?",
+        responses:[
+          "Jeff's good. He's still talking about that Alonzo Mourning thing. He brings it up every Thanksgiving. Every single one.",
+          "My brother — and I mean this with love — has been riding the same story for 25 years. The leg grab. Hold on. Yes Jeff, we know.",
+          "Look, Jeff is a great coach. Better than people give him credit for. But if you call him just be ready to hear about the '98 brawl. You will hear about it.",
+          "Growing up I was the older brother and I had to teach Jeff EVERYTHING. Including how to box out. Did it take? You tell me.",
+        ],
+      },
+      {
+        prompt:"What separates good teams from great teams?",
+        responses:[
+          "Rebounding. End of discussion. You crash the boards on offense, you box out on defense, you win basketball games. That's it. That's the formula.",
+          "Defense translates. Shooting doesn't always translate to the playoffs. Defense does. Boxing out does.",
+          "Effort over talent every single time. I've coached talented teams that lost. I've coached scrappy teams that won. Effort wins.",
+        ],
+      },
+      {
+        prompt:"What's your daily routine like?",
+        responses:[
+          "I watch a lot of film. A LOT. My wife's convinced I'm married to the iPad. She's not entirely wrong.",
+          "I get up, I drink coffee, I watch a Hubie Brown clinic on YouTube, and then I'm ready to go.",
+          "Honestly? I think about boxing out. Daily. I'll be at the grocery store and I'm watching people's positioning. It's a sickness.",
+        ],
+      },
+    ],
+  },
+  {
+    id:"seal",
+    name:"Seal",
+    role:"Singer · Songwriter",
+    portrait:"/seal.jpg",
+    accentColor:"#a855f7",
+    available:()=>true,
+    topics:[
+      {
+        prompt:"Why are you in my phone?",
+        responses:[
+          "I... I genuinely don't know, mate. One moment I was in the studio working on a track, the next I'm in your contacts. But — I'm here now! How can I help?",
+          "That is an excellent question and I have no idea how to answer it. But I am, as they say, all in. What do you need?",
+          "Look, I asked the same question. Nobody could give me a straight answer. So I figured — when in Rome. I'm Seal, and apparently I'm your friend now.",
+          "You know what? I stopped asking. The universe puts you where you need to be. Maybe you needed a singer in your contacts. I am here for it.",
+        ],
+      },
+      {
+        prompt:"Got any life advice?",
+        responses:[
+          "We're never gonna survive unless we get a little crazy. I wrote a whole song about it. It applies to basketball too, I think.",
+          "Believe in yourself. I know it sounds like a Hallmark card but truly — confidence is a craft. You build it. You don't find it.",
+          "Stay curious. The moment you think you've figured everything out is the moment you stop growing. That's just as true on a basketball court as it is in a recording studio.",
+          "Wear sunscreen. I'm a Brit, I learned this the hard way in California.",
+        ],
+      },
+      {
+        prompt:"Do you know anything about basketball?",
+        responses:[
+          "Honestly? Not really. I know it's the one with the orange ball and the net. I can carry a tune but I cannot carry a basketball.",
+          "I've watched a Lakers game once. There was a man named Kobe. Everyone seemed very excited about him. Is he still playing?",
+          "I'm afraid you've called the wrong Seal. There might be a more sporty Seal somewhere. I am the singer.",
+          "I know enough to know the rim is up high and you're supposed to put the ball through it. Beyond that I am completely out of my depth.",
+        ],
+      },
+      {
+        prompt:"Sing me something?",
+        responses:[
+          "Oh I would love to but I'm contractually obligated to only perform on licensed releases. Lawyers, you know. But picture this: me, a piano, a soft spotlight. You're welcome.",
+          "Hmm hmm hmm — no, I'd better not. The acoustics in this phone are abysmal.",
+          "I'll do one bar. Just one. ...Actually no, I won't. Save it for the album.",
+        ],
+      },
+    ],
+  },
+  {
+    id:"nigel_thornberry",
+    name:"Nigel Thornberry",
+    role:"Naturalist · Explorer",
+    portrait:"/nigel-thornberry.webp",
+    accentColor:"#dc2626",
+    available:()=>true,
+    topics:[
+      {
+        prompt:"Where are you calling from?",
+        responses:[
+          "I'm currently crouched behind a termite mound observing a magnificent silverback gorilla! Truly... SMASHING specimen!",
+          "Greetings from the Serengeti! I've just had the most extraordinary encounter with a pride of lions. SMASHING!",
+          "Hello from the Amazon, my boy! The biodiversity here is absolutely... SMASHING. Did you know a single hectare can contain over 750 tree species?",
+          "I'm in the Arctic at present. Quite chilly. But I've just photographed a polar bear and her cubs and it was nothing short of SMASHING!",
+        ],
+      },
+      {
+        prompt:"Got any animal facts?",
+        responses:[
+          "A blue whale's tongue weighs as much as an elephant. An ELEPHANT, my boy! Nature is positively... SMASHING.",
+          "The mantis shrimp can throw a punch with the acceleration of a .22 caliber bullet. Astonishing creature. Absolutely SMASHING.",
+          "Did you know an octopus has THREE hearts? Three! And nine brains! Smashing little fellows, octopi.",
+          "The cheetah goes from zero to sixty in three seconds. Faster than most automobiles! Truly... SMASHING speed.",
+        ],
+      },
+      {
+        prompt:"Any wisdom for me?",
+        responses:[
+          "Observe! Patience and observation, my boy. In the wild and on the court — the keenest eye wins. SMASHING advice if I do say so myself.",
+          "Adapt or perish, as the old proverb goes. Every great athlete is essentially a survival specialist in their own ecosystem. SMASHING parallel, really.",
+          "Respect your opponent the way one respects a rhinoceros — from a safe distance, with great care. SMASHING wisdom!",
+          "Never trust a hippopotamus. That's not advice for basketball, that's just life advice. Truly... SMASHING danger, hippos.",
+        ],
+      },
+      {
+        prompt:"Stay safe out there?",
+        responses:[
+          "Oh I shall, dear boy, I shall. The crocodiles are restless this evening but I've packed extra biscuits. SMASHING preparation!",
+          "Always! Though I should warn you — I'm about to attempt to ride a wildebeest. For science. Wish me luck. SMASHING!",
+          "Don't you worry about old Nigel! I've survived a charging bull elephant, a venomous bushmaster, and one rather aggressive duck. SMASHING resume!",
+        ],
+      },
+    ],
+  },
 ];
 
 // Helper to pick a random response from a topic
@@ -5625,11 +5932,6 @@ function CallPickerScreen({player, go}){
           <div style={{fontSize:18,color:contact.accentColor}}>📞</div>
         </button>
       ))}
-
-      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",marginTop:6,fontSize:11,color:"#888",lineHeight:1.5}}>
-        <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,marginBottom:4,textTransform:"uppercase"}}>Coming Soon</div>
-        More contacts unlock as your career progresses — agents, teammates, family.
-      </div>
 
       {picked&&<CallScreen contactId={picked} onHangUp={()=>setPicked(null)}/>}
     </div>
@@ -9712,6 +10014,24 @@ export default function App(){
           Memphis Grizzlies · Orlando Magic · <strong style={{color:"#fff"}}>Cleveland Cavaliers</strong> · Chicago Bulls · Sacramento Kings · San Antonio Spurs · Dallas Mavericks · Washington Wizards · Milwaukee Bucks · LA Clippers · Cleveland Cavaliers (2nd stint)
         </div>
 
+        {/* Legal notice — fan-project disclaimer. Sits at the bottom of Extras
+            since this is the most natural spot (we're already talking about
+            Drew Gooden here). Not legal advice, just standard fan-project
+            posture: non-commercial, no affiliation, no claim of ownership. */}
+        <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:"#666",marginBottom:8,marginTop:6}}>Legal</div>
+        <div style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"12px 14px",marginBottom:14,fontSize:11,color:"#999",lineHeight:1.6}}>
+          <div style={{fontWeight:900,color:"#bbb",marginBottom:6,fontSize:11,letterSpacing:1,textTransform:"uppercase"}}>Fan Project · Not Affiliated</div>
+          <p style={{margin:"0 0 8px"}}>
+            <strong style={{color:"#bbb"}}>Gooden 2003</strong> is an unofficial, non-commercial fan project made for personal entertainment. It is not affiliated with, endorsed by, or sponsored by the National Basketball Association, the NBA Players Association, any NBA team, any current or former NBA player (including Drew Gooden and Kerry Kittles), the NCAA, any college or university, Electronic Arts Inc., Take-Two Interactive Software Inc., or any other game publisher.
+          </p>
+          <p style={{margin:"0 0 8px"}}>
+            All team names, player names, logos, and other identifying marks referenced are the property of their respective owners and are used here for identification and reference only. No infringement of copyright, trademark, or right of publicity is intended.
+          </p>
+          <p style={{margin:0}}>
+            The creator claims no ownership of any player likeness, team identity, or related intellectual property, and this project will never be sold or monetized.
+          </p>
+        </div>
+
         <button onClick={()=>go("title")} style={btnS}>BACK TO HOME →</button>
       </MenuFrame>
     ),
@@ -10593,6 +10913,11 @@ export default function App(){
     nbaAlbum:(
       <MenuFrame sub="Ventures" title="ALBUM">
         <AlbumScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    nbaFoundation:(
+      <MenuFrame sub="Legacy" title="FOUNDATION">
+        <NbaFoundationScreen money={money} setMoney={setMoney} player={player} setPlayer={setPlayer} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
       </MenuFrame>
     ),
     shoeDesigner:(
