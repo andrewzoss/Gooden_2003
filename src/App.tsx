@@ -7013,57 +7013,116 @@ function ShoeSignaturePreview({shoeSignature}){
   );
 }
 
-// Shoe silhouette — minimal, clean basketball shoe drawing. Just the outline
-// of a shoe with two color panels: PRIMARY (upper/collar/heel) and ACCENT
-// (toe box). Always-white midsole + black outsole below. No decoration noise.
+// Shoe silhouette icons — three inline SVGs (low/mid/high) drawn as
+// basketball-shoe side profiles. Orientation matches the AJ1 reference:
+// TOE on the LEFT, COLLAR/HEEL rising on the RIGHT.
+// 
+//   - color:  PRIMARY upper color (eyestay, collar, heel)
+//   - accent: SECONDARY color (toe box panel)
+//   - size:   pixel size (height scaled to size * 0.65)
+//
+// Silhouettes differ only in the height of the back collar:
+//   lowtop  → collar barely above the eyestay
+//   midtop  → collar at mid-ankle
+//   hightop → collar well above the ankle
 function ShoeIcon({design, color="#FA5400", accent="#FFFFFF", size=42}){
-  // Heel collar height (in SVG y-coords — lower number = higher on screen)
-  const collarY = design==="lowtop" ? 22 : design==="midtop" ? 14 : 8;
-  const laceRows = design==="lowtop" ? 4 : design==="midtop" ? 5 : 6;
   const stroke = "#1a1a1a";
 
-  // Shoe outline: heel-back UP, across the top (collar/eyestay), curving DOWN
-  // over the toe, then back across the bottom. One simple closed path.
-  const outlinePath = `
-    M 10,44
-    L 10,${collarY + 2}
-    Q 10,${collarY - 2} 16,${collarY - 2}
-    L 30,${collarY}
-    Q 42,${collarY + 1} 56,${collarY + 2}
-    Q 70,${collarY + 3} 80,28
-    Q 88,32 90,40
-    L 90,44
-    Z
-  `;
-  // Toe box panel — covers the front portion of the upper in accent color.
+  // The outline differs per silhouette in the collar area. Going clockwise
+  // from toe-bottom-front: up the front of the toe (rounded), across the top
+  // of the toe and eyestay (slopes UP toward the collar), up the front of the
+  // collar, across the top of the collar, down the back of the collar, and
+  // back across the sole to start.
+  let outlinePath, eyestayBottom, collarTopY;
+  if (design === "lowtop") {
+    eyestayBottom = 50;
+    collarTopY = 36;
+    outlinePath = `
+      M 5,55
+      Q 3,48 5,44
+      Q 5,38 14,38
+      L 50,40
+      Q 64,40 74,38
+      L 86,38
+      Q 94,38 94,44
+      L 94,55
+      Z
+    `;
+  } else if (design === "midtop") {
+    eyestayBottom = 50;
+    collarTopY = 22;
+    outlinePath = `
+      M 5,55
+      Q 3,48 5,44
+      Q 5,38 14,38
+      L 48,38
+      Q 56,38 60,32
+      L 62,24
+      Q 62,18 72,18
+      L 86,18
+      Q 94,20 94,32
+      L 94,55
+      Z
+    `;
+  } else {
+    // hightop
+    eyestayBottom = 50;
+    collarTopY = 10;
+    outlinePath = `
+      M 5,55
+      Q 3,48 5,44
+      Q 5,38 14,38
+      L 46,38
+      Q 54,38 58,32
+      L 60,14
+      Q 60,8 70,8
+      L 86,8
+      Q 94,10 94,28
+      L 94,55
+      Z
+    `;
+  }
+
+  // Toe box accent panel — covers the front of the shoe with the secondary color
   const toePath = `
-    M 58,30
-    Q 72,29 80,31
-    Q 88,33 90,40
-    L 90,44
-    L 58,44
+    M 5,55
+    Q 3,48 5,44
+    Q 5,38 14,38
+    L 24,38
+    L 28,55
     Z
   `;
 
-  return(
-    <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
+  // Laces — diagonal strokes climbing the eyestay from lower-front to upper-back
+  const laces = [];
+  const numLaces = design === "lowtop" ? 4 : design === "midtop" ? 5 : 6;
+  for (let i = 0; i < numLaces; i++) {
+    const t = i / (numLaces - 1);
+    // Start of lace (lower-front of eyestay)
+    const x1 = 22 + i * 2.5;
+    const y1 = 46 - i * 1;
+    // End of lace (upper-back of eyestay, near collar opening)
+    const x2 = x1 + 8;
+    const y2 = collarTopY + 8 + (eyestayBottom - collarTopY - 8) * (1 - t) * 0.6;
+    laces.push({x1, y1, x2, y2});
+  }
+
+  return (
+    <svg viewBox="0 0 100 65" width={size} height={size * 0.65} style={{display:"block"}}>
       {/* Main shoe upper — PRIMARY color */}
-      <path d={outlinePath} fill={color} stroke={stroke} strokeWidth="1"/>
+      <path d={outlinePath} fill={color} stroke={stroke} strokeWidth="1.2"/>
       {/* Toe box — ACCENT color */}
-      <path d={toePath} fill={accent} stroke={stroke} strokeWidth="0.8"/>
-      {/* Laces — simple X-pattern across the eyestay */}
-      {Array.from({length:laceRows}).map((_,i)=>{
-        const y = 38 - i * ((38 - collarY) / laceRows);
-        return(
-          <line key={i} x1={26} y1={y} x2={50} y2={y - 2}
-                stroke="#1a1a1a" strokeWidth="1.5" strokeLinecap="round"/>
-        );
-      })}
+      <path d={toePath} fill={accent} stroke={stroke} strokeWidth="0.9"/>
+      {/* Laces — diagonal across the eyestay */}
+      {laces.map((l, i) => (
+        <line key={i} x1={l.x1} y1={l.y1} x2={l.x2} y2={l.y2}
+              stroke={stroke} strokeWidth="1.8" strokeLinecap="round"/>
+      ))}
       {/* White midsole — band below the upper */}
-      <path d="M 6,44 L 6,49 Q 6,50 8,50 L 92,50 Q 94,50 94,49 L 94,44 Z"
-            fill="#FFFFFF" stroke={stroke} strokeWidth="0.8"/>
+      <path d="M 4,55 L 4,60 Q 4,61 6,61 L 94,61 Q 96,61 96,60 L 96,55 Z"
+            fill="#FFFFFF" stroke={stroke} strokeWidth="0.9"/>
       {/* Black outsole — thin band at the very bottom */}
-      <path d="M 6,50 Q 6,53 10,53 L 90,53 Q 94,53 94,50 Z" fill={stroke}/>
+      <path d="M 4,61 L 96,61 L 96,63 Q 96,64 94,64 L 6,64 Q 4,64 4,63 Z" fill={stroke}/>
     </svg>
   );
 }
