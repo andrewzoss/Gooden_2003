@@ -2574,7 +2574,16 @@ function SeasonGame({player, school, priorities, year, starTier, allYears=[], on
   // starTier is now a real prop (was previously expected on player.starTier but
   // never passed there). Falls back to player.starTier for any legacy callers.
   const tier=starTier||player.starTier;
-  const difficulty=(school.difficulty||1.0)*(tier?.difficulty||1.0);
+  // Difficulty: flat 4-tier mapping by school context (no star-tier multiplier).
+  //   Small college  (prestige ≤ 5)              : 0.75x
+  //   Mid college    (prestige 6-7)              : 1.00x
+  //   High / Elite college OR international team : 1.25x
+  //   NBA                                        : 1.50x (set elsewhere)
+  // Star tier no longer compounds — it would have made a 5★ at Duke face 2.1x
+  // difficulty, which felt punishing for no reason. Star tier still affects
+  // playing time and recruiting; just not minigame challenge.
+  const prestige=school.prestige||5;
+  const difficulty=school.isIntl?1.25:(prestige<=5?0.75:prestige<=7?1.0:1.25);
   const [gameIdx,setGameIdx]=useState(0);
   const [results,setResults]=useState([]);
   const [phase,setPhase]=useState("intro");
@@ -8312,17 +8321,16 @@ function MiniGameTesterScreen({go, toast}){
           Try any individual mini-game with a balanced 70-rated test player. No save impact — none of this counts.
         </div>
       </div>
-      {/* Difficulty picker — five tiers spanning the real career range so the
+      {/* Difficulty picker — four tiers spanning the real career range so the
           tester actually mirrors how the games feel in college and the pros. */}
       <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:12,marginBottom:14}}>
         <div style={{fontSize:9,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Difficulty · {difficulty.toFixed(2)}x</div>
-        <div style={{display:"grid",gridTemplateColumns:"repeat(5, 1fr)",gap:5}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4, 1fr)",gap:5}}>
           {[
-            {v:0.55, label:"Small", sub:"2★ small school"},
-            {v:0.90, label:"Mid",   sub:"3★ mid-major"},
-            {v:1.20, label:"High",  sub:"4★ high-major"},
-            {v:1.50, label:"NBA",   sub:"pro league"},
-            {v:2.10, label:"Elite", sub:"5★ blue blood"},
+            {v:0.75, label:"Small",    sub:"small college"},
+            {v:1.00, label:"Mid",      sub:"mid-college"},
+            {v:1.25, label:"High/Int", sub:"elite / international"},
+            {v:1.50, label:"NBA",      sub:"pro league"},
           ].map(d=>(
             <button key={d.v} onClick={()=>setDifficulty(d.v)} style={{
               padding:"9px 4px",
@@ -10025,7 +10033,7 @@ export default function App(){
               <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
                 <div style={{flex:1,marginRight:8}}>
                   <div style={{fontSize:15,fontWeight:700}}>{sc.name}</div>
-                  <div style={{fontSize:11,color:"#555",marginBottom:5}}>{sc.conf} · Difficulty {sc.difficulty}x</div>
+                  <div style={{fontSize:11,color:"#555",marginBottom:5}}>{sc.conf} · Difficulty {(sc.prestige<=5?0.75:sc.prestige<=7?1.0:1.25).toFixed(2)}x</div>
                   <div>{sc.devStrengths.map(ds=>{const item=SKILLS.find(x=>x.id===ds);return <Tag key={ds}>{item?.icon} {item?.label}</Tag>;})}</div>
                 </div>
                 <div style={{textAlign:"right",minWidth:55}}>
