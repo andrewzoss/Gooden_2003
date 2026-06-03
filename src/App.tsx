@@ -4128,7 +4128,7 @@ const SAVE_VERSION = 1;
 // the user can visit at any time. We don't save them as the "resume to"
 // destination, otherwise hitting "Resume Career" from the title would just
 // return you to the title.
-const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing","kerryWelcome","pastCareers","pastCareerStats"]);
+const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing","kerryWelcome","pastCareers","pastCareerStats","miniGameTester"]);
 
 // Read a save from localStorage. Returns null if missing, malformed, or from
 // an incompatible version.
@@ -4865,25 +4865,49 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
               setTimeout(()=>toast&&toast(`${r.name}: ${label} (${fmtMoney(r.outcome.payout)})`,tone), 1200+idx*400);
             });
           }
-          // Age-based skill decay — starting at 30, the player's body starts
-          // breaking down. Each offseason after 30 has a chance to ding 1-2
-          // random skills by 1-3 points. Floors at 30 (not enough to wreck a
-          // career, but you'll feel it). After advancing this season, the
-          // player's age = ROOKIE_BASE_AGE + allYears + nbaSeasons.length + 1.
+          // Age-based skill decay — starts at 30, ramps hard in the mid-30s,
+          // and gets brutal in the late 30s. Tiers:
+          //   30-32: 60% chance, decay 1-2 skills by 1-3 points
+          //   33-34: 85% chance, decay 2 skills by 2-4 points
+          //   35-37: 100% chance, decay 2-3 skills by 2-5 points
+          //   38+:   100% chance, decay 3-4 skills by 3-6 points
+          // Floor still 30 — players can't drop below replacement level.
           const ageAfterSeason=calcAge(allYears,nbaSeasons)+1;
           if(ageAfterSeason>=30){
-            const decayChance=Math.min(0.95, 0.4+(ageAfterSeason-30)*0.12); // 30→40%, 32→64%, 35→100%
+            // Tier-based parameters. Old curve only hit 95% by 35 and capped
+            // damage at 1-3 points per skill; the new curve makes 35+ a real
+            // problem the player has to plan around.
+            let decayChance, numToDecay, dropMin, dropMax;
+            if(ageAfterSeason>=38){
+              decayChance=1.0;
+              numToDecay=3+Math.floor(Math.random()*2); // 3 or 4
+              dropMin=3; dropMax=6;
+            } else if(ageAfterSeason>=35){
+              decayChance=1.0;
+              numToDecay=2+Math.floor(Math.random()*2); // 2 or 3
+              dropMin=2; dropMax=5;
+            } else if(ageAfterSeason>=33){
+              decayChance=0.85;
+              numToDecay=2;
+              dropMin=2; dropMax=4;
+            } else {
+              // 30-32
+              decayChance=0.60;
+              numToDecay=Math.random()<0.5?1:2;
+              dropMin=1; dropMax=3;
+            }
             if(Math.random()<decayChance){
               setPlayer(p=>{
                 const skills={...(p.skills||{})};
                 const keys=Object.keys(skills);
                 if(keys.length===0) return p;
-                // Decay 1-2 skills by 1-3 points each.
-                const numToDecay=Math.random()<0.5?1:2;
+                // Decay N skills (without replacement so the same skill isn't
+                // hit twice in one offseason) — pick distinct random keys.
+                const shuffled=[...keys].sort(()=>Math.random()-0.5);
                 const decayedSkills=[];
-                for(let i=0;i<numToDecay;i++){
-                  const k=keys[Math.floor(Math.random()*keys.length)];
-                  const drop=1+Math.floor(Math.random()*3);
+                for(let i=0;i<numToDecay && i<shuffled.length;i++){
+                  const k=shuffled[i];
+                  const drop=dropMin+Math.floor(Math.random()*(dropMax-dropMin+1));
                   const newVal=Math.max(30,(skills[k]||50)-drop);
                   if(newVal<skills[k]){
                     decayedSkills.push({skill:k, drop:skills[k]-newVal});
@@ -7862,6 +7886,11 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
       // HOF
       hof:hofEval.inducted,
       hofReason:hofEval.reason,
+      // Retirement team — every player picks one (HOF inductee gets jersey
+      // retired, non-HOF still chooses which org represents their career).
+      retirementTeam:jerseyTeam,
+      // Legacy alias for back-compat with archives written before this field
+      // was generalized. Display code falls back to retirementTeam.
       hofJerseyTeam:hofEval.inducted?jerseyTeam:null,
       // Purchases (so leaderboard can show business empire if any)
       purchases:player.purchases,
@@ -7897,8 +7926,11 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
           {teamsPlayedFor.length===0?(
             <div style={{fontSize:11,color:"#888",fontStyle:"italic"}}>No team data found.</div>
           ):teamsPlayedFor.length===1?(
-            <div style={{fontSize:16,fontWeight:900,color:"#fff",textAlign:"center",padding:"8px 0"}}>
-              {teamsPlayedFor[0]}
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"8px 0"}}>
+              {(()=>{const td=NBA_TEAM_DATA[teamsPlayedFor[0]]||{p:"#444",s:"#888",abbr:"???"};return(
+                <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:900,color:"#fff",border:"1px solid rgba(255,255,255,0.2)"}}>{td.abbr}</div>
+              );})()}
+              <span style={{fontSize:16,fontWeight:900,color:"#fff"}}>{teamsPlayedFor[0]}</span>
             </div>
           ):(
             <div style={{display:"flex",flexDirection:"column",gap:6}}>
@@ -7906,9 +7938,11 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
               {teamsPlayedFor.map(team=>{
                 const seasonsWithTeam=(nbaSeasons||[]).filter(s=>s.team===team).length;
                 const isPicked=jerseyTeam===team;
+                const td=NBA_TEAM_DATA[team]||{p:"#444",s:"#888",abbr:"???"};
                 return(
-                  <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
-                    <span style={{fontSize:13,fontWeight:900}}>{team}</span>
+                  <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
+                    <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>{td.abbr}</div>
+                    <span style={{flex:1,fontSize:13,fontWeight:900}}>{team}</span>
                     <span style={{fontSize:10,color:"#aaa"}}>{seasonsWithTeam} {seasonsWithTeam===1?"yr":"yrs"}</span>
                   </button>
                 );
@@ -7924,7 +7958,8 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
     );
   }
 
-  // Not inducted — respectful sendoff
+  // Not inducted — respectful sendoff. Still gets to pick a "retired with"
+  // team so the archive entry has a logo to display.
   return(
     <div>
       <div style={{textAlign:"center",marginBottom:16}}>
@@ -7943,6 +7978,34 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
           <div style={{textAlign:"center"}}><div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>POINTS</div><div style={{fontSize:15,fontWeight:900,color:OR}}>{hofEval.totalPoints.toLocaleString()}</div></div>
           <div style={{textAlign:"center"}}><div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>AWARDS</div><div style={{fontSize:15,fontWeight:900,color:GO}}>{hofEval.totalAwards}</div></div>
         </div>
+      </div>
+      {/* Retirement team picker — non-HOF still picks a team to associate
+          with so the archive entry can display the logo. */}
+      <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:14,marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏁 Retire With</div>
+        {teamsPlayedFor.length===0?(
+          <div style={{fontSize:11,color:"#888",fontStyle:"italic"}}>No team data found.</div>
+        ):teamsPlayedFor.length===1?(
+          <div style={{fontSize:16,fontWeight:900,color:"#fff",textAlign:"center",padding:"8px 0"}}>
+            {teamsPlayedFor[0]}
+          </div>
+        ):(
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            <div style={{fontSize:10,color:"#aaa",marginBottom:4,fontStyle:"italic"}}>Pick the team that represents your career:</div>
+            {teamsPlayedFor.map(team=>{
+              const seasonsWithTeam=(nbaSeasons||[]).filter(s=>s.team===team).length;
+              const isPicked=jerseyTeam===team;
+              const td=NBA_TEAM_DATA[team]||{p:"#444",s:"#888",abbr:"???"};
+              return(
+                <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
+                  <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>{td.abbr}</div>
+                  <span style={{flex:1,fontSize:13,fontWeight:900}}>{team}</span>
+                  <span style={{fontSize:10,color:"#aaa"}}>{seasonsWithTeam} {seasonsWithTeam===1?"yr":"yrs"}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
       </div>
       <button onClick={commitAndExit} style={{...btnS,width:"100%",padding:13,fontSize:14}}>
         FINISH CAREER →
@@ -7970,17 +8033,23 @@ function PastCareersScreen({entries, openCareer, go}){
         </div>
       ):(
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {entries.map(entry=>(
+          {entries.map(entry=>{
+            const retireTeam=entry.retirementTeam||entry.hofJerseyTeam||entry.finalTeam;
+            const td=retireTeam?NBA_TEAM_DATA[retireTeam]||{p:"#444",s:"#888",abbr:"???"}:null;
+            return(
             <button key={entry.id} onClick={()=>openCareer(entry.id)} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:entry.hof?`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",border:`1.5px solid ${entry.hof?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
               <div style={{display:"flex",alignItems:"center",gap:12}}>
-                {entry.hof?(
-                  <div style={{width:42,height:42,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, ${GO}aa)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,boxShadow:`0 2px 12px ${GO}55`}}>🏛️</div>
+                {/* Team logo bubble — shows who they retired with. HOF inductees
+                    get a small gold rim around the bubble to signal status. */}
+                {td?(
+                  <div style={{width:42,height:42,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:"#fff",flexShrink:0,border:entry.hof?`2px solid ${GO}`:"1px solid rgba(255,255,255,0.2)",boxShadow:entry.hof?`0 2px 12px ${GO}55`:"0 2px 8px rgba(0,0,0,0.4)"}}>{td.abbr}</div>
                 ):(
-                  <div style={{width:42,height:42,borderRadius:"50%",background:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,color:"#aaa"}}>🏀</div>
+                  <div style={{width:42,height:42,borderRadius:"50%",background:entry.hof?`linear-gradient(135deg, ${GO}, ${GO}aa)`:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:entry.hof?22:18,flexShrink:0,color:entry.hof?"#fff":"#aaa"}}>{entry.hof?"🏛️":"🏀"}</div>
                 )}
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontSize:9,color:entry.hof?GO:"#888",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
                     {entry.hof?"★ HALL OF FAMER":`${entry.seasonsPlayed}-YEAR CAREER`}
+                    {retireTeam&&<span style={{color:"#666",marginLeft:6}}>· {td?.abbr||"???"}</span>}
                   </div>
                   <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{entry.name}</div>
                   <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
@@ -7990,7 +8059,7 @@ function PastCareersScreen({entries, openCareer, go}){
                 <div style={{fontSize:18,color:"#888"}}>›</div>
               </div>
             </button>
-          ))}
+          );})}
         </div>
       )}
     </div>
@@ -8021,17 +8090,40 @@ function PastCareerStatsScreen({entry, go}){
         </div>
       </div>
 
-      {/* HOF badge if inducted */}
-      {entry.hof&&(
-        <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`,border:`1.5px solid ${GO}66`,borderRadius:12,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
-          <div style={{width:54,height:54,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, ${GO}aa)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 2px 14px ${GO}66`}}>🏛️</div>
-          <div style={{flex:1,minWidth:0}}>
-            <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:900,marginBottom:2}}>HALL OF FAME</div>
-            <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Inducted with {entry.hofJerseyTeam||"the league"}</div>
-            <div style={{fontSize:10,color:"#aaa",marginTop:3,fontStyle:"italic",lineHeight:1.4}}>{entry.hofReason}</div>
+      {/* HOF badge if inducted — now includes team logo bubble */}
+      {entry.hof&&(()=>{
+        const retireTeam=entry.retirementTeam||entry.hofJerseyTeam;
+        const td=retireTeam?NBA_TEAM_DATA[retireTeam]||{p:"#444",s:"#888",abbr:"???"}:null;
+        return(
+          <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`,border:`1.5px solid ${GO}66`,borderRadius:12,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
+            {td?(
+              <div style={{width:54,height:54,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:900,color:"#fff",flexShrink:0,border:`2px solid ${GO}`,boxShadow:`0 2px 14px ${GO}66`}}>{td.abbr}</div>
+            ):(
+              <div style={{width:54,height:54,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, ${GO}aa)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 2px 14px ${GO}66`}}>🏛️</div>
+            )}
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:900,marginBottom:2}}>HALL OF FAME</div>
+              <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Inducted with {retireTeam||"the league"}</div>
+              <div style={{fontSize:10,color:"#aaa",marginTop:3,fontStyle:"italic",lineHeight:1.4}}>{entry.hofReason}</div>
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
+
+      {/* Retirement team card — shown for non-HOF careers when a team was
+          picked. HOF banner already covers this for inductees. */}
+      {!entry.hof&&entry.retirementTeam&&(()=>{
+        const td=NBA_TEAM_DATA[entry.retirementTeam]||{p:"#444",s:"#888",abbr:"???"};
+        return(
+          <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${td.p}55`,borderRadius:12,padding:12,marginBottom:14,display:"flex",alignItems:"center",gap:12}}>
+            <div style={{width:46,height:46,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 2px 8px rgba(0,0,0,0.4)"}}>{td.abbr}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:9,letterSpacing:2,color:"#888",fontWeight:700,marginBottom:2,textTransform:"uppercase"}}>Retired With</div>
+              <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{entry.retirementTeam}</div>
+            </div>
+          </div>
+        );
+      })()}
 
       {/* Accolades chips */}
       {(awards.length>0||championships.length>0||entry.hof)&&(
@@ -8118,6 +8210,118 @@ function PastCareerStatsScreen({entry, go}){
       </div>
 
       <button onClick={()=>go("pastCareers")} style={ghostS}>← Back to Past Careers</button>
+    </div>
+  );
+}
+
+// ─── MINI-GAME TESTER ─────────────────────────────────────────────────────────
+// Standalone harness for trying any individual mini-game outside of a season.
+// Used from the Options menu. Picks a game, plays it once, shows the result
+// from `onResult`, lets the user replay or change games. Uses a generic
+// medium-skill player so the games behave like a typical mid-tier player.
+function MiniGameTesterScreen({go, toast}){
+  const [pickedGame,setPickedGame]=useState(null);
+  const [difficulty,setDifficulty]=useState(2); // 1=easy, 2=med, 3=hard
+  const [lastResult,setLastResult]=useState(null);
+  const [runId,setRunId]=useState(0); // bump to remount the game for replay
+  // Generic player — balanced skills around 70, no intangibles. Tweak skills
+  // to feel out the games at different ability levels.
+  const testPlayer={
+    name:"Test Player",
+    position:"SG",
+    height:78, weight:215,
+    skills:{
+      threePoint:70, midRange:70, finishing:70, handles:70,
+      playmaking:70, perimDefense:70, postDefense:70, rebounding:70,
+    },
+    intangibles:[],
+  };
+  const games=[
+    {id:"shoot",   label:"Shooting",        icon:"🏀", desc:"Time a moving puck to land in the green window.", Component:ShotMeterGame},
+    {id:"defense", label:"Defense",         icon:"🛡️", desc:"Read the offensive move and tap LEFT/RIGHT/BLOCK.", Component:DefenseGame},
+    {id:"posn",    label:"Possession",      icon:"⚡", desc:"Pass to the open man or shoot with the meter.", Component:OffensivePossessionGame},
+    {id:"steal",   label:"Steal & Dunk",    icon:"✋", desc:"Time the swipe meter, then tap fast to finish.", Component:StealAndDunkGame},
+    {id:"pass",    label:"Passing",         icon:"📡", desc:"Find the open teammate before the defense reads it.", Component:PassingGame},
+  ];
+
+  // Active game view
+  if(pickedGame){
+    const game=games.find(g=>g.id===pickedGame);
+    const GameComponent=game.Component;
+    return(
+      <div>
+        <button onClick={()=>{setPickedGame(null);setLastResult(null);}} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Pick another game</button>
+        <div style={{textAlign:"center",marginBottom:10}}>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Testing</div>
+          <div style={{fontSize:20,fontWeight:900,color:"#fff"}}>{game.icon} {game.label.toUpperCase()}</div>
+        </div>
+        {/* Result panel — shows after the game's onResult fires */}
+        {lastResult!==null&&(
+          <div style={{background:`linear-gradient(135deg, ${OR}22 0%, rgba(0,0,0,0.4) 100%)`,border:`1px solid ${OR}55`,borderRadius:10,padding:12,marginBottom:12}}>
+            <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Last Result</div>
+            <pre style={{fontSize:11,color:"#ddd",lineHeight:1.5,whiteSpace:"pre-wrap",fontFamily:"'Barlow Condensed',sans-serif",margin:0}}>{JSON.stringify(lastResult,null,2)}</pre>
+            <button onClick={()=>{setLastResult(null);setRunId(r=>r+1);}} style={{...btnS,width:"100%",padding:"9px 0",fontSize:12,marginTop:10}}>
+              🔁 PLAY AGAIN
+            </button>
+          </div>
+        )}
+        {/* The game itself — remounts on runId bump so a replay starts fresh */}
+        {lastResult===null&&(
+          <div key={runId} style={{background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:12}}>
+            <GameComponent
+              player={testPlayer}
+              difficulty={difficulty}
+              onResult={(r)=>{
+                setLastResult(r);
+                toast&&toast(`${game.label}: done`,GR);
+              }}
+            />
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // Game picker
+  return(
+    <div>
+      <button onClick={()=>go("options")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Options</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Developer</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>MINI-GAME TESTER</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4,lineHeight:1.5,padding:"0 12px"}}>
+          Try any individual mini-game with a balanced 70-rated test player. No save impact — none of this counts.
+        </div>
+      </div>
+      {/* Difficulty picker */}
+      <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:12,marginBottom:14}}>
+        <div style={{fontSize:9,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Difficulty</div>
+        <div style={{display:"flex",gap:5}}>
+          {[{v:1,label:"Easy"},{v:2,label:"Medium"},{v:3,label:"Hard"}].map(d=>(
+            <button key={d.v} onClick={()=>setDifficulty(d.v)} style={{
+              flex:1,padding:"9px 0",
+              background:difficulty===d.v?OR:"rgba(255,255,255,0.06)",
+              border:"none",borderRadius:6,
+              color:difficulty===d.v?"#080c10":"#aaa",
+              cursor:"pointer",fontSize:12,fontWeight:900,letterSpacing:1,
+              fontFamily:"'Barlow Condensed',sans-serif",
+            }}>{d.label}</button>
+          ))}
+        </div>
+      </div>
+      {/* Game list */}
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        {games.map(g=>(
+          <button key={g.id} onClick={()=>{setPickedGame(g.id);setLastResult(null);setRunId(r=>r+1);}} style={{display:"flex",alignItems:"center",gap:12,padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
+            <div style={{fontSize:24,width:36,textAlign:"center",flexShrink:0}}>{g.icon}</div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:14,fontWeight:900,letterSpacing:1,color:"#fff"}}>{g.label}</div>
+              <div style={{fontSize:10,color:"#888",marginTop:2,lineHeight:1.4}}>{g.desc}</div>
+            </div>
+            <div style={{fontSize:18,color:"#888"}}>›</div>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -9356,13 +9560,24 @@ export default function App(){
         {/* Testing mode — jump in as a generic player at any stage. Auto-save
             is paused while in testing so the real career is preserved. */}
         <div style={{fontSize:10,letterSpacing:3,textTransform:"uppercase",color:OR,marginBottom:8}}>Developer</div>
-        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
+        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"12px 14px",marginBottom:10}}>
           <div style={{fontSize:14,fontWeight:700,color:"#f0ede8"}}>🧪 Testing Mode</div>
           <div style={{fontSize:11,color:"#888",marginTop:2,lineHeight:1.5}}>
             Jump in as Mike Basketball at any stage to verify the game works. Auto-save is paused — your real career is preserved.
           </div>
           <button onClick={()=>go("testing")} style={{...ghostS,marginTop:10,width:"auto",padding:"7px 14px",fontSize:12}}>
             Open Testing Mode →
+          </button>
+        </div>
+        {/* Mini-Game Tester — play any single mini-game in isolation. Useful
+            for tuning, debugging, or just goofing around without a season. */}
+        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:"12px 14px",marginBottom:18}}>
+          <div style={{fontSize:14,fontWeight:700,color:"#f0ede8"}}>🎮 Mini-Game Tester</div>
+          <div style={{fontSize:11,color:"#888",marginTop:2,lineHeight:1.5}}>
+            Play any single mini-game (Shooting, Defense, Possession, Steal & Dunk, Passing) standalone. No save impact.
+          </div>
+          <button onClick={()=>go("miniGameTester")} style={{...ghostS,marginTop:10,width:"auto",padding:"7px 14px",fontSize:12}}>
+            Open Tester →
           </button>
         </div>
 
@@ -9427,7 +9642,7 @@ export default function App(){
 
         {/* Picture */}
         <div style={{margin:"0 0 14px",borderRadius:10,overflow:"hidden",border:"1px solid rgba(232,135,58,0.25)"}}>
-          <img src={GOODEN_PIC_DATA_URL} alt="Drew Gooden" style={{width:"100%",height:"auto",display:"block"}}/>
+          <img src="/gooden2.jpeg" alt="Drew Gooden" style={{width:"100%",height:"auto",display:"block"}}/>
         </div>
 
         <div style={{fontSize:13,color:"#ddd",lineHeight:1.55,marginBottom:14}}>
@@ -10296,6 +10511,11 @@ export default function App(){
     pastCareerStats:(
       <MenuFrame sub="Retired" title="CAREER FILE">
         <PastCareerStatsScreen entry={archive.find(e=>e.id===viewingArchiveId)} go={go}/>
+      </MenuFrame>
+    ),
+    miniGameTester:(
+      <MenuFrame sub="Developer" title="MINI-GAME TESTER">
+        <MiniGameTesterScreen go={go} toast={toast}/>
       </MenuFrame>
     ),
   };
