@@ -1003,7 +1003,7 @@ const IQ_QUESTIONS = [
 
 const SKIN_TONES = ["#FDDBB4","#F0C08A","#C68642","#8D5524","#4A2912","#1C0A00"];
 const HAIR_STYLES = ["Bald","Low Cut","Fade","Dreads","Afro","Braids"];
-const BEARD_STYLES = ["Clean","Stubble","Goatee","Full Beard","Chinstrap"];
+const BEARD_STYLES = ["Clean","Mustache","Goatee","Full Beard","Chinstrap"];
 const HEADBAND_COLORS = ["None","White","Black","Red","Blue","Gold"];
 
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
@@ -1507,7 +1507,7 @@ function PlayerAvatar({app, size=80}){
   if(app?.photo){
     return <img src={app.photo} alt="player" style={{width:size,height:size,borderRadius:"50%",objectFit:"cover",border:"2px solid rgba(232,135,58,0.4)",display:"block"}}/>;
   }
-  const {skin="#C68642",hair="Low Cut",beard="Stubble",headband="None",headbandColor="Red",jersey="white",jerseyNumber=23}=app||{};
+  const {skin="#C68642",hair="Low Cut",beard="Clean",headband="None",headbandColor="Red",jersey="white",jerseyNumber=23}=app||{};
   const s=size; const hbColors={White:"#eee",Black:"#222",Red:"#c0392b",Blue:"#2980b9",Gold:"#f1c40f"};
   // Hair colors with shading
   const hairDark="#1a0a00"; const hairMid="#2a1505"; const hairLight="#3a2510";
@@ -1747,27 +1747,10 @@ function PlayerAvatar({app, size=80}){
       <path d="M 44 68 Q 50 71 56 68" stroke="rgba(60,20,20,0.6)" strokeWidth="1.5" fill="none" strokeLinecap="round"/>
 
       {/* Beard — drawn AFTER face features */}
-      {beard==="Stubble"&&<g>
-        {/* Base shadow over the jaw — gives stubble its tone */}
-        <path d="M 32 60 Q 50 78 68 60 Q 65 70 50 73 Q 35 70 32 60" fill="rgba(0,0,0,0.18)"/>
-        {/* Faint mustache shadow above the lip */}
-        <path d="M 41 65 Q 50 67 59 65 Q 56 67 50 67 Q 44 67 41 65" fill="rgba(0,0,0,0.15)"/>
-        {/* Dense hex-packed stubble dots, masked to the jaw area and the
-            mouth cut out. ~50-70 visible dots gives the look of actual stubble
-            rather than the sparse "9 random dots" effect. */}
-        {Array.from({length:9}).flatMap((_,row)=>
-          Array.from({length:15}).map((_,col)=>{
-            const y=60+row*1.5;
-            const stagger=(row%2)*1.3;
-            const x=31+col*2.6+stagger;
-            // Mask: stay within the lower-face oval
-            const dx=x-50, dy=y-67;
-            if((dx*dx)/(19*19)+(dy*dy)/(7.5*7.5)>1) return null;
-            // Cut out the mouth/lip area
-            if(y<67 && Math.abs(dx)<7) return null;
-            return <circle key={`${row}-${col}`} cx={x} cy={y} r="0.4" fill="rgba(0,0,0,0.55)"/>;
-          }).filter(Boolean)
-        )}
+      {beard==="Mustache"&&<g>
+        {/* Simple horseshoe mustache — thick, droops down the sides of the
+            mouth. Sits above the lip, sides curl downward past the corners. */}
+        <path d="M 39 64 Q 50 68 61 64 Q 60 69 58 71 L 55 72 L 54 69 Q 50 70 46 69 L 45 72 L 42 71 Q 40 69 39 64 Z" fill={hairDark}/>
       </g>}
 
       {beard==="Goatee"&&<g>
@@ -4216,6 +4199,12 @@ function appendToArchive(entry){
     return (b.careerPpg||0)-(a.careerPpg||0);
   });
   writeArchive(cur);
+}
+// Remove a single archived career by id. Used by the Past Careers screen's
+// delete button. No-op if the id isn't found.
+function deleteFromArchive(id){
+  const cur=loadArchive();
+  writeArchive(cur.filter(e=>e.id!==id));
 }
 
 // HOF evaluation — returns whether the player gets inducted plus a reason.
@@ -8250,7 +8239,9 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
           ):teamsPlayedFor.length===1?(
             <div style={{display:"flex",alignItems:"center",justifyContent:"center",gap:10,padding:"8px 0"}}>
               {(()=>{const td=NBA_TEAM_DATA[teamsPlayedFor[0]]||{p:"#444",s:"#888",abbr:"???"};return(
-                <div style={{width:32,height:32,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:900,color:"#fff",border:"1px solid rgba(255,255,255,0.2)"}}>{td.abbr}</div>
+                <div style={{width:32,height:32,borderRadius:"50%",overflow:"hidden",border:"1px solid rgba(255,255,255,0.2)"}}>
+                  <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={teamsPlayedFor[0]} size={32} decorative={false} logoUrl={td.logoUrl}/>
+                </div>
               );})()}
               <span style={{fontSize:16,fontWeight:900,color:"#fff"}}>{teamsPlayedFor[0]}</span>
             </div>
@@ -8263,7 +8254,9 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
                 const td=NBA_TEAM_DATA[team]||{p:"#444",s:"#888",abbr:"???"};
                 return(
                   <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
-                    <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>{td.abbr}</div>
+                    <div style={{width:28,height:28,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>
+                      <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={team} size={28} decorative={false} logoUrl={td.logoUrl}/>
+                    </div>
                     <span style={{flex:1,fontSize:13,fontWeight:900}}>{team}</span>
                     <span style={{fontSize:10,color:"#aaa"}}>{seasonsWithTeam} {seasonsWithTeam===1?"yr":"yrs"}</span>
                   </button>
@@ -8320,7 +8313,9 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
               const td=NBA_TEAM_DATA[team]||{p:"#444",s:"#888",abbr:"???"};
               return(
                 <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
-                  <div style={{width:28,height:28,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:9,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>{td.abbr}</div>
+                  <div style={{width:28,height:28,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"1px solid rgba(255,255,255,0.15)"}}>
+                    <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={team} size={28} decorative={false} logoUrl={td.logoUrl}/>
+                  </div>
                   <span style={{flex:1,fontSize:13,fontWeight:900}}>{team}</span>
                   <span style={{fontSize:10,color:"#aaa"}}>{seasonsWithTeam} {seasonsWithTeam===1?"yr":"yrs"}</span>
                 </button>
@@ -8338,7 +8333,9 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
 
 // Past Careers list — accessed from title menu. Shows every retired career
 // in the local archive, HOF inductees first, then sorted by career PPG.
-function PastCareersScreen({entries, openCareer, go}){
+function PastCareersScreen({entries, openCareer, deleteCareer, go}){
+  // ID of the career awaiting delete confirmation. Null = no modal.
+  const [confirmDelete,setConfirmDelete]=useState(null);
   return(
     <div>
       <button onClick={()=>go("title")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Home</button>
@@ -8359,31 +8356,75 @@ function PastCareersScreen({entries, openCareer, go}){
             const retireTeam=entry.retirementTeam||entry.hofJerseyTeam||entry.finalTeam;
             const td=retireTeam?NBA_TEAM_DATA[retireTeam]||{p:"#444",s:"#888",abbr:"???"}:null;
             return(
-            <button key={entry.id} onClick={()=>openCareer(entry.id)} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:entry.hof?`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",border:`1.5px solid ${entry.hof?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-              <div style={{display:"flex",alignItems:"center",gap:12}}>
-                {/* Team logo bubble — shows who they retired with. HOF inductees
-                    get a small gold rim around the bubble to signal status. */}
-                {td?(
-                  <div style={{width:42,height:42,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:"#fff",flexShrink:0,border:entry.hof?`2px solid ${GO}`:"1px solid rgba(255,255,255,0.2)",boxShadow:entry.hof?`0 2px 12px ${GO}55`:"0 2px 8px rgba(0,0,0,0.4)"}}>{td.abbr}</div>
-                ):(
-                  <div style={{width:42,height:42,borderRadius:"50%",background:entry.hof?`linear-gradient(135deg, ${GO}, ${GO}aa)`:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:entry.hof?22:18,flexShrink:0,color:entry.hof?"#fff":"#aaa"}}>{entry.hof?"🏛️":"🏀"}</div>
-                )}
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:9,color:entry.hof?GO:"#888",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
-                    {entry.hof?"★ HALL OF FAMER":`${entry.seasonsPlayed}-YEAR CAREER`}
-                    {retireTeam&&<span style={{color:"#666",marginLeft:6}}>· {td?.abbr||"???"}</span>}
+            // Row is a div now (was a button) so we can nest a separate delete
+            // control inside. The main area opens the career; the trash icon
+            // on the right triggers the delete-confirm modal.
+            <div key={entry.id} style={{display:"flex",alignItems:"stretch",background:entry.hof?`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",border:`1.5px solid ${entry.hof?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,overflow:"hidden",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <button onClick={()=>openCareer(entry.id)} style={{flex:1,display:"block",textAlign:"left",padding:"12px 14px",background:"transparent",border:"none",color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",minWidth:0}}>
+                <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  {/* Team logo bubble — shows who they retired with. HOF inductees
+                      get a small gold rim around the bubble to signal status. */}
+                  {td?(
+                    <div style={{width:42,height:42,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:entry.hof?`2px solid ${GO}`:"1px solid rgba(255,255,255,0.2)",boxShadow:entry.hof?`0 2px 12px ${GO}55`:"0 2px 8px rgba(0,0,0,0.4)"}}>
+                      <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={retireTeam} size={42} decorative={false} logoUrl={td.logoUrl}/>
+                    </div>
+                  ):(
+                    <div style={{width:42,height:42,borderRadius:"50%",background:entry.hof?`linear-gradient(135deg, ${GO}, ${GO}aa)`:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:entry.hof?22:18,flexShrink:0,color:entry.hof?"#fff":"#aaa"}}>{entry.hof?"🏛️":"🏀"}</div>
+                  )}
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:9,color:entry.hof?GO:"#888",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
+                      {entry.hof?"★ HALL OF FAMER":`${entry.seasonsPlayed}-YEAR CAREER`}
+                      {retireTeam&&<span style={{color:"#666",marginLeft:6}}>· {td?.abbr||"???"}</span>}
+                    </div>
+                    <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{entry.name}</div>
+                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                      {entry.position} · {entry.careerPpg} PPG · {entry.awards?.length||0} awards · {entry.championships?.length||0} rings
+                    </div>
                   </div>
-                  <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{entry.name}</div>
-                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
-                    {entry.position} · {entry.careerPpg} PPG · {entry.awards?.length||0} awards · {entry.championships?.length||0} rings
-                  </div>
+                  <div style={{fontSize:18,color:"#888"}}>›</div>
                 </div>
-                <div style={{fontSize:18,color:"#888"}}>›</div>
-              </div>
-            </button>
+              </button>
+              {/* Delete trash button — opens the confirm modal. Subtle so it
+                  doesn't compete with the main row tap target. */}
+              <button onClick={()=>setConfirmDelete(entry.id)} style={{
+                width:38,background:"transparent",border:"none",borderLeft:"1px solid rgba(255,255,255,0.08)",
+                color:"#666",cursor:"pointer",fontSize:16,fontFamily:"'Barlow Condensed',sans-serif",
+                display:"flex",alignItems:"center",justifyContent:"center",
+              }} aria-label={`Delete ${entry.name}`}>🗑</button>
+            </div>
           );})}
         </div>
       )}
+
+      {/* Delete-confirmation modal — irreversible action so we make sure the
+          player actually wants to do it. Wipes the entry from localStorage
+          and updates the live archive state via the deleteCareer prop. */}
+      {confirmDelete&&(()=>{
+        const entry=entries.find(e=>e.id===confirmDelete);
+        if(!entry){setConfirmDelete(null);return null;}
+        return(
+          <div onClick={()=>setConfirmDelete(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:380,width:"100%",border:`1px solid ${RE}55`}}>
+              <div style={{textAlign:"center",marginBottom:14}}>
+                <div style={{fontSize:36,marginBottom:6}}>🗑</div>
+                <div style={{fontSize:9,letterSpacing:3,color:RE,textTransform:"uppercase",marginBottom:4}}>Delete Career</div>
+                <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1}}>{entry.name}</div>
+                <div style={{fontSize:11,color:"#aaa",marginTop:6,padding:"0 12px",lineHeight:1.5}}>
+                  This will permanently remove this career from your archive. It can't be undone.
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setConfirmDelete(null)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  CANCEL
+                </button>
+                <button onClick={()=>{deleteCareer&&deleteCareer(entry.id);setConfirmDelete(null);}} style={{flex:2,padding:"10px 0",background:RE,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontSize:13,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  DELETE
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -8419,7 +8460,9 @@ function PastCareerStatsScreen({entry, go}){
         return(
           <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`,border:`1.5px solid ${GO}66`,borderRadius:12,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
             {td?(
-              <div style={{width:54,height:54,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:13,fontWeight:900,color:"#fff",flexShrink:0,border:`2px solid ${GO}`,boxShadow:`0 2px 14px ${GO}66`}}>{td.abbr}</div>
+              <div style={{width:54,height:54,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:`2px solid ${GO}`,boxShadow:`0 2px 14px ${GO}66`}}>
+                <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={retireTeam} size={54} decorative={false} logoUrl={td.logoUrl}/>
+              </div>
             ):(
               <div style={{width:54,height:54,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, ${GO}aa)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 2px 14px ${GO}66`}}>🏛️</div>
             )}
@@ -8438,7 +8481,9 @@ function PastCareerStatsScreen({entry, go}){
         const td=NBA_TEAM_DATA[entry.retirementTeam]||{p:"#444",s:"#888",abbr:"???"};
         return(
           <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${td.p}55`,borderRadius:12,padding:12,marginBottom:14,display:"flex",alignItems:"center",gap:12}}>
-            <div style={{width:46,height:46,borderRadius:"50%",background:`linear-gradient(135deg, ${td.p}, ${td.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 2px 8px rgba(0,0,0,0.4)"}}>{td.abbr}</div>
+            <div style={{width:46,height:46,borderRadius:"50%",overflow:"hidden",flexShrink:0,border:"1px solid rgba(255,255,255,0.2)",boxShadow:"0 2px 8px rgba(0,0,0,0.4)"}}>
+              <TeamEmblem colors={{p:td.p,s:td.s}} abbr={td.abbr} name={entry.retirementTeam} size={46} decorative={false} logoUrl={td.logoUrl}/>
+            </div>
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:9,letterSpacing:2,color:"#888",fontWeight:700,marginBottom:2,textTransform:"uppercase"}}>Retired With</div>
               <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>{entry.retirementTeam}</div>
@@ -10059,13 +10104,13 @@ export default function App(){
         ...(archive.length>0?[{id:"past",label:"PAST CAREERS",sub:`${archive.length} retired player${archive.length===1?"":"s"} on file`,action:()=>go("pastCareers")}]:[]),
         {id:"how",   label:"HOW TO PLAY",     sub:"Learn the flow",             action:()=>go("howto")},
         {id:"opts",  label:"OPTIONS",         sub:"Sound, settings",            action:()=>go("options")},
-        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",        action:()=>go("extras")},
+        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden, Legal Notice",        action:()=>go("extras")},
       ]:[
         {id:"new",   label:"PLAY NOW",        sub:"Start a new career",         action:startNewCareer},
         ...(archive.length>0?[{id:"past",label:"PAST CAREERS",sub:`${archive.length} retired player${archive.length===1?"":"s"} on file`,action:()=>go("pastCareers")}]:[]),
         {id:"how",   label:"HOW TO PLAY",     sub:"Learn the flow",             action:()=>go("howto")},
         {id:"opts",  label:"OPTIONS",         sub:"Sound, settings",            action:()=>go("options")},
-        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",        action:()=>go("extras")},
+        {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden, Legal Notice",        action:()=>go("extras")},
       ];
       return(
         <div style={{position:"relative",minHeight:"calc(100vh - 60px)",margin:"-16px -16px 0",overflow:"hidden"}}>
@@ -10104,6 +10149,7 @@ export default function App(){
           <div style={{position:"relative",zIndex:2,paddingTop:18,paddingLeft:10}}>
             <img src="/logo.png" alt="GOODEN 2003" style={{
               width:130,height:"auto",display:"block",
+              opacity:0.78,
               filter:"drop-shadow(0 4px 14px rgba(0,0,0,0.5))",
             }}/>
           </div>
@@ -10952,7 +10998,7 @@ export default function App(){
     ),
     pastCareers:(
       <MenuFrame sub="From Home" title="ARCHIVE">
-        <PastCareersScreen entries={archive} openCareer={(id)=>{setViewingArchiveId(id);go("pastCareerStats");}} go={go}/>
+        <PastCareersScreen entries={archive} openCareer={(id)=>{setViewingArchiveId(id);go("pastCareerStats");}} deleteCareer={(id)=>{deleteFromArchive(id);setArchive(loadArchive());toast("Career deleted","#888");}} go={go}/>
       </MenuFrame>
     ),
     pastCareerStats:(
