@@ -454,7 +454,7 @@ function teamHasNeedAt(teamRosterKey, position, playerOvr, seasonData){
 //   - If 35+ and OVR < 65 and no organic offers, return [] (retirement).
 // Returns a sorted-by-totalValue-desc array of offer objects.
 function buildFAOffers(player, currentTeam, currentYear, seasonsPlayed, age){
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const seasonData=getNbaSeasonData(currentYear).data;
   const offers=[];
   // Current team — always offers (slight loyalty bump, +5% appreciation)
@@ -534,9 +534,28 @@ function playerOwns(player, itemId){
   return !!player?.purchases?.items?.includes(itemId);
 }
 function ensurePurchases(player){
-  // Returns the purchases object, lazily initializing if missing. Used by
-  // purchase handlers so we don't have to null-check everywhere.
-  return player.purchases||{items:[],restaurant:null,album:null};
+  // Returns the purchases object, lazily initializing if missing. Migrates
+  // legacy single-restaurant / single-album saves into the array format.
+  // Each restaurant/album gets a stable `id` so list ops can target them.
+  const raw=player.purchases||{};
+  let restaurants=Array.isArray(raw.restaurants)?raw.restaurants:[];
+  let albums=Array.isArray(raw.albums)?raw.albums:[];
+  // Back-compat: legacy `restaurant` (singular, nullable) → array of one
+  if(raw.restaurant&&restaurants.length===0){
+    restaurants=[{...raw.restaurant, id:raw.restaurant.id||`r_${Date.now()}_${Math.random().toString(36).slice(2,6)}`}];
+  }
+  if(raw.album&&albums.length===0){
+    albums=[{...raw.album, id:raw.album.id||`a_${Date.now()}_${Math.random().toString(36).slice(2,6)}`}];
+  }
+  return {
+    items:raw.items||[],
+    restaurants, albums,
+  };
+}
+// Convenience: any album currently in studio (only allowed one at a time)
+function activeRecordingAlbum(player){
+  const pp=ensurePurchases(player);
+  return (pp.albums||[]).find(a=>a.status==="recording")||null;
 }
 
 // ─── RESTAURANT CHAINS ─────────────────────────────────────────────────────────
@@ -1021,10 +1040,48 @@ function defaultSkills(pos){
   return Object.fromEntries(Object.entries(bs).map(([k,v])=>[k,Math.round(v/5)*5]));
 }
 
-function calcOVR(skills, intangibles=[]) {
-  const sv=Object.values(skills).reduce((a,b)=>a+b,0)/Object.keys(skills).length;
+// Positional skill weights — each position has 8 weights summing to 8.0 so
+// the weighted average stays in the same numeric range as the flat average.
+// Skills central to the position weight >1.0; tangential skills <1.0.
+// Calibrated for a gentle effect: a position-matched build gains 1-3 OVR,
+// a moderately mismatched switch loses 2-6, and extreme guard↔center cases
+// can swing 8+ (which is the realism floor — Steph isn't a 90 OVR center).
+const POSITION_WEIGHTS = {
+  PG: {threePoint:1.0, midRange:1.0, finishing:0.9, handles:1.5, playmaking:1.5, perimDefense:1.0, postDefense:0.5, rebounding:0.6},
+  SG: {threePoint:1.4, midRange:1.3, finishing:1.0, handles:1.1, playmaking:0.9, perimDefense:1.2, postDefense:0.5, rebounding:0.6},
+  SF: {threePoint:1.1, midRange:1.0, finishing:1.2, handles:1.0, playmaking:0.8, perimDefense:1.2, postDefense:0.8, rebounding:0.9},
+  PF: {threePoint:0.8, midRange:1.0, finishing:1.3, handles:0.7, playmaking:0.6, perimDefense:0.9, postDefense:1.3, rebounding:1.4},
+  C:  {threePoint:0.8, midRange:0.9, finishing:1.4, handles:0.5, playmaking:0.5, perimDefense:0.8, postDefense:1.5, rebounding:1.6},
+};
+// Ideal heights (inches) per position — deviation from ideal incurs a small
+// OVR penalty, capped at -2 so it can't sink you. 75=6'3", 78=6'6", 80=6'8",
+// 82=6'10", 84=7'0". A 6'4" center loses ~2 OVR, a 6'1" center loses the cap.
+const POSITION_IDEAL_HEIGHT = {PG:75, SG:78, SF:80, PF:82, C:84};
+
+function calcOVR(skills, intangibles=[], position=null, height=null) {
+  const keys=Object.keys(skills);
+  if(keys.length===0) return 0;
+  let sv;
+  if(position && POSITION_WEIGHTS[position]){
+    // Positionally-weighted average. Weights sum to 8 (matching the count of
+    // skill keys) so the result is in the same range as a flat average.
+    const w=POSITION_WEIGHTS[position];
+    const weightedSum=keys.reduce((s,k)=>s+(skills[k]||50)*(w[k]??1),0);
+    const totalWeight=keys.reduce((s,k)=>s+(w[k]??1),0);
+    sv=weightedSum/totalWeight;
+  } else {
+    // Back-compat: callers without position get the flat average.
+    sv=keys.reduce((s,k)=>s+(skills[k]||50),0)/keys.length;
+  }
+  // Height effect — only applies when both position AND height are known.
+  // Sub-cap penalty so a tweener loses a couple points but isn't ruined.
+  let heightAdj=0;
+  if(position && height && POSITION_IDEAL_HEIGHT[position]){
+    const delta=Math.abs(height-POSITION_IDEAL_HEIGHT[position]);
+    heightAdj=-Math.min(2, delta*0.4);
+  }
   const iv=intangibles.length*3;
-  return Math.round(sv+iv);
+  return Math.round(sv+iv+heightAdj);
 }
 
 // Projected draft position (1-60+) based on overall, star tier, school exposure, and stats.
@@ -3603,7 +3660,7 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
   const [team,setTeam]=useState(initialTeam||null);
   // Jersey number from the player's chosen appearance (set on the setup screen)
   const jerseyNumber=player.appearance?.jerseyNumber??23;
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const yearsInCollege=allYears.length;
   const nbaYear=NBA_DRAFT_LABEL;
   const age=calcAge(allYears, []);
@@ -4071,7 +4128,7 @@ const SAVE_VERSION = 1;
 // the user can visit at any time. We don't save them as the "resume to"
 // destination, otherwise hitting "Resume Career" from the title would just
 // return you to the title.
-const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing","kerryWelcome"]);
+const MENU_SCREENS = new Set(["loadscreen","title","options","howto","extras","testing","kerryWelcome","pastCareers","pastCareerStats"]);
 
 // Read a save from localStorage. Returns null if missing, malformed, or from
 // an incompatible version.
@@ -4106,6 +4163,80 @@ function clearSave(){
   }catch(e){}
 }
 
+// ─── CAREER ARCHIVE ───────────────────────────────────────────────────────────
+// Retired careers are persisted into a separate localStorage key so the player
+// can review past players' stats from the title screen. Each entry is a frozen
+// snapshot — no further mutations allowed (read-only).
+const ARCHIVE_KEY = "gooden2003_archive_v1";
+const ARCHIVE_VERSION = 1;
+
+function loadArchive(){
+  try{
+    if(typeof localStorage==="undefined") return [];
+    const raw=localStorage.getItem(ARCHIVE_KEY);
+    if(!raw) return [];
+    const parsed=JSON.parse(raw);
+    if(!parsed || parsed.version!==ARCHIVE_VERSION) return [];
+    return Array.isArray(parsed.entries)?parsed.entries:[];
+  }catch(e){
+    return [];
+  }
+}
+function writeArchive(entries){
+  try{
+    if(typeof localStorage==="undefined") return;
+    localStorage.setItem(ARCHIVE_KEY,JSON.stringify({version:ARCHIVE_VERSION,entries}));
+  }catch(e){}
+}
+function appendToArchive(entry){
+  const cur=loadArchive();
+  cur.push({...entry, archivedAt:Date.now(), id:`career_${Date.now()}_${Math.random().toString(36).slice(2,6)}`});
+  // Sort: HOF inductees first, then by career PPG desc within each group.
+  cur.sort((a,b)=>{
+    if(a.hof && !b.hof) return -1;
+    if(b.hof && !a.hof) return 1;
+    return (b.careerPpg||0)-(a.careerPpg||0);
+  });
+  writeArchive(cur);
+}
+
+// HOF evaluation — returns whether the player gets inducted plus a reason.
+// Criteria (per user spec): at least 1 MVP AND HOF-tier stats.
+// "HOF-tier" = any one of: career PPG ≥ 18, total career points ≥ 20,000,
+// total awards ≥ 5, or championships ≥ 2.
+function evaluateHOF(player, nbaSeasons){
+  const seasons=nbaSeasons||[];
+  const awards=player?.awards||[];
+  const championships=player?.championships||[];
+  const mvps=awards.filter(a=>a.type==="mvp").length;
+  // Career totals from season history. Each seasonEntry has ppg/gp.
+  const totalGames=seasons.reduce((s,y)=>s+(y.gp||0),0);
+  const totalPoints=seasons.reduce((s,y)=>s+(y.ppg||0)*(y.gp||0),0);
+  const careerPpg=totalGames>0?+(totalPoints/totalGames).toFixed(1):0;
+  const totalAwards=awards.length;
+  const titleCount=championships.length;
+  // Must have at least one MVP
+  if(mvps===0){
+    return {inducted:false, careerPpg, totalPoints:Math.round(totalPoints), reason:"Great career, but no MVP — the voters need that signature trophy.", mvps, totalAwards, titleCount, totalGames};
+  }
+  // Must have HOF-tier stats (any one)
+  const tier=careerPpg>=18 || totalPoints>=20000 || totalAwards>=5 || titleCount>=2;
+  if(!tier){
+    return {inducted:false, careerPpg, totalPoints:Math.round(totalPoints), reason:"You've got the MVP hardware, but the supporting résumé fell short of HOF voters.", mvps, totalAwards, titleCount, totalGames};
+  }
+  // Build a positive citation
+  const cited=[];
+  if(careerPpg>=18) cited.push(`${careerPpg} career PPG`);
+  if(totalPoints>=20000) cited.push(`${Math.round(totalPoints).toLocaleString()} career points`);
+  if(totalAwards>=5) cited.push(`${totalAwards} major awards`);
+  if(titleCount>=2) cited.push(`${titleCount} championships`);
+  return {
+    inducted:true, careerPpg, totalPoints:Math.round(totalPoints),
+    reason:`${mvps}× MVP and ${cited.slice(0,2).join(", ")}.`,
+    mvps, totalAwards, titleCount, totalGames,
+  };
+}
+
 // ─── NBA HELPERS ───────────────────────────────────────────────────────────────
 // Look up the player's actual rotation slot on their team. Uses the player's
 // position and OVR vs the existing roster's OVRs at that position. Returns the
@@ -4116,7 +4247,7 @@ function calcRotationSlot(player, teamName, seasonData, nbaSeasons){
   const data=seasonData?.[teamName];
   if(!data) return {slot:99, minutes:8, isStarter:false};
   const pos=player.position||"SG";
-  const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
+  const playerOvr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   // Players at the same position, sorted by OVR descending
   const samePos=data.players.filter(p=>p[1]===pos).sort((a,b)=>b[2]-a[2]);
   // Count how many existing players at this position are better
@@ -4201,7 +4332,7 @@ function generateNbaGameStats(player, totalPts, made, minutes, mentor){
 function buildDepthChart(player, teamName, seasonData){
   const data=seasonData?.[teamName];
   if(!data) return [];
-  const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
+  const playerOvr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const playerEntry={name:player.name||"You", position:player.position, ovr:playerOvr, isPlayer:true};
   // Convert roster array to objects
   const all=data.players.map(p=>({name:p[0], position:p[1], ovr:p[2], isPlayer:false}));
@@ -4223,7 +4354,7 @@ function buildDepthChart(player, teamName, seasonData){
 function buildRotation(player, teamName, seasonData, nbaSeasons){
   const data=seasonData?.[teamName];
   if(!data) return {starters:[], bench:[]};
-  const playerOvr=calcOVR(player.skills||{},player.intangibles||[]);
+  const playerOvr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const playerEntry={name:player.name||"You", position:player.position, ovr:playerOvr, isPlayer:true};
   const all=data.players.map(p=>({name:p[0], position:p[1], ovr:p[2], isPlayer:false}));
   all.push(playerEntry);
@@ -4333,7 +4464,7 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
   const simStretch=()=>{
     if(completedRef.current) return;
     setPhase("playing"); // jumps past the intro so the "Calculating…" view shows
-    const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+    const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
     // Expected make-rate = OVR/100 (clamped to a sensible band so even the
     // worst player makes some plays and the best player isn't perfect).
     const expectedMakeRate=Math.min(0.95, Math.max(0.30, ovr/100));
@@ -4473,7 +4604,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   const yearLabel=formatSeasonLabel(currentYear);
   // Player's overall rating — shown as a badge so they can see the impact of
   // skill-point spending at a glance.
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   // Determine playoff eligibility — top 8 in each conference. With our data
   // ~50% of teams qualify. A team with ≥41 wins always makes it; below that,
   // we use the season record.
@@ -4603,13 +4734,22 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
             <div style={{fontSize:11,fontWeight:400,color:"#888",marginTop:1}}>Career stats — college & pros</div>
           </div>
         </button>
+
+        {/* Retire — voluntary career end. Routes to ceremony screen. */}
+        <button onClick={()=>go("retire")} style={{padding:"12px 14px",textAlign:"left",background:"rgba(255,255,255,0.02)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,cursor:"pointer",color:"#fff",display:"flex",alignItems:"center",gap:12,fontFamily:"'Barlow Condensed',sans-serif",marginTop:4}}>
+          <div style={{fontSize:22,width:34,textAlign:"center"}}>🏁</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:14,fontWeight:900,letterSpacing:2,color:"#aaa"}}>RETIRE</div>
+            <div style={{fontSize:11,fontWeight:400,color:"#666",marginTop:1}}>Hang up the sneakers · See if you're a Hall of Famer</div>
+          </div>
+        </button>
       </div>
     </div>
   );
 }
 
 // ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
-function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, go, toast}){
+function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, allYears, go, toast}){
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const id=getTeamIdentity(nbaTeam,currentYear);
@@ -4672,35 +4812,90 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             setMoney(m=>(m||0)+paycheck);
             toast&&toast(`Paycheck deposited: ${fmtMoney(paycheck)}`,GR);
           }
-          // Restaurant income — invested chains pay a flat dividend, own chains
-          // scale with location count. Paid once per offseason after salary.
-          const restaurant=player?.purchases?.restaurant;
-          if(restaurant&&setMoney){
-            const restaurantIncome=restaurant.type==="invested"
-              ?restaurant.dividend
-              :ownChainAnnualIncome(restaurant.locations);
-            if(restaurantIncome>0){
-              setMoney(m=>(m||0)+restaurantIncome);
-              const label=restaurant.type==="invested"?restaurant.chainName:restaurant.name;
-              setTimeout(()=>toast&&toast(`${label} earnings: ${fmtMoney(restaurantIncome)}`,YE), 600);
+          // Restaurant income — loop ALL owned restaurants (invested chains
+          // pay flat dividend, own chains scale with locations). Each gets
+          // its own toast so the player can see per-venture earnings, and
+          // cumulative `totalEarned` is bumped on each restaurant object.
+          const restaurantsList=ensurePurchases(player).restaurants||[];
+          if(restaurantsList.length>0&&setMoney){
+            const earnings=restaurantsList.map(r=>{
+              const inc=r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations);
+              return {id:r.id, label:r.type==="invested"?r.chainName:r.name, inc};
+            });
+            const totalInc=earnings.reduce((sum,e)=>sum+e.inc,0);
+            if(totalInc>0){
+              setMoney(m=>(m||0)+totalInc);
+              setPlayer(p=>{
+                const purchases=ensurePurchases(p);
+                const updated=(purchases.restaurants||[]).map(r=>{
+                  const e=earnings.find(x=>x.id===r.id);
+                  return e?{...r, totalEarned:(r.totalEarned||0)+e.inc}:r;
+                });
+                return {...p, purchases:{...purchases, restaurants:updated}};
+              });
+              // Stagger toasts so they don't stack on top of each other
+              earnings.forEach((e,idx)=>{
+                if(e.inc>0) setTimeout(()=>toast&&toast(`${e.label}: ${fmtMoney(e.inc)}`,YE), 600+idx*350);
+              });
             }
           }
-          // Album outcome — if an album is "recording", it drops THIS offseason.
-          // Roll the result, deposit the payout, and flip its status. Player
-          // can manage / cash it out from the album screen afterwards.
-          const recordingAlbum=player?.purchases?.album;
-          if(recordingAlbum&&recordingAlbum.status==="recording"){
-            const outcome=rollAlbumOutcome(recordingAlbum);
-            setMoney(m=>(m||0)+outcome.payout);
+          // Album outcome — any album in "recording" status drops THIS offseason.
+          // Only one album recording at a time so this is at most one roll, but
+          // loop the array anyway in case of future changes.
+          const allAlbums=ensurePurchases(player).albums||[];
+          const recording=allAlbums.filter(a=>a.status==="recording");
+          if(recording.length>0&&setMoney){
+            const results=recording.map(album=>{
+              const outcome=rollAlbumOutcome(album);
+              return {id:album.id, name:album.name, outcome};
+            });
+            const totalPayout=results.reduce((s,r)=>s+r.outcome.payout,0);
+            setMoney(m=>(m||0)+totalPayout);
             setPlayer(p=>{
               const purchases=ensurePurchases(p);
-              return {...p, purchases:{...purchases, album:{
-                ...recordingAlbum, status:outcome.status, payout:outcome.payout,
-              }}};
+              const updated=(purchases.albums||[]).map(a=>{
+                const r=results.find(x=>x.id===a.id);
+                return r?{...a, status:r.outcome.status, payout:r.outcome.payout}:a;
+              });
+              return {...p, purchases:{...purchases, albums:updated}};
             });
-            const tone=outcome.status==="flop"?RE:outcome.status==="classic"?YE:GR;
-            const label=outcome.status==="classic"?"💎 CLASSIC":outcome.status==="hit"?"🔥 HIT":outcome.status==="mid"?"📊 Mid":"💔 Flop";
-            setTimeout(()=>toast&&toast(`${recordingAlbum.name}: ${label} (${fmtMoney(outcome.payout)})`,tone), 1200);
+            results.forEach((r,idx)=>{
+              const tone=r.outcome.status==="flop"?RE:r.outcome.status==="classic"?YE:GR;
+              const label=r.outcome.status==="classic"?"💎 CLASSIC":r.outcome.status==="hit"?"🔥 HIT":r.outcome.status==="mid"?"📊 Mid":"💔 Flop";
+              setTimeout(()=>toast&&toast(`${r.name}: ${label} (${fmtMoney(r.outcome.payout)})`,tone), 1200+idx*400);
+            });
+          }
+          // Age-based skill decay — starting at 30, the player's body starts
+          // breaking down. Each offseason after 30 has a chance to ding 1-2
+          // random skills by 1-3 points. Floors at 30 (not enough to wreck a
+          // career, but you'll feel it). After advancing this season, the
+          // player's age = ROOKIE_BASE_AGE + allYears + nbaSeasons.length + 1.
+          const ageAfterSeason=calcAge(allYears,nbaSeasons)+1;
+          if(ageAfterSeason>=30){
+            const decayChance=Math.min(0.95, 0.4+(ageAfterSeason-30)*0.12); // 30→40%, 32→64%, 35→100%
+            if(Math.random()<decayChance){
+              setPlayer(p=>{
+                const skills={...(p.skills||{})};
+                const keys=Object.keys(skills);
+                if(keys.length===0) return p;
+                // Decay 1-2 skills by 1-3 points each.
+                const numToDecay=Math.random()<0.5?1:2;
+                const decayedSkills=[];
+                for(let i=0;i<numToDecay;i++){
+                  const k=keys[Math.floor(Math.random()*keys.length)];
+                  const drop=1+Math.floor(Math.random()*3);
+                  const newVal=Math.max(30,(skills[k]||50)-drop);
+                  if(newVal<skills[k]){
+                    decayedSkills.push({skill:k, drop:skills[k]-newVal});
+                    skills[k]=newVal;
+                  }
+                }
+                if(decayedSkills.length>0){
+                  setTimeout(()=>toast&&toast(`Age ${ageAfterSeason}: ${decayedSkills.map(d=>`${d.skill} -${d.drop}`).join(", ")}`,RE), 1800);
+                }
+                return {...p, skills};
+              });
+            }
           }
           setNbaSeasons(prev=>[...prev,seasonEntry]);
           setNbaGamesPlayed(0);
@@ -4745,11 +4940,27 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
           }));
           // Award SP based on stretch performance — totalPts maxes around 15
           // (5 mini-games × 3 max pts each), so the formula gives 1-8 SP per
-          // stretch. Floors at 1 so showing up always earns something.
-          const spEarned=Math.max(1,Math.round(totalPts/2));
+          // stretch. Floors at 1 so showing up always earns something. Players
+          // 32+ stop earning skill points (their skill ceiling is locked).
+          const ageNow=calcAge(allYears,nbaSeasons);
+          const spEarned=ageNow>=32?0:Math.max(1,Math.round(totalPts/2));
           setSkillPoints&&setSkillPoints(p=>(p||0)+spEarned);
           if(isPlayoffRun){
             setPlayoffsDone(true);
+            // Championship roll — based on team strength + player performance.
+            // Better teams + better player performance = higher title odds.
+            // Caps at ~30% for elite teams with elite player play; tiny for
+            // bottom seeds. Avg team/avg player: ~5%.
+            const teamWinPct=season.w/(season.w+season.l);
+            const playerOvrNow=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
+            const playerBoost=Math.max(0,(playerOvrNow-75)/100); // +0 to +0.24
+            const playoffPpgBoost=Math.max(0,(stats.ppg-20)/200); // +0 to +0.10
+            const titleOdds=Math.max(0.005, Math.min(0.35, (teamWinPct-0.5)*0.45 + playerBoost + playoffPpgBoost));
+            const wonTitle=Math.random()<titleOdds;
+            if(wonTitle){
+              setPlayer(p=>({...p, championships:[...(p.championships||[]), {year:currentYear, team:id.name}]}));
+              setTimeout(()=>toast&&toast(`🏆 NBA CHAMPIONS! ${id.name} win it all!`,YE), 800);
+            }
             toast&&toast(`Playoffs done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,YE);
           } else {
             setNbaGamesPlayed(g=>g+41);
@@ -4771,6 +4982,8 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
   // Intangibles the player picked during build/college — shown read-only on the
   // skills page so the player can see their full profile in one place.
   const playerIntangs=(player.intangibles||[]).map(id=>INTANGIBLES.find(t=>t.id===id)).filter(Boolean);
+  // Pending position change — when set, the confirmation modal renders.
+  const [pendingPos,setPendingPos]=useState(null);
   const bumpSkill=(id)=>{
     if(skillPoints<=0) return toast&&toast("Out of skill points","#888");
     const cur=skills[id]||50;
@@ -4823,6 +5036,104 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
           ))}
         </div>
       )}
+
+      {/* Position change — free, but with a confirmation modal explaining
+          the depth-chart and stat-gen implications. OVR is unaffected
+          (intentional design choice: OVR is the flat skill average). */}
+      <div style={{fontSize:10,letterSpacing:3,color:OR,textTransform:"uppercase",fontWeight:700,marginBottom:8}}>Position</div>
+      <div style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px",marginBottom:14}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+          <div style={{fontSize:11,color:"#aaa"}}>Currently playing</div>
+          <div style={{fontSize:14,fontWeight:900,color:OR,letterSpacing:1}}>{player.position||"SG"} · {calcOVR(player.skills||{},player.intangibles||[],player.position,player.height)} OVR</div>
+        </div>
+        <div style={{display:"flex",gap:5}}>
+          {POSITIONS.map(pos=>{
+            const isCurrent=(player.position||"SG")===pos;
+            // Preview the OVR at each position so the player can shop.
+            const previewOvr=calcOVR(player.skills||{},player.intangibles||[],pos,player.height);
+            return(
+              <button key={pos} onClick={()=>!isCurrent&&setPendingPos(pos)} disabled={isCurrent} style={{
+                flex:1,padding:"9px 0",
+                background:isCurrent?OR:"rgba(255,255,255,0.06)",
+                border:"none",borderRadius:6,
+                color:isCurrent?"#080c10":"#aaa",
+                cursor:isCurrent?"default":"pointer",
+                fontSize:13,fontWeight:900,letterSpacing:1,
+                fontFamily:"'Barlow Condensed',sans-serif",
+                opacity:isCurrent?1:0.95,
+                display:"flex",flexDirection:"column",alignItems:"center",gap:2,
+              }}>
+                <span>{pos}</span>
+                <span style={{fontSize:10,color:isCurrent?"#080c10":"#888",letterSpacing:0.5}}>{previewOvr}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{fontSize:10,color:"#666",marginTop:8,lineHeight:1.5,fontStyle:"italic"}}>
+          OVR is weighted by position fit and height. A skilled point-guard build will lose OVR if you move to center; a true big will gain it.
+        </div>
+      </div>
+
+      {/* Confirm-position modal — tapping a position opens this so the player
+          knows what's actually changing. Skills are NOT regenerated, but the
+          OVR will shift since it's weighted by position fit. */}
+      {pendingPos&&(()=>{
+        const oldPos=player.position||"SG";
+        const oldOvr=calcOVR(player.skills||{},player.intangibles||[],oldPos,player.height);
+        const newOvr=calcOVR(player.skills||{},player.intangibles||[],pendingPos,player.height);
+        const delta=newOvr-oldOvr;
+        const deltaColor=delta>0?GR:delta<0?RE:"#aaa";
+        const deltaSign=delta>0?"+":"";
+        return(
+          <div onClick={()=>setPendingPos(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:380,width:"100%",border:`1px solid ${OR}55`}}>
+              <div style={{textAlign:"center",marginBottom:12}}>
+                <div style={{fontSize:9,letterSpacing:3,color:OR,textTransform:"uppercase",marginBottom:4}}>Change Position</div>
+                <div style={{fontSize:22,fontWeight:900,color:"#fff",letterSpacing:2}}>
+                  <span style={{color:"#666"}}>{oldPos}</span>
+                  <span style={{color:OR,margin:"0 10px"}}>→</span>
+                  <span style={{color:OR}}>{pendingPos}</span>
+                </div>
+              </div>
+              {/* OVR preview — the headline takeaway */}
+              <div style={{background:"rgba(0,0,0,0.35)",border:`1px solid ${deltaColor}55`,borderRadius:10,padding:12,marginBottom:12,display:"flex",alignItems:"center",justifyContent:"space-around"}}>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>NOW</div>
+                  <div style={{fontSize:22,fontWeight:900,color:"#aaa"}}>{oldOvr}</div>
+                </div>
+                <div style={{fontSize:20,color:"#666"}}>→</div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>AFTER</div>
+                  <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>{newOvr}</div>
+                </div>
+                <div style={{textAlign:"center"}}>
+                  <div style={{fontSize:9,color:"#666",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>CHANGE</div>
+                  <div style={{fontSize:22,fontWeight:900,color:deltaColor}}>{deltaSign}{delta}</div>
+                </div>
+              </div>
+              <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:12,marginBottom:12,fontSize:11,color:"#ccc",lineHeight:1.6}}>
+                <div style={{marginBottom:8}}><strong style={{color:"#fff"}}>What changes:</strong></div>
+                <div style={{marginBottom:4}}>• OVR shifts because your skills now weigh against the <span style={{color:OR,fontWeight:700}}>{pendingPos}</span> profile (and height fit)</div>
+                <div style={{marginBottom:4}}>• You'll be slotted at <span style={{color:OR,fontWeight:700}}>{pendingPos}</span> on the depth chart — different teammates, possibly different minutes</div>
+                <div style={{marginBottom:4}}>• Stat generation shifts (centers grab more rebounds, point guards rack more assists)</div>
+                <div>• Free-agent fit changes — teams needing a <span style={{color:OR,fontWeight:700}}>{pendingPos}</span> will now consider you</div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setPendingPos(null)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  CANCEL
+                </button>
+                <button onClick={()=>{
+                  setPlayer(p=>({...p, position:pendingPos}));
+                  toast&&toast(`Now playing ${pendingPos}`,OR);
+                  setPendingPos(null);
+                }} style={{flex:2,padding:"10px 0",background:OR,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontSize:13,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                  CONFIRM
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
 
       <button onClick={()=>go("leagueHub")} style={ghostS}>← Back to Hub</button>
     </div>
@@ -5086,22 +5397,23 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
       <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:14}}>
         {/* Restaurant card */}
         {(()=>{
-          const r=player?.purchases?.restaurant;
+          const pp=ensurePurchases(player);
+          const restaurants=pp.restaurants||[];
           const minCost=Math.min(...RESTAURANT_CHAINS.map(c=>c.stake),ownChainCost(1));
           const canAfford=(money||0)>=minCost;
-          if(r){
-            // Already owned — show status snapshot + manage button
-            const isOwn=r.type==="own";
+          if(restaurants.length>0){
+            // Already owns one or more — show count + total annual income
+            const totalAnnual=restaurants.reduce((s,r)=>s+(r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations)),0);
             return(
-              <button onClick={()=>go("nbaRestaurant")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(0,220,100,0.06)",border:`1.5px solid ${r.color||GR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <button onClick={()=>go("nbaRestaurant")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(0,220,100,0.06)",border:`1.5px solid ${GR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>{isOwn?(r.logoEmoji||"🍔"):r.icon}</div>
+                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>🍔</div>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:9,color:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>✓ {isOwn?"YOUR CHAIN":"INVESTED"}</div>
-                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isOwn?r.name:r.chainName}</div>
-                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
-                      {isOwn?`${r.locations} location${r.locations===1?"":"s"} · ${fmtMoney(ownChainAnnualIncome(r.locations))}/yr`:`${fmtMoney(r.dividend)}/yr dividend`}
+                    <div style={{fontSize:9,color:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>✓ {restaurants.length} VENTURE{restaurants.length===1?"":"S"}</div>
+                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {restaurants.length===1?(restaurants[0].type==="invested"?restaurants[0].chainName:restaurants[0].name):`${restaurants.length} restaurants`}
                     </div>
+                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>Earning {fmtMoney(totalAnnual)}/yr · Tap to manage</div>
                   </div>
                   <div style={{fontSize:18,color:"#888"}}>›</div>
                 </div>
@@ -5131,27 +5443,26 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
 
         {/* Album card */}
         {(()=>{
-          const a=player?.purchases?.album;
+          const pp=ensurePurchases(player);
+          const albums=pp.albums||[];
           const minCost=ALBUM_BASE_COST+ALBUM_PRODUCERS[5].cost; // base + cheapest producer (one required)
           const canAfford=(money||0)>=minCost;
-          if(a){
-            // Status snapshot
+          if(albums.length>0){
+            const recording=albums.find(a=>a.status==="recording");
+            const released=albums.filter(a=>a.status!=="recording");
+            const totalRevenue=released.reduce((s,a)=>s+(a.payout||0),0);
+            // Show recording album if any (it's the active one); else latest released
+            const featured=recording||albums[albums.length-1];
             return(
-              <button onClick={()=>go("nbaAlbum")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(168,85,247,0.06)",border:`1.5px solid ${a.color||OR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <button onClick={()=>go("nbaAlbum")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(168,85,247,0.06)",border:`1.5px solid ${featured.color||OR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <AlbumCover name={a.name} design={a.design} style={a.style} color={a.color||OR} emoji={a.emoji} size={46}/>
+                  <AlbumCover name={featured.name} design={featured.design} style={featured.style} color={featured.color||OR} emoji={featured.emoji} size={46}/>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:9,color:a.status==="flop"?RE:a.status==="recording"?GO:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
-                      {a.status==="recording"?"🎙️ IN STUDIO":
-                       a.status==="classic"?"💎 CLASSIC":
-                       a.status==="hit"?"🔥 HIT":
-                       a.status==="mid"?"📊 MID":
-                       "💔 FLOP"}
+                    <div style={{fontSize:9,color:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
+                      🎵 {albums.length} ALBUM{albums.length===1?"":"S"}{recording?" · 🎙️ RECORDING":""}
                     </div>
-                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
-                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
-                      {a.status==="recording"?"Drops at offseason":`Revenue: ${fmtMoney(a.payout||0)}`}
-                    </div>
+                    <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{featured.name}</div>
+                    <div style={{fontSize:10,color:"#aaa",marginTop:2}}>{released.length>0?`Lifetime: ${fmtMoney(totalRevenue)} · Tap to manage`:"Drops next offseason"}</div>
                   </div>
                   <div style={{fontSize:18,color:"#888"}}>›</div>
                 </div>
@@ -5355,36 +5666,88 @@ function CallScreen({contactId, onHangUp}){
 }
 
 // ─── RESTAURANT CHAINS ─────────────────────────────────────────────────────────
-// Top-level restaurant management screen. Internal `mode` state controls the
-// view: picker (choose path) / invest (pick a chain) / configure (name+color+
-// locations for own) / status (already started, manage existing). The status
-// view shows expansion / cash-out options.
+// Top-level restaurant management screen. Modes: list (when player owns 1+),
+// picker (choose path for new venture), invest (pick a chain), configure
+// (name+color+locations for own), status (manage a specific restaurant).
+// Status mode now tracks WHICH restaurant via selectedId, so each one is
+// managed independently.
 function RestaurantScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}){
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
-  const restaurant=player?.purchases?.restaurant||null;
-  // Default mode: if no restaurant, show the path picker; otherwise the
-  // status panel for whatever they already have.
-  const [mode,setMode]=useState(restaurant?"status":"picker");
+  const pp=ensurePurchases(player);
+  const restaurants=pp.restaurants||[];
+  // Default mode: list if any owned, picker if none.
+  const [mode,setMode]=useState(restaurants.length>0?"list":"picker");
+  const [selectedId,setSelectedId]=useState(null);
+  const selectedRestaurant=selectedId?restaurants.find(r=>r.id===selectedId):null;
   return(
     <div>
       <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Investments</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>RESTAURANTS</div>
-        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>Build a chain or invest in one</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{mode==="list"?`You own ${restaurants.length} venture${restaurants.length===1?"":"s"}`:"Build a chain or invest in one"}</div>
       </div>
 
-      {mode==="picker"&&<RestaurantPathPicker money={money} onChooseInvest={()=>setMode("invest")} onChooseOwn={()=>setMode("configure")}/>}
-      {mode==="invest"&&<RestaurantInvestPath money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} onBack={()=>setMode("picker")} onComplete={()=>{setMode("status");toast&&toast("Investment confirmed",GR);}} toast={toast}/>}
-      {mode==="configure"&&<RestaurantConfigurePath money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} onBack={()=>setMode("picker")} onComplete={()=>{setMode("status");toast&&toast("Chain launched!",GR);}} toast={toast}/>}
-      {mode==="status"&&<RestaurantStatusPanel restaurant={restaurant} currentYear={currentYear} money={money} setMoney={setMoney} setPlayer={setPlayer} toast={toast}/>}
+      {mode==="list"&&<RestaurantListPanel restaurants={restaurants} onOpen={(id)=>{setSelectedId(id);setMode("status");}} onAddNew={()=>setMode("picker")}/>}
+      {mode==="picker"&&<RestaurantPathPicker money={money} restaurantCount={restaurants.length} onChooseInvest={()=>setMode("invest")} onChooseOwn={()=>setMode("configure")} onBackToList={restaurants.length>0?()=>setMode("list"):null}/>}
+      {mode==="invest"&&<RestaurantInvestPath money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} existingChainIds={restaurants.filter(r=>r.type==="invested").map(r=>r.chainId)} onBack={()=>setMode("picker")} onComplete={()=>{setMode("list");toast&&toast("Investment confirmed",GR);}} toast={toast}/>}
+      {mode==="configure"&&<RestaurantConfigurePath money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} onBack={()=>setMode("picker")} onComplete={()=>{setMode("list");toast&&toast("Chain launched!",GR);}} toast={toast}/>}
+      {mode==="status"&&selectedRestaurant&&<RestaurantStatusPanel restaurant={selectedRestaurant} currentYear={currentYear} money={money} setMoney={setMoney} setPlayer={setPlayer} onBackToList={()=>{setSelectedId(null);setMode("list");}} toast={toast}/>}
     </div>
   );
 }
 
+// List view — shows every owned restaurant in a compact card grid with
+// "ADD ANOTHER" button at the bottom. Each card opens the status panel.
+function RestaurantListPanel({restaurants, onOpen, onAddNew}){
+  const totalAnnual=restaurants.reduce((s,r)=>s+(r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations)),0);
+  const totalEarned=restaurants.reduce((s,r)=>s+(r.totalEarned||0),0);
+  return(
+    <>
+      {/* Portfolio summary */}
+      <div style={{background:`linear-gradient(135deg, ${GR}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GR}33`,borderRadius:10,padding:12,marginBottom:12}}>
+        <div style={{fontSize:9,letterSpacing:2,color:GR,fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Portfolio</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>ANNUAL INCOME</div>
+            <div style={{fontSize:18,fontWeight:900,color:GR,lineHeight:1.1}}>{fmtMoney(totalAnnual)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>EARNED TO DATE</div>
+            <div style={{fontSize:18,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(totalEarned)}</div>
+          </div>
+        </div>
+      </div>
+      {/* List */}
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+        {restaurants.map(r=>{
+          const isOwn=r.type==="own";
+          const annual=isOwn?ownChainAnnualIncome(r.locations):r.dividend;
+          return(
+            <button key={r.id} onClick={()=>onOpen(r.id)} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:`1.5px solid ${(r.color||GR)}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <div style={{width:46,height:46,borderRadius:10,background:`linear-gradient(135deg, ${r.color||GR}, ${(r.color||GR)}99)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0,boxShadow:`0 2px 12px ${(r.color||GR)}55`}}>{isOwn?(r.logoEmoji||"🍔"):r.icon}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:9,color:isOwn?OR:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>{isOwn?"YOUR CHAIN":"INVESTED STAKE"}</div>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{isOwn?r.name:r.chainName}</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                    {isOwn?`${r.locations} loc · `:""}{fmtMoney(annual)}/yr · Earned {fmtMoney(r.totalEarned||0)}
+                  </div>
+                </div>
+                <div style={{fontSize:18,color:"#888"}}>›</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={onAddNew} style={{...btnS,width:"100%",padding:"12px 0",fontSize:13}}>+ ADD ANOTHER VENTURE</button>
+    </>
+  );
+}
+
 // Two-option entry screen — INVEST (passive) or BUILD YOUR OWN (active).
-function RestaurantPathPicker({money, onChooseInvest, onChooseOwn}){
+function RestaurantPathPicker({money, restaurantCount=0, onChooseInvest, onChooseOwn, onBackToList}){
   // Minimum entry costs — Krispy Kreme is cheapest stake, 1-location own chain
   // is cheapest own option. Used to gate the buttons.
   const minInvest=Math.min(...RESTAURANT_CHAINS.map(c=>c.stake));
@@ -5393,6 +5756,9 @@ function RestaurantPathPicker({money, onChooseInvest, onChooseOwn}){
   const canOwn=(money||0)>=minOwn;
   return(
     <>
+      {onBackToList&&(
+        <button onClick={onBackToList} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Back to ventures</button>
+      )}
       <div style={{background:"rgba(255,255,255,0.04)",border:`1px solid ${GR}44`,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
         <div style={{fontSize:11,letterSpacing:2,color:GR,fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>💼 Invest in a Chain</div>
         <div style={{fontSize:12,color:"#ddd",lineHeight:1.5,marginBottom:10}}>Buy a stake in an existing restaurant chain. Steady annual dividends, no expansion risk — set it and forget it.</div>
@@ -5416,14 +5782,15 @@ function RestaurantPathPicker({money, onChooseInvest, onChooseOwn}){
       </div>
 
       <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:10,padding:"10px 12px",fontSize:11,color:"#888",lineHeight:1.5}}>
-        💡 You can only own ONE restaurant investment at a time. Pick wisely — passive's safer, own is bigger upside.
+        💡 Diversify if you want — own as many restaurants as you can afford. Passive's safer, own is bigger upside.{restaurantCount>0?` You already have ${restaurantCount} venture${restaurantCount===1?"":"s"}.`:""}
       </div>
     </>
   );
 }
 
-// Invest-in-chain sub-screen — lists existing chains, lets you pick + confirm.
-function RestaurantInvestPath({money, setMoney, setPlayer, currentYear, onBack, onComplete, toast}){
+// Invest-in-chain sub-screen — lists existing chains (filtering out any
+// already owned), lets you pick + confirm. Pushes onto the restaurants array.
+function RestaurantInvestPath({money, setMoney, setPlayer, currentYear, existingChainIds=[], onBack, onComplete, toast}){
   const [picked,setPicked]=useState(null);
   const confirm=()=>{
     if(!picked) return;
@@ -5432,11 +5799,14 @@ function RestaurantInvestPath({money, setMoney, setPlayer, currentYear, onBack, 
     setMoney(m=>(m||0)-chain.stake);
     setPlayer(p=>{
       const purchases=ensurePurchases(p);
-      return {...p, purchases:{...purchases, restaurant:{
+      const newRestaurant={
+        id:`r_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
         type:"invested", chainId:chain.id, chainName:chain.name,
         icon:chain.icon, color:chain.color, dividend:chain.dividend,
         stake:chain.stake, yearInvested:currentYear,
-      }}};
+        totalEarned:0,
+      };
+      return {...p, purchases:{...purchases, restaurants:[...(purchases.restaurants||[]), newRestaurant]}};
     });
     onComplete();
   };
@@ -5447,7 +5817,8 @@ function RestaurantInvestPath({money, setMoney, setPlayer, currentYear, onBack, 
       <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:12}}>
         {RESTAURANT_CHAINS.map(chain=>{
           const isSelected=picked===chain.id;
-          const canAfford=(money||0)>=chain.stake;
+          const alreadyOwned=existingChainIds.includes(chain.id);
+          const canAfford=(money||0)>=chain.stake && !alreadyOwned;
           // Approximate years to break even on the stake — helps the player compare offers
           const breakEven=Math.ceil(chain.stake/chain.dividend);
           return(
@@ -5461,7 +5832,9 @@ function RestaurantInvestPath({money, setMoney, setPlayer, currentYear, onBack, 
               <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:5}}>
                 <div style={{fontSize:24,width:32,textAlign:"center",flexShrink:0}}>{chain.icon}</div>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1}}>{chain.name}</div>
+                  <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1}}>
+                    {chain.name}{alreadyOwned&&<span style={{fontSize:9,color:GR,marginLeft:6,letterSpacing:1}}>✓ OWNED</span>}
+                  </div>
                   <div style={{fontSize:10,color:"#888",marginTop:2}}>{chain.blurb}</div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
@@ -5525,13 +5898,15 @@ function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBac
     setMoney(m=>(m||0)-cost);
     setPlayer(p=>{
       const purchases=ensurePurchases(p);
-      return {...p, purchases:{...purchases, restaurant:{
+      const newRestaurant={
+        id:`r_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
         type:"own", name:name.trim(), color, locations,
         foodType, logoEmoji,
         yearStarted:currentYear, failures:0,
         // Track the cumulative invested so the status panel can show ROI
-        totalInvested:cost,
-      }}};
+        totalInvested:cost, totalEarned:0,
+      };
+      return {...p, purchases:{...purchases, restaurants:[...(purchases.restaurants||[]), newRestaurant]}};
     });
     onComplete();
   };
@@ -5623,13 +5998,13 @@ function RestaurantConfigurePath({money, setMoney, setPlayer, currentYear, onBac
   );
 }
 
-// Status panel — shows current restaurant + lets the player expand or sell.
-function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPlayer, toast}){
+// Status panel — shows a single restaurant + lets the player expand or sell.
+// Accepts onBackToList so the user can return to the multi-restaurant list.
+function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPlayer, onBackToList, toast}){
   if(!restaurant) return null;
   const [expandQty,setExpandQty]=useState(1);
-  // Common cash-out: sell the restaurant for a return based on its remaining
-  // valuation. Invested chains return ~75% of stake; own chains return
-  // (locations × $4M) — a rough resale value reflecting going-concern worth.
+  // Common cash-out: sell THIS restaurant for a return based on its remaining
+  // valuation. Removes it from the player's restaurants array by id.
   const cashOut=()=>{
     let payout=0;
     if(restaurant.type==="invested"){
@@ -5640,16 +6015,18 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
     setMoney(m=>(m||0)+payout);
     setPlayer(p=>{
       const purchases=ensurePurchases(p);
-      return {...p, purchases:{...purchases, restaurant:null}};
+      const filtered=(purchases.restaurants||[]).filter(r=>r.id!==restaurant.id);
+      return {...p, purchases:{...purchases, restaurants:filtered}};
     });
     toast&&toast(`Sold for ${fmtMoney(payout)}`,YE);
+    if(onBackToList) onBackToList();
   };
 
   if(restaurant.type==="invested"){
-    const yearsHeld=Math.max(0,currentYear-restaurant.yearInvested);
-    const totalEarned=yearsHeld*restaurant.dividend;
+    const totalEarned=restaurant.totalEarned||0;
     return(
       <>
+        {onBackToList&&<button onClick={onBackToList} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← All ventures</button>}
         <div style={{background:"rgba(255,255,255,0.04)",border:`1.5px solid ${restaurant.color}55`,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
           <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
             <div style={{fontSize:36,width:50,textAlign:"center",flexShrink:0}}>{restaurant.icon}</div>
@@ -5692,19 +6069,21 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
       const newLocations=Math.max(1,restaurant.locations-loss);
       setPlayer(p=>{
         const purchases=ensurePurchases(p);
-        return {...p, purchases:{...purchases, restaurant:{
-          ...restaurant, locations:newLocations, failures:(restaurant.failures||0)+1,
-          totalInvested:(restaurant.totalInvested||0)+expandCost,
-        }}};
+        const updated=(purchases.restaurants||[]).map(r=>r.id===restaurant.id?{
+          ...r, locations:newLocations, failures:(r.failures||0)+1,
+          totalInvested:(r.totalInvested||0)+expandCost,
+        }:r);
+        return {...p, purchases:{...purchases, restaurants:updated}};
       });
       toast&&toast(`Expansion failed — lost ${loss} location${loss===1?"":"s"}`,RE);
     } else {
       setPlayer(p=>{
         const purchases=ensurePurchases(p);
-        return {...p, purchases:{...purchases, restaurant:{
-          ...restaurant, locations:restaurant.locations+expandQty,
-          totalInvested:(restaurant.totalInvested||0)+expandCost,
-        }}};
+        const updated=(purchases.restaurants||[]).map(r=>r.id===restaurant.id?{
+          ...r, locations:r.locations+expandQty,
+          totalInvested:(r.totalInvested||0)+expandCost,
+        }:r);
+        return {...p, purchases:{...purchases, restaurants:updated}};
       });
       toast&&toast(`Opened ${expandQty} new location${expandQty===1?"":"s"}!`,GR);
     }
@@ -5712,6 +6091,7 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
   };
   return(
     <>
+      {onBackToList&&<button onClick={onBackToList} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← All ventures</button>}
       {/* Restaurant header card with logo + name */}
       <div style={{background:"rgba(255,255,255,0.04)",border:`1.5px solid ${restaurant.color}55`,borderRadius:12,padding:"14px 16px",marginBottom:12}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:10}}>
@@ -5721,7 +6101,7 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
             <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{restaurant.name}</div>
           </div>
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
           <div>
             <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>LOCATIONS</div>
             <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1}}>{restaurant.locations}</div>
@@ -5733,6 +6113,10 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
           <div>
             <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>INVESTED</div>
             <div style={{fontSize:16,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(restaurant.totalInvested||0)}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>EARNED</div>
+            <div style={{fontSize:16,fontWeight:900,color:GR,lineHeight:1.1}}>{fmtMoney(restaurant.totalEarned||0)}</div>
           </div>
         </div>
       </div>
@@ -5772,28 +6156,112 @@ function RestaurantStatusPanel({restaurant, currentYear, money, setMoney, setPla
 
 // ─── MUSIC ALBUM SCREEN ────────────────────────────────────────────────────────
 // Configurator + status panel for the album venture. Internal mode flips
-// between "configure" (pre-recording) and "status" (recording or released).
+// AlbumScreen — modes:
+//   list   — show all albums (default when player has 1+)
+//   new    — configurator for a fresh album (gated: only one recording at a time)
+//   status — manage a specific album (selectedId)
 function AlbumScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toast}){
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
-  const album=player?.purchases?.album||null;
+  const pp=ensurePurchases(player);
+  const albums=pp.albums||[];
+  const recording=activeRecordingAlbum(player);
+  const [mode,setMode]=useState(albums.length>0?"list":"new");
+  const [selectedId,setSelectedId]=useState(null);
+  const selectedAlbum=selectedId?albums.find(a=>a.id===selectedId):null;
   return(
     <div>
       <button onClick={()=>go("nbaSpend")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Spend</button>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Ventures</div>
-        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>MUSIC ALBUM</div>
-        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{album?"Manage your record":"Drop a record · cross over to music"}</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>MUSIC</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>
+          {mode==="list"?`${albums.length} album${albums.length===1?"":"s"} in catalog`:mode==="new"?"Drop a new record":"Manage album"}
+        </div>
       </div>
-      {album
-        ? <AlbumStatusPanel album={album} currentYear={currentYear} setMoney={setMoney} setPlayer={setPlayer} toast={toast}/>
-        : <AlbumConfigurator money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} toast={toast}/>}
+      {mode==="list"&&<AlbumListPanel albums={albums} recording={recording} onOpen={(id)=>{setSelectedId(id);setMode("status");}} onNew={()=>setMode("new")}/>}
+      {mode==="new"&&(recording?(
+        <div style={{background:`${GO}11`,border:`1px solid ${GO}44`,borderRadius:10,padding:16,textAlign:"center",marginBottom:12}}>
+          <div style={{fontSize:32,marginBottom:8}}>🎙️</div>
+          <div style={{fontSize:14,fontWeight:900,color:GO,marginBottom:6,letterSpacing:1}}>STUDIO BOOKED</div>
+          <div style={{fontSize:11,color:"#aaa",lineHeight:1.5,marginBottom:12}}>
+            <strong style={{color:"#fff"}}>{recording.name}</strong> is still recording. You can only have one album in the studio at a time — wait for the next offseason, then start your follow-up.
+          </div>
+          <button onClick={()=>setMode("list")} style={{...ghostS,padding:"8px 18px",fontSize:11}}>← Back to catalog</button>
+        </div>
+      ):(
+        <AlbumConfigurator money={money} setMoney={setMoney} setPlayer={setPlayer} currentYear={currentYear} onBackToList={albums.length>0?()=>setMode("list"):null} onCreated={()=>setMode("list")} toast={toast}/>
+      ))}
+      {mode==="status"&&selectedAlbum&&<AlbumStatusPanel album={selectedAlbum} currentYear={currentYear} setMoney={setMoney} setPlayer={setPlayer} onBackToList={()=>{setSelectedId(null);setMode("list");}} toast={toast}/>}
     </div>
   );
 }
 
+// Album catalog list — every album the player owns, sorted by recording status
+// then by year. Tappable rows drill into the status panel.
+function AlbumListPanel({albums, recording, onOpen, onNew}){
+  // Sort: recording first, then by yearStarted desc (most recent first)
+  const sorted=[...albums].sort((a,b)=>{
+    if(a.status==="recording"&&b.status!=="recording") return -1;
+    if(b.status==="recording"&&a.status!=="recording") return 1;
+    return (b.yearStarted||0)-(a.yearStarted||0);
+  });
+  const lifetimeRevenue=albums.filter(a=>a.status!=="recording").reduce((s,a)=>s+(a.payout||0),0);
+  const classics=albums.filter(a=>a.status==="classic").length;
+  const hits=albums.filter(a=>a.status==="hit").length;
+  return(
+    <>
+      <div style={{background:`linear-gradient(135deg, #a855f711 0%, rgba(0,0,0,0.3) 100%)`,border:"1px solid #a855f733",borderRadius:10,padding:12,marginBottom:12}}>
+        <div style={{fontSize:9,letterSpacing:2,color:"#a855f7",fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Catalog</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>RELEASES</div>
+            <div style={{fontSize:18,fontWeight:900,color:"#fff",lineHeight:1.1}}>{albums.length}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>HITS / CLASSICS</div>
+            <div style={{fontSize:18,fontWeight:900,color:GR,lineHeight:1.1}}>{hits+classics}</div>
+          </div>
+          <div>
+            <div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>LIFETIME</div>
+            <div style={{fontSize:18,fontWeight:900,color:YE,lineHeight:1.1}}>{fmtMoney(lifetimeRevenue)}</div>
+          </div>
+        </div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8,marginBottom:12}}>
+        {sorted.map(a=>{
+          const statusLbl=a.status==="recording"?"🎙️ IN STUDIO":a.status==="classic"?"💎 CLASSIC":a.status==="hit"?"🔥 HIT":a.status==="mid"?"📊 MID":"💔 FLOP";
+          const statusColor=a.status==="recording"?GO:a.status==="classic"?YE:a.status==="hit"?GR:a.status==="mid"?"#aaa":RE;
+          return(
+            <button key={a.id} onClick={()=>onOpen(a.id)} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:`1.5px solid ${(a.color||OR)}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                <AlbumCover name={a.name} design={a.design} style={a.style} color={a.color||OR} emoji={a.emoji} size={50}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:9,color:statusColor,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>{statusLbl}</div>
+                  <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{a.name}</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                    {a.status==="recording"?"Drops at offseason":`${fmtMoney(a.payout||0)} revenue`}
+                  </div>
+                </div>
+                <div style={{fontSize:18,color:"#888"}}>›</div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
+      <button onClick={onNew} disabled={!!recording} style={{...btnS,width:"100%",padding:"12px 0",fontSize:13,opacity:recording?0.5:1,cursor:recording?"not-allowed":"pointer"}}>
+        {recording?"🎙️ Studio booked — wait for offseason":"+ DROP A NEW ALBUM"}
+      </button>
+    </>
+  );
+}
+
+// AlbumScreen (legacy wrapper kept for any old callers — but main entry above
+// already handles all modes).
+
+
 // Configurator — name, design, style, producers, features, cost preview, drop button.
-function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
+function AlbumConfigurator({money, setMoney, setPlayer, currentYear, onBackToList, onCreated, toast}){
   const [name,setName]=useState("");
   const [design,setDesign]=useState("gradient");
   const [style,setStyle]=useState("hiphop");
@@ -5829,18 +6297,22 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
     setMoney(m=>(m||0)-cost);
     setPlayer(p=>{
       const purchases=ensurePurchases(p);
-      return {...p, purchases:{...purchases, album:{
+      const newAlbum={
+        id:`a_${Date.now()}_${Math.random().toString(36).slice(2,6)}`,
         name:name.trim(), design, style, color, emoji,
         producers:[...producers], features:[...features],
         cost, yearStarted:currentYear,
         status:"recording", payout:0,
-      }}};
+      };
+      return {...p, purchases:{...purchases, albums:[...(purchases.albums||[]), newAlbum]}};
     });
     toast&&toast(`${name.trim()} is recording!`,GR);
+    if(onCreated) onCreated();
   };
 
   return(
     <>
+      {onBackToList&&<button onClick={onBackToList} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Back to catalog</button>}
       {/* Live cover preview */}
       <div style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",marginBottom:14,background:"rgba(0,0,0,0.3)",borderRadius:10}}>
         <AlbumCover name={name} design={design} style={style} color={color} emoji={emoji} size={96}/>
@@ -5993,21 +6465,25 @@ function AlbumConfigurator({money, setMoney, setPlayer, currentYear, toast}){
 }
 
 // Status panel — shows recording state or released outcome.
-function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, toast}){
+function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, onBackToList, toast}){
   const isReleased=album.status!=="recording";
   const cashOutCollectorsItem=()=>{
     // Even a flop has some residual value as a collector's item — return 20%
-    // of cost OR the assigned payout, whichever is larger.
+    // of cost OR the assigned payout, whichever is larger. Removes this album
+    // from the player's albums array by id.
     const value=Math.max(Math.round(album.cost*0.20), album.payout||0);
     setMoney(m=>(m||0)+value);
     setPlayer(p=>{
       const purchases=ensurePurchases(p);
-      return {...p, purchases:{...purchases, album:null}};
+      const filtered=(purchases.albums||[]).filter(a=>a.id!==album.id);
+      return {...p, purchases:{...purchases, albums:filtered}};
     });
     toast&&toast(`Sold catalog rights for ${fmtMoney(value)}`,YE);
+    if(onBackToList) onBackToList();
   };
   return(
     <>
+      {onBackToList&&<button onClick={onBackToList} style={{...ghostS,marginBottom:10,width:"auto",padding:"5px 10px",fontSize:10,letterSpacing:1}}>← Back to catalog</button>}
       {/* Cover + headline status */}
       <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:12,background:"rgba(255,255,255,0.04)",border:`1.5px solid ${album.color||OR}55`,borderRadius:12}}>
         <AlbumCover name={album.name} design={album.design} style={album.style} color={album.color||OR} emoji={album.emoji} size={100}/>
@@ -6148,10 +6624,11 @@ function ShoeContractCard({signedShoeBrand, shoeSignature, shoeContract, ovr, cu
 // reflects the silhouette via a per-design emoji set so a high-top doesn't
 // render as a low-top runner shoe.
 function ShoeSignaturePreview({shoeSignature}){
-  const icon=SHOE_DESIGN_ICONS[shoeSignature.design]||"👟";
   return(
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginTop:8,background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:8}}>
-      <div style={{width:36,height:36,borderRadius:8,background:`linear-gradient(135deg, ${shoeSignature.color}, ${shoeSignature.color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{icon}</div>
+      <div style={{width:46,height:32,borderRadius:6,background:"rgba(0,0,0,0.3)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:"2px 4px"}}>
+        <ShoeIcon design={shoeSignature.design} color={shoeSignature.color||OR} size={40}/>
+      </div>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:9,letterSpacing:1.5,color:GO,fontWeight:700,marginBottom:1}}>★ SIGNATURE SHOE</div>
         <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{shoeSignature.name}</div>
@@ -6160,15 +6637,75 @@ function ShoeSignaturePreview({shoeSignature}){
   );
 }
 
-// Maps silhouette ids to emojis — used by the preview AND the designer screen
-// so the icon visually reflects the design type (per user feedback). The
-// emoji set is intentionally varied so each silhouette looks distinct.
-const SHOE_DESIGN_ICONS = {
-  lowtop:     "👟", // running/training shoe (low cut)
-  midtop:     "🥾", // boot-ish for mid-cut
-  hightop:    "🥿", // ankle-high
-  performance:"⚡", // tech-forward / lightning bolt for "performance"
-};
+// Shoe silhouette icons — three inline SVGs (low/mid/high) drawn to suggest
+// actual basketball-shoe profiles instead of generic emojis. Each takes a
+// `color` prop (the colorway primary) and a `size` prop. Drawn at 100×60
+// viewBox so the side profile reads cleanly.
+//
+// Construction notes for each:
+//   - low-top  : collar dips well below the ankle, sole slightly thinner
+//   - mid-top  : collar sits at the ankle bone, padded with a midfoot strap
+//   - high-top : collar wraps above the ankle, taller padded throat
+function ShoeIcon({design, color="#FA5400", size=42}){
+  const stroke="rgba(0,0,0,0.35)";
+  const laces="rgba(255,255,255,0.85)";
+  const sole="#1a1a1a";
+  // Common sole rectangle — runs the full length, slight toe lift
+  const Sole=()=>(<path d="M5,48 Q4,52 8,53 L88,53 Q96,53 96,46 L95,44 L5,44 Z" fill={sole} stroke={stroke} strokeWidth="0.5"/>);
+  // Common toebox + midfoot upper — same curve for all three silhouettes
+  if(design==="lowtop"){
+    return(
+      <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
+        {/* upper body — low collar that sits below the ankle */}
+        <path d="M14,44 Q12,32 22,28 L46,24 Q58,22 70,28 L80,38 Q83,42 80,44 Z" fill={color} stroke={stroke} strokeWidth="1"/>
+        {/* heel pad */}
+        <path d="M70,28 Q78,30 82,38 L80,44 L70,44 Z" fill={color} stroke={stroke} strokeWidth="0.5" opacity="0.85"/>
+        {/* lace panel */}
+        <path d="M30,30 L60,26 L60,40 L34,42 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.3"/>
+        {/* laces */}
+        {[0,1,2,3].map(i=>(
+          <line key={i} x1={32+i*7} y1={40-i*0.5} x2={56-i*1.5} y2={29-i*0.3} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+        ))}
+        <Sole/>
+      </svg>
+    );
+  }
+  if(design==="midtop"){
+    return(
+      <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
+        {/* upper — mid collar that wraps the ankle bone, taller back panel */}
+        <path d="M14,44 Q12,28 22,24 L46,20 Q58,18 70,22 L78,22 Q83,28 84,38 L80,44 Z" fill={color} stroke={stroke} strokeWidth="1"/>
+        {/* mid strap */}
+        <path d="M52,21 L72,19 L72,33 L52,35 Z" fill="rgba(0,0,0,0.2)" stroke={stroke} strokeWidth="0.4"/>
+        {/* lace panel */}
+        <path d="M28,28 L54,23 L54,38 L32,40 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.3"/>
+        {/* laces */}
+        {[0,1,2,3,4].map(i=>(
+          <line key={i} x1={30+i*6} y1={38-i*0.5} x2={52-i*1} y2={26-i*0.2} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+        ))}
+        <Sole/>
+      </svg>
+    );
+  }
+  // high-top — collar wraps above the ankle, taller padded throat
+  return(
+    <svg viewBox="0 0 100 60" width={size} height={size*0.6} style={{display:"block"}}>
+      {/* upper — high collar with notch for ankle articulation */}
+      <path d="M14,44 Q12,26 22,22 L42,16 Q56,12 68,14 L78,14 Q84,18 86,30 L86,40 Q86,44 80,44 Z" fill={color} stroke={stroke} strokeWidth="1"/>
+      {/* collar notch / ankle scoop */}
+      <path d="M70,14 Q66,18 70,22 L82,22 Q86,20 86,16 Q82,13 70,14 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.4"/>
+      {/* padded throat */}
+      <path d="M58,16 L78,15 L78,28 L58,30 Z" fill="rgba(0,0,0,0.18)" stroke={stroke} strokeWidth="0.3"/>
+      {/* lace panel */}
+      <path d="M26,28 L58,18 L58,36 L30,42 Z" fill="rgba(0,0,0,0.15)" stroke={stroke} strokeWidth="0.3"/>
+      {/* laces — taller for high-top */}
+      {[0,1,2,3,4,5].map(i=>(
+        <line key={i} x1={28+i*5.5} y1={40-i*0.6} x2={56-i*1} y2={22-i*0.2} stroke={laces} strokeWidth="1.4" strokeLinecap="round"/>
+      ))}
+      <Sole/>
+    </svg>
+  );
+}
 
 // ─── SHOE DEAL PICKER ──────────────────────────────────────────────────────────
 // Modal listing every brand and their current offer. Brands you don't qualify
@@ -6311,11 +6848,12 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
   const [name,setName]=useState(defaultName);
   const [design,setDesign]=useState("lowtop");
   const [color,setColor]=useState(brandColor);
+  // Three core basketball silhouettes — emoji icons retired in favor of
+  // proper SVG drawings rendered by <ShoeIcon>.
   const SILHOUETTES=[
     {id:"lowtop",   name:"Low-Top",  description:"Speed and quickness"},
     {id:"midtop",   name:"Mid-Top",  description:"Balanced support"},
     {id:"hightop",  name:"High-Top", description:"Lockdown ankle"},
-    {id:"performance",name:"Performance",description:"Tech-forward modern"},
   ];
   const COLORS=[brandColor,"#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#000000","#FFFFFF"];
   const ready=name.trim().length>=2;
@@ -6350,11 +6888,11 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
         <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{brandName} wants to make this happen{previousSig?" — refresh your line":""}</div>
       </div>
 
-      {/* Live preview — silhouette + name + color callout. Icon adapts to
-          the silhouette so a high-top doesn't look identical to a low-top. */}
+      {/* Live preview — proper SVG silhouette renders so changing the design
+          actually swaps the visual (not just the label). */}
       <div style={{display:"flex",alignItems:"center",gap:14,padding:"14px 16px",marginBottom:14,background:`linear-gradient(135deg, ${color}22 0%, rgba(0,0,0,0.5) 100%)`,border:`1.5px solid ${color}55`,borderRadius:12}}>
-        <div style={{width:90,height:90,borderRadius:14,background:`linear-gradient(135deg, ${color}, ${color}77)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:52,flexShrink:0,boxShadow:`0 4px 22px ${color}66`}}>
-          {SHOE_DESIGN_ICONS[design]||"👟"}
+        <div style={{width:100,height:80,borderRadius:14,background:"rgba(0,0,0,0.35)",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,boxShadow:`0 4px 22px ${color}55`,padding:"4px 6px"}}>
+          <ShoeIcon design={design} color={color} size={88}/>
         </div>
         <div style={{flex:1,minWidth:0}}>
           <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:700,marginBottom:3}}>{brandName.toUpperCase()} PRESENTS</div>
@@ -6369,15 +6907,18 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
         <input value={name} onChange={e=>setName(e.target.value)} placeholder="e.g. Mike I" maxLength={28} style={{width:"100%",padding:"10px 12px",background:"rgba(0,0,0,0.4)",border:`1.5px solid ${ready?GO+"66":"rgba(255,255,255,0.12)"}`,borderRadius:8,color:"#fff",fontSize:14,fontWeight:700,fontFamily:"'Barlow Condensed',sans-serif"}}/>
       </div>
 
-      {/* Silhouette picker */}
+      {/* Silhouette picker — single column now that we have proper drawings
+          (each takes more horizontal space than an emoji did). */}
       <div style={{marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Silhouette</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:6}}>
+        <div style={{display:"flex",flexDirection:"column",gap:6}}>
           {SILHOUETTES.map(s=>(
-            <button key={s.id} onClick={()=>setDesign(s.id)} style={{padding:"10px 12px",textAlign:"left",background:design===s.id?`linear-gradient(135deg, ${color}33 0%, ${color}11 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${design===s.id?color+"88":"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",display:"flex",alignItems:"center",gap:10}}>
-              <div style={{fontSize:24,flexShrink:0}}>{SHOE_DESIGN_ICONS[s.id]||"👟"}</div>
+            <button key={s.id} onClick={()=>setDesign(s.id)} style={{padding:"10px 14px",textAlign:"left",background:design===s.id?`linear-gradient(135deg, ${color}33 0%, ${color}11 100%)`:"rgba(255,255,255,0.05)",border:`1.5px solid ${design===s.id?color+"88":"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",display:"flex",alignItems:"center",gap:12}}>
+              <div style={{width:60,height:42,background:"rgba(0,0,0,0.25)",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:"2px 4px"}}>
+                <ShoeIcon design={s.id} color={color} size={54}/>
+              </div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:900,letterSpacing:0.5}}>{s.name}</div>
+                <div style={{fontSize:14,fontWeight:900,letterSpacing:0.5}}>{s.name}</div>
                 <div style={{fontSize:10,color:"#888",marginTop:2}}>{s.description}</div>
               </div>
             </button>
@@ -6463,7 +7004,7 @@ function AgentPickerModal({ovr, currentAgent, onClose, onPick}){
 // player OVR × agent reputation. Extension creates a new 4-year deal that
 // stacks onto the player's contract slot.
 function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam, setNbaMentor, nbaGamesPlayed, nbaSeasons, signedShoeBrand, setSignedShoeBrand, setMoney, setSkillPoints, go, toast}){
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed; // used by getTeamIdentity for the picker
   const gp=nbaGamesPlayed||0;
@@ -6893,7 +7434,7 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
   const seasonsPlayed=(nbaSeasons||[]).length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const age=calcAge(allYears,nbaSeasons);
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   // Generate offers on mount. Stored in state so re-renders don't re-roll
   // the random appreciation values mid-decision.
   const [offers,setOffers]=useState(()=>buildFAOffers(player,nbaTeam,currentYear,seasonsPlayed,age));
@@ -6902,6 +7443,39 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
   // modal renders. Mirrors the rookie-deal signing UX.
   const [pendingOffer,setPendingOffer]=useState(null);
   const [hasInk,setHasInk]=useState(false);
+  // Roster preview modal — when set to a team key, shows the team's projected
+  // depth chart with the player slotted in.
+  const [previewTeam,setPreviewTeam]=useState(null);
+  // Counter-offer modal — when set, shows controls to adjust years on the
+  // selected offer. The team responds with adjusted salaries (or rejects).
+  const [counterOffer,setCounterOffer]=useState(null);
+  // Helper: build a counter-offer with N years from the original offer.
+  // Longer than original = lower annual (team risks declining play, so they
+  // discount). Shorter = higher annual (less team risk, but only ~10% bump).
+  // Returns {years, salaries, totalValue, accepted, signingBonus}. accepted=
+  // false if asked for too many years on a sub-elite contract.
+  const buildCounter=(orig, newYears)=>{
+    if(newYears===orig.years) return {...orig, accepted:true};
+    const origAvg=orig.totalValue/orig.years;
+    // Teams reject 5-year asks for sub-85 OVR players, and 4yr+ asks for sub-75
+    if(newYears>orig.years){
+      if(ovr<75 && newYears>=3 && newYears>orig.years+1) return {accepted:false, reason:"They won't go that long at your OVR."};
+      if(ovr<85 && newYears>=5) return {accepted:false, reason:"They won't commit 5 years."};
+    }
+    // Adjust per-year value: longer deal discounts, shorter deal modest bump
+    const adjustment=newYears>orig.years
+      ? Math.pow(0.92, newYears-orig.years)  // ~8% discount per extra year
+      : Math.pow(1.08, orig.years-newYears); // ~8% bump per dropped year (caps fast)
+    const newY1=Math.round(origAvg*adjustment);
+    const salaries=[]; let s=newY1;
+    for(let i=0;i<newYears;i++){ salaries.push(Math.round(s)); s=s*1.05; }
+    return {
+      ...orig, years:newYears, salaries,
+      totalValue:salaries.reduce((a,b)=>a+b,0),
+      signingBonus:Math.round(newY1*0.10),
+      accepted:true,
+    };
+  };
 
   const signOffer=(offer)=>{
     setPlayer(p=>({...p,contract:offer}));
@@ -6933,10 +7507,10 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
           <div style={{display:"flex",justifyContent:"space-between",fontSize:12,color:"#ddd"}}><span>Age</span><span style={{fontWeight:700}}>{age}</span></div>
         </div>
         <button onClick={()=>{
-          // Stamp the player as retired so save logic can flag them on the
-          // title screen. Career stats remain visible via the Stats screen.
-          setPlayer(p=>({...p,retired:true,contract:null}));
-          go("title");
+          // Route through the ceremony flow — HOF determination + jersey pick
+          // happen there before the archive commit. Replaces the old direct
+          // "retired" flag flow.
+          go("retire");
         }} style={{...btnS,padding:"12px 28px"}}>RETIRE FROM THE NBA →</button>
       </div>
     );
@@ -6960,6 +7534,16 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
         const id=getTeamIdentity(offer.team,currentYear);
         const isSelected=selected===i;
         const avg=offer.totalValue/offer.years;
+        // Project the player's role on this team — uses NEXT season's roster
+        // data, because that's the roster they'd actually join.
+        const nextYear=currentYear+1;
+        const nextSeasonData=getNbaSeasonData(nextYear).data;
+        const nextId=getTeamIdentity(offer.team,nextYear);
+        // Pass empty array for nbaSeasons so the rookie-floor logic is skipped
+        // (the player isn't a rookie anymore).
+        const proj=calcRotationSlot(player,nextId.rosterKey,nextSeasonData,[1]);
+        const roleLbl=proj.slot===0?"STARTER":proj.slot===1?"6TH MAN":proj.slot===2?"ROTATION":proj.slot===3?"BENCH":"DEEP BENCH";
+        const roleColor=proj.slot===0?GR:proj.slot===1?YE:proj.slot<=2?OR:"#888";
         return(
           <button key={i} onClick={()=>setSelected(i)} style={{
             display:"block",width:"100%",textAlign:"left",padding:"12px 14px",marginBottom:8,
@@ -6983,9 +7567,19 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
                 <div style={{fontSize:15,fontWeight:900,color:YE,lineHeight:1}}>{fmtMoney(offer.totalValue)}</div>
               </div>
             </div>
+            {/* Projected role chip — always visible so player can compare across offers at a glance */}
+            <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4,paddingTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 8px",background:`${roleColor}22`,border:`1px solid ${roleColor}55`,borderRadius:5}}>
+                <span style={{fontSize:9,color:roleColor,fontWeight:900,letterSpacing:1.2}}>{roleLbl}</span>
+                <span style={{fontSize:9,color:"#aaa",letterSpacing:0.5}}>~{proj.minutes} MPG</span>
+              </div>
+              <button onClick={(e)=>{e.stopPropagation();setPreviewTeam(offer.team);}} style={{marginLeft:"auto",padding:"3px 9px",background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",borderRadius:5,color:"#aaa",cursor:"pointer",fontSize:9,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                VIEW ROSTER →
+              </button>
+            </div>
             {/* Year-by-year breakdown (only show when selected to keep cards compact) */}
             {isSelected&&(
-              <div style={{display:"grid",gridTemplateColumns:`repeat(${offer.salaries.length},1fr)`,gap:4,paddingTop:8,marginTop:4,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
+              <div style={{display:"grid",gridTemplateColumns:`repeat(${offer.salaries.length},1fr)`,gap:4,paddingTop:8,marginTop:6,borderTop:"1px solid rgba(255,255,255,0.08)"}}>
                 {offer.salaries.map((s,j)=>(
                   <div key={j} style={{textAlign:"center"}}>
                     <div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>YR {j+1}</div>
@@ -6993,6 +7587,12 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
                   </div>
                 ))}
               </div>
+            )}
+            {/* Counter-offer button — only shown on selected non-vet-min offers */}
+            {isSelected&&!offer.isVetMin&&(
+              <button onClick={(e)=>{e.stopPropagation();setCounterOffer({orig:offer, idx:i, years:offer.years});}} style={{display:"block",width:"100%",marginTop:8,padding:"7px 0",background:"transparent",border:`1px dashed ${OR}55`,borderRadius:6,color:OR,cursor:"pointer",fontSize:10,fontWeight:700,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                ⟲ NEGOTIATE CONTRACT LENGTH
+              </button>
             )}
           </button>
         );
@@ -7007,6 +7607,139 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
         {selected!==null?`SIGN WITH ${getTeamIdentity(offers[selected].team,currentYear).name.toUpperCase()} →`:"SELECT AN OFFER"}
       </button>
 
+      {/* Roster preview modal — shows next-season depth chart for a team
+          with the player slotted into their position. */}
+      {previewTeam&&(()=>{
+        const nextYear=currentYear+1;
+        const nextSeasonData=getNbaSeasonData(nextYear).data;
+        const nextId=getTeamIdentity(previewTeam,nextYear);
+        const teamRoster=nextSeasonData?.[nextId.rosterKey];
+        const pos=player.position||"SG";
+        // Build a virtual roster: existing players + you, grouped by position.
+        const byPos={PG:[],SG:[],SF:[],PF:[],C:[]};
+        if(teamRoster){
+          for(const p of teamRoster.players){
+            const [name,position,pOvr]=p;
+            if(byPos[position]) byPos[position].push({name, ovr:pOvr, isPlayer:false});
+          }
+        }
+        byPos[pos].push({name:player.name||"YOU", ovr, isPlayer:true});
+        // Sort each position by OVR desc
+        Object.keys(byPos).forEach(k=>byPos[k].sort((a,b)=>b.ovr-a.ovr));
+        return(
+          <div onClick={()=>setPreviewTeam(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:400,width:"100%",maxHeight:"85vh",overflowY:"auto",border:`1px solid ${nextId.p}55`}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12}}>
+                <div style={{width:38,height:38,borderRadius:"50%",background:`linear-gradient(135deg, ${nextId.p}, ${nextId.s})`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:11,fontWeight:900,color:"#fff",flexShrink:0,border:"1px solid rgba(255,255,255,0.2)"}}>{nextId.abbr}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:9,letterSpacing:2,color:nextId.p,fontWeight:700}}>{formatSeasonLabel(nextYear)} DEPTH</div>
+                  <div style={{fontSize:16,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{nextId.name}</div>
+                </div>
+              </div>
+              <div style={{fontSize:10,color:"#888",marginBottom:12,fontStyle:"italic",lineHeight:1.4}}>
+                Your projected fit by position. {teamRoster?`Team record last year: ${teamRoster.w}-${teamRoster.l}.`:""}
+              </div>
+              {POSITIONS.map(p=>(
+                <div key={p} style={{marginBottom:10,paddingBottom:8,borderBottom:"1px solid rgba(255,255,255,0.05)"}}>
+                  <div style={{fontSize:9,letterSpacing:2,color:p===pos?OR:"#666",fontWeight:700,marginBottom:4}}>{p}{p===pos?" · YOUR SPOT":""}</div>
+                  {byPos[p].length===0?(
+                    <div style={{fontSize:11,color:"#666",fontStyle:"italic"}}>— No one rostered —</div>
+                  ):byPos[p].map((pl,j)=>(
+                    <div key={j} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"3px 6px",marginBottom:2,background:pl.isPlayer?`${OR}22`:"transparent",border:pl.isPlayer?`1px solid ${OR}66`:"1px solid transparent",borderRadius:4}}>
+                      <span style={{fontSize:11,color:pl.isPlayer?"#fff":"#bbb",fontWeight:pl.isPlayer?900:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",flex:1}}>
+                        {j===0&&<span style={{fontSize:8,color:GR,letterSpacing:1,marginRight:5,fontWeight:900}}>1ST</span>}
+                        {pl.name}
+                      </span>
+                      <span style={{fontSize:11,color:pl.isPlayer?OR:"#888",fontWeight:900,marginLeft:8}}>{pl.ovr}</span>
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <button onClick={()=>setPreviewTeam(null)} style={{...ghostS,width:"100%",marginTop:8}}>CLOSE</button>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Counter-offer modal — adjust years and see if the team accepts. */}
+      {counterOffer&&(()=>{
+        const orig=counterOffer.orig;
+        const teamId=getTeamIdentity(orig.team,currentYear);
+        const counter=buildCounter(orig, counterOffer.years);
+        const accepted=counter.accepted!==false;
+        return(
+          <div onClick={()=>setCounterOffer(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#1a1a1a",borderRadius:14,padding:18,maxWidth:380,width:"100%",border:`1px solid ${teamId.p}55`}}>
+              <div style={{textAlign:"center",marginBottom:14}}>
+                <div style={{fontSize:9,letterSpacing:3,color:OR,textTransform:"uppercase",marginBottom:4}}>Negotiate</div>
+                <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>{teamId.name}</div>
+                <div style={{fontSize:10,color:"#888",marginTop:3}}>Original: {orig.years}yr · {fmtMoney(orig.totalValue)}</div>
+              </div>
+              <div style={{fontSize:10,letterSpacing:1.5,color:"#aaa",fontWeight:700,marginBottom:6,textAlign:"center"}}>CONTRACT LENGTH</div>
+              <div style={{display:"flex",gap:5,marginBottom:14,justifyContent:"center"}}>
+                {[1,2,3,4,5].map(y=>(
+                  <button key={y} onClick={()=>setCounterOffer({...counterOffer, years:y})} style={{
+                    width:46,padding:"10px 0",
+                    background:counterOffer.years===y?OR:"rgba(255,255,255,0.06)",
+                    border:"none",borderRadius:6,
+                    color:counterOffer.years===y?"#080c10":"#888",
+                    cursor:"pointer",fontSize:14,fontWeight:900,
+                    fontFamily:"'Barlow Condensed',sans-serif"
+                  }}>
+                    {y}YR
+                  </button>
+                ))}
+              </div>
+              {accepted?(
+                <>
+                  <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:12,marginBottom:12}}>
+                    <div style={{display:"flex",justifyContent:"space-between",marginBottom:6,fontSize:11}}>
+                      <span style={{color:"#888"}}>{counter.years}-year total</span>
+                      <span style={{color:YE,fontWeight:900,fontSize:14}}>{fmtMoney(counter.totalValue)}</span>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"space-between",fontSize:10}}>
+                      <span style={{color:"#666"}}>Annual avg</span>
+                      <span style={{color:"#ccc",fontWeight:700}}>{fmtMoney(Math.round(counter.totalValue/counter.years))}</span>
+                    </div>
+                    {counterOffer.years!==orig.years&&(
+                      <div style={{display:"grid",gridTemplateColumns:`repeat(${counter.salaries.length},1fr)`,gap:4,paddingTop:8,marginTop:8,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+                        {counter.salaries.map((s,j)=>(
+                          <div key={j} style={{textAlign:"center"}}>
+                            <div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>YR {j+1}</div>
+                            <div style={{fontSize:10,color:"#ddd",fontWeight:700}}>{fmtMoney(s)}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setCounterOffer(null)} style={{flex:1,padding:"10px 0",background:"transparent",border:"1px solid rgba(255,255,255,0.2)",borderRadius:8,color:"#888",cursor:"pointer",fontSize:12,fontWeight:700,letterSpacing:1,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                      CANCEL
+                    </button>
+                    <button onClick={()=>{
+                      // Replace the original offer in-place with the counter
+                      const idx=counterOffer.idx;
+                      setOffers(prev=>prev.map((o,k)=>k===idx?{...counter, team:orig.team, signedYear:orig.signedYear, type:orig.type}:o));
+                      setCounterOffer(null);
+                      toast&&toast(`Counter accepted: ${counter.years}yr · ${fmtMoney(counter.totalValue)}`,GR);
+                    }} disabled={counterOffer.years===orig.years} style={{flex:2,padding:"10px 0",background:counterOffer.years===orig.years?"rgba(255,165,0,0.2)":OR,border:"none",borderRadius:8,color:counterOffer.years===orig.years?"#666":"#080c10",cursor:counterOffer.years===orig.years?"not-allowed":"pointer",fontSize:13,fontWeight:900,letterSpacing:1.5,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                      ACCEPT
+                    </button>
+                  </div>
+                </>
+              ):(
+                <>
+                  <div style={{background:`${RE}11`,border:`1px solid ${RE}44`,borderRadius:10,padding:12,marginBottom:12,textAlign:"center"}}>
+                    <div style={{fontSize:11,color:RE,fontWeight:900,letterSpacing:1.5,marginBottom:4}}>REJECTED</div>
+                    <div style={{fontSize:11,color:"#aaa",lineHeight:1.4}}>{counter.reason}</div>
+                  </div>
+                  <button onClick={()=>setCounterOffer(null)} style={{...ghostS,width:"100%"}}>CLOSE</button>
+                </>
+              )}
+            </div>
+          </div>
+        );
+      })()}
       {/* Contract signature modal — mirrors the rookie deal flow visually. */}
       {pendingOffer&&(()=>{
         const teamId=getTeamIdentity(pendingOffer.team,currentYear);
@@ -7044,6 +7777,351 @@ function FreeAgencyScreen({player, setPlayer, nbaTeam, setNbaTeam, setNbaMentor,
   );
 }
 
+// ─── RETIREMENT / HALL OF FAME ────────────────────────────────────────────────
+// Three-stage flow:
+//   1. Confirmation — "Are you sure?" panel with career snapshot
+//   2. Ceremony — HOF logo + jersey retirement (if inducted) OR respectful
+//      "hung up the sneakers" wrap (if not)
+//   3. Archive commit — snapshot the career, write to localStorage, send to title
+function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPlayed, nbaTeam, setPlayer, archiveAndExit, go}){
+  const seasonsPlayed=(nbaSeasons||[]).length;
+  const age=calcAge(allYears, nbaSeasons);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
+  const hofEval=evaluateHOF(player, nbaSeasons);
+  // Teams the player actually played for (unique). Used by the jersey picker.
+  const teamsPlayedFor=Array.from(new Set((nbaSeasons||[]).map(s=>s.team).filter(Boolean)));
+  // Always include current team if mid-season + not in list yet
+  if(nbaTeam){
+    const curName=getTeamIdentity(nbaTeam, NBA_START_YEAR+seasonsPlayed).name;
+    if(!teamsPlayedFor.includes(curName)) teamsPlayedFor.unshift(curName);
+  }
+  // Stage state — confirm → ceremony → archived
+  const [stage,setStage]=useState("confirm");
+  const [jerseyTeam,setJerseyTeam]=useState(teamsPlayedFor[0]||nbaTeam||null);
+
+  // ─── STAGE 1: CONFIRMATION ──────────────────────────────────────────────
+  if(stage==="confirm"){
+    return(
+      <div>
+        <button onClick={()=>go("leagueHub")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Hub</button>
+        <div style={{textAlign:"center",marginBottom:16}}>
+          <div style={{fontSize:48,marginBottom:6}}>🏁</div>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>End of an Era</div>
+          <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>RETIRE FROM THE NBA?</div>
+          <div style={{fontSize:12,color:"#aaa",marginTop:6,padding:"0 14px",lineHeight:1.5}}>
+            This decision is final. Once you retire, your career becomes read-only — saved to the archive for posterity, but no more games can be played.
+          </div>
+        </div>
+        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:14,marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>Where You Stand</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>SEASONS</div><div style={{fontSize:18,fontWeight:900,color:"#fff"}}>{seasonsPlayed}</div></div>
+            <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>AGE</div><div style={{fontSize:18,fontWeight:900,color:"#fff"}}>{age}</div></div>
+            <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>CAREER PPG</div><div style={{fontSize:18,fontWeight:900,color:OR}}>{hofEval.careerPpg}</div></div>
+            <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>FINAL OVR</div><div style={{fontSize:18,fontWeight:900,color:OR}}>{ovr}</div></div>
+            <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>MVPs</div><div style={{fontSize:18,fontWeight:900,color:GO}}>{hofEval.mvps}</div></div>
+            <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>RINGS</div><div style={{fontSize:18,fontWeight:900,color:GO}}>{hofEval.titleCount}</div></div>
+          </div>
+        </div>
+        <button onClick={()=>setStage("ceremony")} style={{...btnS,width:"100%",padding:13,fontSize:14,marginBottom:8}}>
+          PROCEED TO CEREMONY →
+        </button>
+        <button onClick={()=>go("leagueHub")} style={{...ghostS,width:"100%",padding:"9px 0",fontSize:11}}>NOT YET · KEEP PLAYING</button>
+      </div>
+    );
+  }
+
+  // ─── STAGE 2: CEREMONY ─────────────────────────────────────────────────
+  // Branches on HOF status. HOF gets the celebratory induction; non-HOF gets
+  // a respectful sendoff. Both end with a button to commit to archive.
+  const commitAndExit=()=>{
+    const snapshot={
+      // Identity
+      name:player.name||"Anonymous",
+      position:player.position||"--",
+      height:player.height,
+      weight:player.weight,
+      hometown:player.hometown,
+      appearance:player.appearance,
+      // Final skills (frozen)
+      skills:player.skills,
+      intangibles:player.intangibles,
+      ovr,
+      // Career data
+      allYears,
+      nbaSeasons,
+      // Stats roll-ups
+      seasonsPlayed,
+      age,
+      careerPpg:hofEval.careerPpg,
+      totalPoints:hofEval.totalPoints,
+      totalGames:hofEval.totalGames,
+      // Awards + championships
+      awards:player.awards||[],
+      championships:player.championships||[],
+      // HOF
+      hof:hofEval.inducted,
+      hofReason:hofEval.reason,
+      hofJerseyTeam:hofEval.inducted?jerseyTeam:null,
+      // Purchases (so leaderboard can show business empire if any)
+      purchases:player.purchases,
+      // Final team
+      finalTeam:nbaTeam,
+    };
+    archiveAndExit(snapshot);
+  };
+
+  if(hofEval.inducted){
+    return(
+      <div>
+        <div style={{textAlign:"center",marginBottom:16}}>
+          <div style={{fontSize:10,letterSpacing:4,color:GO,marginBottom:6,textTransform:"uppercase",fontWeight:900,animation:"pulse 2s ease-in-out infinite"}}>★ Naismith Memorial ★</div>
+          <div style={{fontSize:28,fontWeight:900,color:"#fff",letterSpacing:1}}>HALL OF FAME</div>
+          <div style={{fontSize:12,color:GO,marginTop:6,fontWeight:700,letterSpacing:2}}>CLASS OF {NBA_START_YEAR+seasonsPlayed}</div>
+        </div>
+        {/* HOF logo — user uploaded to /public/hof.png */}
+        <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
+          <img src="/hof.png" alt="Basketball Hall of Fame" style={{width:180,height:180,objectFit:"contain",filter:"drop-shadow(0 4px 24px rgba(255,215,0,0.4))"}} onError={(e)=>{e.target.style.display="none";}}/>
+        </div>
+        {/* Inductee headline card */}
+        <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.5) 100%)`,border:`1.5px solid ${GO}66`,borderRadius:14,padding:18,marginBottom:14,textAlign:"center"}}>
+          <div style={{fontSize:9,letterSpacing:3,color:GO,fontWeight:700,marginBottom:6}}>INDUCTED</div>
+          <div style={{fontSize:24,fontWeight:900,color:"#fff",letterSpacing:1,lineHeight:1.1,marginBottom:8}}>{player.name||"You"}</div>
+          <div style={{fontSize:11,color:"#ccc",lineHeight:1.5,fontStyle:"italic",marginTop:4}}>
+            "{hofEval.reason}"
+          </div>
+        </div>
+        {/* Jersey retirement — team picker if multiple options */}
+        <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:12,padding:14,marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>👕 Jersey Retired With</div>
+          {teamsPlayedFor.length===0?(
+            <div style={{fontSize:11,color:"#888",fontStyle:"italic"}}>No team data found.</div>
+          ):teamsPlayedFor.length===1?(
+            <div style={{fontSize:16,fontWeight:900,color:"#fff",textAlign:"center",padding:"8px 0"}}>
+              {teamsPlayedFor[0]}
+            </div>
+          ):(
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              <div style={{fontSize:10,color:"#aaa",marginBottom:4,fontStyle:"italic"}}>Pick which team you go in with:</div>
+              {teamsPlayedFor.map(team=>{
+                const seasonsWithTeam=(nbaSeasons||[]).filter(s=>s.team===team).length;
+                const isPicked=jerseyTeam===team;
+                return(
+                  <button key={team} onClick={()=>setJerseyTeam(team)} style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"10px 12px",background:isPicked?`${OR}33`:"rgba(255,255,255,0.04)",border:`1.5px solid ${isPicked?OR:"rgba(255,255,255,0.08)"}`,borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",textAlign:"left"}}>
+                    <span style={{fontSize:13,fontWeight:900}}>{team}</span>
+                    <span style={{fontSize:10,color:"#aaa"}}>{seasonsWithTeam} {seasonsWithTeam===1?"yr":"yrs"}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+        <button onClick={commitAndExit} style={{...btnS,width:"100%",padding:13,fontSize:14}}>
+          🏛️ FINISH CEREMONY →
+        </button>
+        <style>{"@keyframes pulse{0%,100%{opacity:0.7}50%{opacity:1}}"}</style>
+      </div>
+    );
+  }
+
+  // Not inducted — respectful sendoff
+  return(
+    <div>
+      <div style={{textAlign:"center",marginBottom:16}}>
+        <div style={{fontSize:64,marginBottom:8}}>🏀</div>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>The Final Whistle</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>CAREER COMPLETE</div>
+        <div style={{fontSize:13,color:"#aaa",marginTop:8,padding:"0 18px",lineHeight:1.5}}>
+          You hung up the sneakers after {seasonsPlayed} season{seasonsPlayed===1?"":"s"}. A respectable career — but not enough for Springfield this time.
+        </div>
+      </div>
+      <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:14,marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,textTransform:"uppercase",marginBottom:8}}>HOF Verdict</div>
+        <div style={{fontSize:12,color:"#ccc",lineHeight:1.6,fontStyle:"italic"}}>"{hofEval.reason}"</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:12,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)"}}>
+          <div style={{textAlign:"center"}}><div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>PPG</div><div style={{fontSize:15,fontWeight:900,color:OR}}>{hofEval.careerPpg}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>POINTS</div><div style={{fontSize:15,fontWeight:900,color:OR}}>{hofEval.totalPoints.toLocaleString()}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:8,color:"#666",letterSpacing:1,fontWeight:700}}>AWARDS</div><div style={{fontSize:15,fontWeight:900,color:GO}}>{hofEval.totalAwards}</div></div>
+        </div>
+      </div>
+      <button onClick={commitAndExit} style={{...btnS,width:"100%",padding:13,fontSize:14}}>
+        FINISH CAREER →
+      </button>
+    </div>
+  );
+}
+
+// Past Careers list — accessed from title menu. Shows every retired career
+// in the local archive, HOF inductees first, then sorted by career PPG.
+function PastCareersScreen({entries, openCareer, go}){
+  return(
+    <div>
+      <button onClick={()=>go("title")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Home</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Archive</div>
+        <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>PAST CAREERS</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>
+          {entries.length===0?"No retired players yet":`${entries.length} career${entries.length===1?"":"s"} on file`}
+        </div>
+      </div>
+      {entries.length===0?(
+        <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:20,textAlign:"center",fontSize:12,color:"#888",lineHeight:1.6}}>
+          Finish a career and retire from the NBA to start your archive. Hall of Fame inductees show up first.
+        </div>
+      ):(
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {entries.map(entry=>(
+            <button key={entry.id} onClick={()=>openCareer(entry.id)} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:entry.hof?`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",border:`1.5px solid ${entry.hof?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                {entry.hof?(
+                  <div style={{width:42,height:42,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, ${GO}aa)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,flexShrink:0,boxShadow:`0 2px 12px ${GO}55`}}>🏛️</div>
+                ):(
+                  <div style={{width:42,height:42,borderRadius:"50%",background:"rgba(255,255,255,0.08)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0,color:"#aaa"}}>🏀</div>
+                )}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:9,color:entry.hof?GO:"#888",letterSpacing:1.5,fontWeight:700,marginBottom:2}}>
+                    {entry.hof?"★ HALL OF FAMER":`${entry.seasonsPlayed}-YEAR CAREER`}
+                  </div>
+                  <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{entry.name}</div>
+                  <div style={{fontSize:10,color:"#aaa",marginTop:2}}>
+                    {entry.position} · {entry.careerPpg} PPG · {entry.awards?.length||0} awards · {entry.championships?.length||0} rings
+                  </div>
+                </div>
+                <div style={{fontSize:18,color:"#888"}}>›</div>
+              </div>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Past Career detail — read-only stats view for a single archived career.
+// Mirrors NbaStatsScreen layout but takes a frozen snapshot instead of live
+// state, and adds the HOF badge to accolades.
+function PastCareerStatsScreen({entry, go}){
+  if(!entry) return(
+    <div style={{textAlign:"center",padding:"40px 20px",color:"#888"}}>
+      Career not found.
+      <button onClick={()=>go("pastCareers")} style={{...ghostS,marginTop:12,width:"auto",padding:"7px 14px",fontSize:11}}>← Back</button>
+    </div>
+  );
+  const allNba=entry.nbaSeasons||[];
+  const awards=entry.awards||[];
+  const championships=entry.championships||[];
+  return(
+    <div>
+      <button onClick={()=>go("pastCareers")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← All Careers</button>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Retired Career</div>
+        <div style={{fontSize:22,fontWeight:900,color:"#fff"}}>{entry.name}</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4,letterSpacing:1}}>
+          {entry.position} · Retired age {entry.age} · {entry.seasonsPlayed} seasons
+        </div>
+      </div>
+
+      {/* HOF badge if inducted */}
+      {entry.hof&&(
+        <div style={{background:`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`,border:`1.5px solid ${GO}66`,borderRadius:12,padding:14,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
+          <div style={{width:54,height:54,borderRadius:"50%",background:`linear-gradient(135deg, ${GO}, ${GO}aa)`,display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0,boxShadow:`0 2px 14px ${GO}66`}}>🏛️</div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:9,letterSpacing:2,color:GO,fontWeight:900,marginBottom:2}}>HALL OF FAME</div>
+            <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Inducted with {entry.hofJerseyTeam||"the league"}</div>
+            <div style={{fontSize:10,color:"#aaa",marginTop:3,fontStyle:"italic",lineHeight:1.4}}>{entry.hofReason}</div>
+          </div>
+        </div>
+      )}
+
+      {/* Accolades chips */}
+      {(awards.length>0||championships.length>0||entry.hof)&&(
+        <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
+          <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {entry.hof&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${GO}44`,border:`1.5px solid ${GO}`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🏛️</span>
+                <span style={{fontSize:10,color:"#fff",fontWeight:900,letterSpacing:1}}>HALL OF FAME</span>
+              </div>
+            )}
+            {championships.length>0&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${GO}33`,border:`1px solid ${GO}88`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🏆</span>
+                <span style={{fontSize:10,color:GO,fontWeight:900,letterSpacing:1}}>{championships.length}× CHAMPION</span>
+              </div>
+            )}
+            {AWARD_TYPES.map(type=>{
+              const count=awards.filter(a=>a.type===type.id).length;
+              if(count===0) return null;
+              return(
+                <div key={type.id} style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${type.color}22`,border:`1px solid ${type.color}66`,borderRadius:6}}>
+                  <span style={{fontSize:14}}>{type.icon}</span>
+                  <span style={{fontSize:10,color:type.color,fontWeight:900,letterSpacing:1}}>{count}× {type.short}</span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Career totals card */}
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
+        <Lbl color="#ddd">Career Totals</Lbl>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginTop:8}}>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:2}}>PPG</div><div style={{fontSize:18,fontWeight:900,color:OR}}>{entry.careerPpg}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:2}}>POINTS</div><div style={{fontSize:18,fontWeight:900,color:OR}}>{(entry.totalPoints||0).toLocaleString()}</div></div>
+          <div style={{textAlign:"center"}}><div style={{fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:2}}>GAMES</div><div style={{fontSize:18,fontWeight:900,color:"#fff"}}>{entry.totalGames||0}</div></div>
+        </div>
+      </div>
+
+      {/* NBA per-season table */}
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
+        <Lbl color="#ddd">NBA Seasons</Lbl>
+        {allNba.length===0?(
+          <div style={{fontSize:12,color:"#888",fontStyle:"italic",padding:"8px 0"}}>No NBA games played.</div>
+        ):(
+          <div>
+            <div style={{display:"grid",gridTemplateColumns:"0.9fr 0.55fr 0.35fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:4,paddingBottom:4,borderBottom:"1px solid rgba(255,255,255,0.06)"}}>
+              <div>YEAR</div><div>TEAM</div><div style={{textAlign:"right"}}>GP</div><div style={{textAlign:"right"}}>PPG</div><div style={{textAlign:"right"}}>RPG</div><div style={{textAlign:"right"}}>APG</div><div style={{textAlign:"right"}}>FG%</div>
+            </div>
+            {allNba.map((s,i)=>{
+              const td=s.team?NBA_TEAM_DATA[s.team]:null;
+              const abbr=td?.abbr || (s.team?s.team.split(" ").slice(-1)[0].slice(0,3).toUpperCase():"—");
+              const teamColor=td?.p||"#888";
+              const seasonYear=NBA_START_YEAR+i;
+              const seasonAwards=awards.filter(a=>a.year===seasonYear);
+              const wonChampionshipThisYear=championships.some(c=>c.year===seasonYear);
+              return(
+                <div key={i} style={{display:"grid",gridTemplateColumns:"0.9fr 0.55fr 0.35fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<allNba.length-1?"1px solid rgba(255,255,255,0.04)":"none",alignItems:"center"}}>
+                  <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center",gap:4}}>
+                    {s.year}
+                    {wonChampionshipThisYear&&<span title="NBA Champion" style={{fontSize:11,filter:`drop-shadow(0 1px 2px ${GO}99)`}}>🏆</span>}
+                    {seasonAwards.map(a=>{
+                      const t=AWARD_TYPE_BY_ID[a.type];
+                      return t?<span key={a.type} title={t.short} style={{fontSize:11,filter:`drop-shadow(0 1px 2px ${t.color}77)`}}>{t.icon}</span>:null;
+                    })}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:5,minWidth:0}}>
+                    <div style={{width:7,height:7,borderRadius:"50%",background:teamColor,flexShrink:0}}/>
+                    <span style={{fontSize:11,color:"#bbb",fontWeight:700,letterSpacing:0.5}}>{abbr}</span>
+                  </div>
+                  <div style={{textAlign:"right",color:"#aaa"}}>{s.gp}</div>
+                  <div style={{textAlign:"right",color:OR,fontWeight:700}}>{s.ppg}</div>
+                  <div style={{textAlign:"right",color:"#ddd"}}>{s.rpg}</div>
+                  <div style={{textAlign:"right",color:"#ddd"}}>{s.apg}</div>
+                  <div style={{textAlign:"right",color:"#ddd"}}>{s.fg}%</div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      <button onClick={()=>go("pastCareers")} style={ghostS}>← Back to Past Careers</button>
+    </div>
+  );
+}
+
 // ─── SEASON AWARDS SCREEN ──────────────────────────────────────────────────────
 // All 4 awards revealed at once — MVP, 6MOY, MIP, DPOY — in a compact 2x2
 // grid that fits on screen without scrolling. Continue button advances to
@@ -7061,7 +8139,7 @@ function NbaAwardsScreen({player, setPlayer, nbaSeasons, nbaSeasonTotals, nbaGam
   // Previous season for MIP comparison
   const prevSeasonStats=nbaSeasons.length>0?nbaSeasons[nbaSeasons.length-1]:null;
   // Player's rotation slot — 0 = starter, 1 = 6th man, 2 = backup, etc.
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const seasonData=getNbaSeasonData(currentYear);
   const rotationSlot=nbaTeam?calcRotationSlot(player,nbaTeam,seasonData,nbaSeasons):0;
   // Generate winners ONCE per mount — memoize via useState so it doesn't
@@ -7270,10 +8348,16 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
       {/* Accolades section — listed once at the top so the player can see
           career totals at a glance. Per-season chips appear on the NBA table
           rows below. */}
-      {((player?.awards)||[]).length>0&&(
+      {(((player?.awards)||[]).length>0||((player?.championships)||[]).length>0)&&(
         <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            {((player?.championships)||[]).length>0&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${GO}33`,border:`1px solid ${GO}88`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🏆</span>
+                <span style={{fontSize:10,color:GO,fontWeight:900,letterSpacing:1}}>{(player.championships||[]).length}× CHAMPION</span>
+              </div>
+            )}
             {AWARD_TYPES.map(type=>{
               const count=(player.awards||[]).filter(a=>a.type===type.id).length;
               if(count===0) return null;
@@ -7334,10 +8418,12 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
               // hasn't been awarded yet, so no chips for it.
               const seasonYear=i<nbaSeasons.length?NBA_START_YEAR+i:null;
               const seasonAwards=seasonYear!==null?(player?.awards||[]).filter(a=>a.year===seasonYear):[];
+              const wonChampionshipThisYear=seasonYear!==null&&((player?.championships)||[]).some(c=>c.year===seasonYear);
               return(
                 <div key={i} style={{display:"grid",gridTemplateColumns:"0.9fr 0.55fr 0.35fr 0.5fr 0.5fr 0.5fr 0.5fr",gap:4,fontSize:12,padding:"5px 0",borderBottom:i<allNba.length-1?"1px solid rgba(255,255,255,0.04)":"none",alignItems:"center"}}>
                   <div style={{color:"#ddd",fontWeight:700,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center",gap:4}}>
                     {s.year}
+                    {wonChampionshipThisYear&&<span title="NBA Champion" style={{fontSize:11,filter:`drop-shadow(0 1px 2px ${GO}99)`}}>🏆</span>}
                     {seasonAwards.map(a=>{
                       const t=AWARD_TYPE_BY_ID[a.type];
                       return t?<span key={a.type} title={t.short} style={{fontSize:11,filter:`drop-shadow(0 1px 2px ${t.color}77)`}}>{t.icon}</span>:null;
@@ -7447,6 +8533,13 @@ export default function App(){
   // Whether a save exists in localStorage. Drives the "Resume Career" button
   // on the title screen. Refreshed when we save, clear, or load.
   const [hasSave,setHasSave]=useState(()=>loadSave()!==null);
+  // Retired careers archive — list of frozen career snapshots. Reloaded
+  // whenever we append to it (on retirement) so the title menu can show
+  // an accurate count without remount.
+  const [archive,setArchive]=useState(()=>loadArchive());
+  // ID of the past career being viewed read-only via the PastCareerStatsScreen.
+  // Null when the player is browsing the list or not viewing any archive.
+  const [viewingArchiveId,setViewingArchiveId]=useState(null);
   // Testing mode — when true, auto-save is disabled so jumping into a Mike
   // preset doesn't clobber a real career. Set by the testing screen, cleared
   // when the user exits testing back to the title.
@@ -7770,6 +8863,32 @@ export default function App(){
     setNbaMentor(null);setNbaSeasons([]);setPlayoffsDone(false);
     setScreen("bio");
   };
+
+  // Commit a retirement snapshot to the archive, then wipe the live career
+  // state and route to the title. Called from the ceremony screen's final
+  // "FINISH" button. The snapshot already contains a frozen copy of stats
+  // (built inside RetireScreen) so we don't need to read live state here.
+  const archiveAndExit=(snapshot)=>{
+    appendToArchive(snapshot);
+    setArchive(loadArchive());
+    // Wipe save + state same as wipeAndStartNew, but route to title (not bio)
+    // since the player chose retirement, not "start new career".
+    clearSave();
+    setHasSave(false);
+    setPlayer({name:"",position:"SG",height:76,weight:210,hometown:"",skills:defaultSkills("SG"),intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
+    setStarTier(null);setSchool(null);setPriorities([]);
+    setYear(1);setAllYears([]);
+    setAgent(null);setWorkoutPlayer(null);setWorkoutDone(false);
+    setAgentAttention(100);setInterviewDone(false);setCombineDone(false);
+    setCombineScore(null);setInterviewScore(null);
+    setSeasonResult(null);setXferSel(null);
+    setSkillPoints(100);setIntangs([]);
+    setMoney(0);setSignedShoeBrand(null);
+    setNbaTeam(null);setNbaGamesPlayed(0);setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
+    setNbaMentor(null);setNbaSeasons([]);setPlayoffsDone(false);
+    setScreen("title");
+    toast(snapshot.hof?"🏛️ HALL OF FAME!":"Career archived","#00dc64");
+  };
   // Background music using HTMLAudioElement — the same approach YouTube, Spotify Web,
   // etc. use for iOS reliability. Web Audio API was too finicky here: even after
   // priming, iOS would silently swallow source.start() calls outside a gesture.
@@ -8080,7 +9199,7 @@ export default function App(){
     }
     setScreen(s);
   };
-  const ovr=calcOVR(player.skills||{},player.intangibles||[]);
+  const ovr=calcOVR(player.skills||{},player.intangibles||[],player.position,player.height);
   const allSkills=SKILLS;
   const allOpts=SKILLS;
 
@@ -8364,11 +9483,13 @@ export default function App(){
       const menuItems=hasSave?[
         {id:"resume",label:"RESUME CAREER",   sub:"Pick up where you left off", action:resumeCareer},
         {id:"new",   label:"NEW CAREER",      sub:"Start over from scratch",    action:startNewCareer},
+        ...(archive.length>0?[{id:"past",label:"PAST CAREERS",sub:`${archive.length} retired player${archive.length===1?"":"s"} on file`,action:()=>go("pastCareers")}]:[]),
         {id:"how",   label:"HOW TO PLAY",     sub:"Learn the flow",             action:()=>go("howto")},
         {id:"opts",  label:"OPTIONS",         sub:"Sound, settings",            action:()=>go("options")},
         {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",        action:()=>go("extras")},
       ]:[
         {id:"new",   label:"PLAY NOW",        sub:"Start a new career",         action:startNewCareer},
+        ...(archive.length>0?[{id:"past",label:"PAST CAREERS",sub:`${archive.length} retired player${archive.length===1?"":"s"} on file`,action:()=>go("pastCareers")}]:[]),
         {id:"how",   label:"HOW TO PLAY",     sub:"Learn the flow",             action:()=>go("howto")},
         {id:"opts",  label:"OPTIONS",         sub:"Sound, settings",            action:()=>go("options")},
         {id:"about", label:"GOODEN 2003 EXTRAS",sub:"About Drew Gooden",        action:()=>go("extras")},
@@ -9099,7 +10220,7 @@ export default function App(){
     ),
     nbaPlay:(
       <MenuFrame sub={`${nbaTeam?getTeamIdentity(nbaTeam,NBA_START_YEAR+nbaSeasons.length).name:"Team"} · Season`} title="GAMETIME">
-        <NbaPlayScreen player={player} setPlayer={setPlayer} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} go={go} toast={toast}/>
+        <NbaPlayScreen player={player} setPlayer={setPlayer} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} allYears={allYears} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaSkills:(
@@ -9160,6 +10281,21 @@ export default function App(){
     nbaStats:(
       <MenuFrame sub="College & NBA" title="CAREER STATS">
         <NbaStatsScreen player={player} allYears={allYears} nbaSeasons={nbaSeasons} nbaSeasonTotals={nbaSeasonTotals} nbaGamesPlayed={nbaGamesPlayed} nbaTeam={nbaTeam} go={go}/>
+      </MenuFrame>
+    ),
+    retire:(
+      <MenuFrame sub="Final Chapter" title="RETIREMENT">
+        <RetireScreen player={player} allYears={allYears} nbaSeasons={nbaSeasons} nbaSeasonTotals={nbaSeasonTotals} nbaGamesPlayed={nbaGamesPlayed} nbaTeam={nbaTeam} setPlayer={setPlayer} archiveAndExit={archiveAndExit} go={go}/>
+      </MenuFrame>
+    ),
+    pastCareers:(
+      <MenuFrame sub="From Home" title="ARCHIVE">
+        <PastCareersScreen entries={archive} openCareer={(id)=>{setViewingArchiveId(id);go("pastCareerStats");}} go={go}/>
+      </MenuFrame>
+    ),
+    pastCareerStats:(
+      <MenuFrame sub="Retired" title="CAREER FILE">
+        <PastCareerStatsScreen entry={archive.find(e=>e.id===viewingArchiveId)} go={go}/>
       </MenuFrame>
     ),
   };
