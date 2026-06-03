@@ -2340,7 +2340,12 @@ function OffensivePossessionGame({player, difficulty, onResult}){
     const passBoost=1+Math.min(passCount,3)*0.2;
     const step=()=>{
       setMeter(m=>{
-        const n=m+meterDir.current*(0.85+difficulty*0.2)*passBoost;
+        // Meter base speed bumped from 0.85+0.2x to 2.0+0.7x — old values were
+        // sluggish (~3.3s per full cycle at easy) and the difficulty curve was
+        // too flat (only 14% gap from easy to NBA). New range: ~0.7s/cycle at
+        // easy school, ~0.4s/cycle at NBA — feels responsive AND difficulty
+        // is meaningfully harder at higher tiers.
+        const n=m+meterDir.current*(2.0+difficulty*0.7)*passBoost;
         let next;
         if(n>=100){meterDir.current=-1;next=100;}
         else if(n<=0){meterDir.current=1;next=0;}
@@ -2468,7 +2473,7 @@ function OffensivePossessionGame({player, difficulty, onResult}){
       ballY=passing.from.pos.y+(passing.to.pos.y-passing.from.pos.y)*passing.t;
     }
     return(
-      <div>
+      <div style={{WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
           <div style={{fontSize:11,color:"#888"}}>⏱ {(clock/1000).toFixed(1)}s</div>
           <div style={{fontSize:11,color:"#666"}}>Passes: {passCount}</div>
@@ -2476,8 +2481,23 @@ function OffensivePossessionGame({player, difficulty, onResult}){
         <div style={{height:6,background:"rgba(255,255,255,0.08)",borderRadius:3,marginBottom:10}}>
           <div style={{width:`${pct*100}%`,height:"100%",background:pct>0.5?GR:pct>0.25?OR:RE,borderRadius:3,transition:"width 0.05s"}}/>
         </div>
+        {/* Shooting meter — rendered ABOVE the court while in shooting phase so
+            the user can see both the meter AND keep their finger on the ball
+            handler on the court below. (Old layout was below the court, which
+            put the action out of sight on tall phones.) */}
+        {phase==="shooting"&&(
+          <div style={{marginBottom:10,WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none"}}>
+            <div style={{fontSize:11,color:"#888",marginBottom:6,textAlign:"center"}}>🏀 SHOOTING from {COURT.find(p=>p.id===holderId).label} — Release when meter is in the sweet spot</div>
+            <div style={{position:"relative",height:42,background:"rgba(255,255,255,0.06)",borderRadius:21,marginBottom:6,overflow:"hidden",touchAction:"none",WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none"}}>
+              <div style={{position:"absolute",left:"65%",top:0,width:"30%",height:"100%",background:"rgba(0,220,100,0.22)",border:`2px solid ${GR}`}}/>
+              <div style={{position:"absolute",left:"76%",top:0,width:"10%",height:"100%",background:"rgba(255,215,0,0.5)"}}/>
+              <div style={{position:"absolute",top:"50%",left:`${meter}%`,transform:"translate(-50%,-50%)",width:18,height:18,borderRadius:"50%",background:"white",boxShadow:"0 0 10px white"}}/>
+            </div>
+            <div style={{textAlign:"center",fontSize:13,color:OR,fontWeight:700,letterSpacing:1.5}}>LIFT FINGER TO SHOOT</div>
+          </div>
+        )}
         {/* Court */}
-        <div style={{position:"relative",height:230,background:"linear-gradient(180deg, rgba(232,135,58,0.04) 0%, rgba(255,255,255,0.04) 100%)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,marginBottom:10,overflow:"hidden"}}>
+        <div style={{position:"relative",height:230,background:"linear-gradient(180deg, rgba(232,135,58,0.04) 0%, rgba(255,255,255,0.04) 100%)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,marginBottom:10,overflow:"hidden",WebkitTouchCallout:"none",WebkitUserSelect:"none",userSelect:"none"}}>
           {/* 3pt arc visual */}
           <div style={{position:"absolute",bottom:-60,left:"50%",transform:"translateX(-50%)",width:280,height:140,border:"2px solid rgba(255,255,255,0.07)",borderRadius:"50%",borderBottom:"none"}}/>
           {/* Hoop */}
@@ -2504,7 +2524,7 @@ function OffensivePossessionGame({player, difficulty, onResult}){
                   fontFamily:"'Barlow Condensed',sans-serif",color:"#f0ede8",padding:0,
                   boxShadow:isHolder?`0 0 14px ${statusColor}`:"none",
                   transition:"box-shadow 0.2s, background 0.2s, border-color 0.2s",
-                  touchAction:"none",userSelect:"none",
+                  touchAction:"none",userSelect:"none",WebkitUserSelect:"none",WebkitTouchCallout:"none",
                   animation:isHolder&&holderStatus==="open"?"openPulse 0.8s ease-in-out infinite":"none",
                 }}>
                 <div style={{fontSize:16,lineHeight:1}}>{p.icon}</div>
@@ -2518,24 +2538,13 @@ function OffensivePossessionGame({player, difficulty, onResult}){
             <div style={{position:"absolute",left:`${ballX}%`,top:`${ballY}%`,transform:"translate(-50%,-50%)",pointerEvents:"none",fontSize:18,filter:"drop-shadow(0 2px 4px rgba(0,0,0,0.5))",transition:passing?"none":"left 0.2s, top 0.2s"}}>🏀</div>
           )}
         </div>
-        {phase==="play"?(
+        {phase==="play"&&(
           <div style={{fontSize:11,textAlign:"center",lineHeight:1.5}}>
             {holderStatus==="open"?(
               <span style={{color:GR,fontWeight:700}}>🔥 {holder.id===0?"YOU'RE":holder.label.toUpperCase()+" IS"} OPEN — HOLD TO SHOOT!</span>
             ):(
               <span style={{color:"#aaa"}}><span style={{color:RE,fontWeight:700}}>🚫 COVERED</span> — pass to a teammate</span>
             )}
-          </div>
-        ):(
-          // Shooting phase — meter (release pointer anywhere to shoot)
-          <div>
-            <div style={{fontSize:11,color:"#888",marginBottom:6,textAlign:"center"}}>🏀 SHOOTING from {holder.label} — Release when meter is in the sweet spot</div>
-            <div style={{position:"relative",height:42,background:"rgba(255,255,255,0.06)",borderRadius:21,marginBottom:8,overflow:"hidden",touchAction:"none"}}>
-              <div style={{position:"absolute",left:"65%",top:0,width:"30%",height:"100%",background:"rgba(0,220,100,0.22)",border:`2px solid ${GR}`}}/>
-              <div style={{position:"absolute",left:"76%",top:0,width:"10%",height:"100%",background:"rgba(255,215,0,0.5)"}}/>
-              <div style={{position:"absolute",top:"50%",left:`${meter}%`,transform:"translate(-50%,-50%)",width:18,height:18,borderRadius:"50%",background:"white",boxShadow:"0 0 10px white"}}/>
-            </div>
-            <div style={{textAlign:"center",fontSize:13,color:OR,fontWeight:700,letterSpacing:1.5,padding:"10px 0"}}>LIFT FINGER TO SHOOT</div>
           </div>
         )}
       </div>
@@ -4398,9 +4407,11 @@ function buildRotation(player, teamName, seasonData, nbaSeasons){
 // reports {totalPts, made, gameDetails} on completion.
 function NbaGameSequence({player, mentor, minutes, onComplete}){
   // The "difficulty" in the NBA is higher across the board — every defender
-  // is a pro. We base it on the player's slot quality (lower slot = harder
-  // matchups for them since better defenders guard the starters).
-  const difficulty=1.3;
+  // is a pro. NBA play is calibrated harder than all but the very top college
+  // programs — 1.5 puts it above mid-majors (Gonzaga ~1.1) and on par with
+  // a high-major + 4-star recruit. Bumped from 1.3 so the league actually
+  // feels like a step up from school.
+  const difficulty=1.5;
   // Results is the SOURCE OF TRUTH. gameIdx (which mini-game to show) is
   // derived from results.length, so they can never desynchronize.
   const [results,setResults]=useState([]);
@@ -8221,7 +8232,15 @@ function PastCareerStatsScreen({entry, go}){
 // medium-skill player so the games behave like a typical mid-tier player.
 function MiniGameTesterScreen({go, toast}){
   const [pickedGame,setPickedGame]=useState(null);
-  const [difficulty,setDifficulty]=useState(2); // 1=easy, 2=med, 3=hard
+  // Difficulty here mirrors what career mode passes to the mini-games — a float
+  // multiplier, NOT a 1/2/3 tier. Career values range:
+  //   Small school (Belmont, 2★)  : 0.7 * 0.75 ≈ 0.53
+  //   Mid-major (Dayton, 3★)      : 0.9 * 1.0  = 0.90
+  //   High-major (Florida, 4★)    : 1.0 * 1.2  = 1.20
+  //   NBA fixed                   : 1.5
+  //   Elite (Duke, 5★)            : 1.4 * 1.5  = 2.10
+  // Old tester used 1/2/3 which is wildly out of range — 2 ≈ Duke, 3 ≈ off-chart.
+  const [difficulty,setDifficulty]=useState(1.0);
   const [lastResult,setLastResult]=useState(null);
   const [runId,setRunId]=useState(0); // bump to remount the game for replay
   // Generic player — balanced skills around 70, no intangibles. Tweak skills
@@ -8293,19 +8312,30 @@ function MiniGameTesterScreen({go, toast}){
           Try any individual mini-game with a balanced 70-rated test player. No save impact — none of this counts.
         </div>
       </div>
-      {/* Difficulty picker */}
+      {/* Difficulty picker — five tiers spanning the real career range so the
+          tester actually mirrors how the games feel in college and the pros. */}
       <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:10,padding:12,marginBottom:14}}>
-        <div style={{fontSize:9,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Difficulty</div>
-        <div style={{display:"flex",gap:5}}>
-          {[{v:1,label:"Easy"},{v:2,label:"Medium"},{v:3,label:"Hard"}].map(d=>(
+        <div style={{fontSize:9,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Difficulty · {difficulty.toFixed(2)}x</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(5, 1fr)",gap:5}}>
+          {[
+            {v:0.55, label:"Small", sub:"2★ small school"},
+            {v:0.90, label:"Mid",   sub:"3★ mid-major"},
+            {v:1.20, label:"High",  sub:"4★ high-major"},
+            {v:1.50, label:"NBA",   sub:"pro league"},
+            {v:2.10, label:"Elite", sub:"5★ blue blood"},
+          ].map(d=>(
             <button key={d.v} onClick={()=>setDifficulty(d.v)} style={{
-              flex:1,padding:"9px 0",
-              background:difficulty===d.v?OR:"rgba(255,255,255,0.06)",
+              padding:"9px 4px",
+              background:Math.abs(difficulty-d.v)<0.01?OR:"rgba(255,255,255,0.06)",
               border:"none",borderRadius:6,
-              color:difficulty===d.v?"#080c10":"#aaa",
-              cursor:"pointer",fontSize:12,fontWeight:900,letterSpacing:1,
+              color:Math.abs(difficulty-d.v)<0.01?"#080c10":"#aaa",
+              cursor:"pointer",fontSize:11,fontWeight:900,letterSpacing:0.5,
               fontFamily:"'Barlow Condensed',sans-serif",
-            }}>{d.label}</button>
+              display:"flex",flexDirection:"column",gap:2,alignItems:"center",
+            }}>
+              <span>{d.label}</span>
+              <span style={{fontSize:8,opacity:0.7,fontWeight:600,whiteSpace:"nowrap"}}>{d.sub}</span>
+            </button>
           ))}
         </div>
       </div>
@@ -10172,22 +10202,101 @@ export default function App(){
 
     transfer:(()=>{
       const lastStats=allYears[allYears.length-1]?.stats;
-      const fromBig=(school?.prestige||5)>=7; const performed=(lastStats?.ppg||0)>12;
-      const opts=fromBig?SCHOOLS.filter(s=>s.prestige<(school?.prestige||7)&&s.playTime>70):SCHOOLS.filter(s=>s.prestige>(school?.prestige||5)&&s.minStars<=(starTier?.stars||3));
+      const ppg=lastStats?.ppg||0;
+      const currentPrestige=school?.prestige||5;
+      const fromBig=currentPrestige>=8;
+      const playerStars=starTier?.stars||3;
+      // Performance tier — how many prestige levels you can stretch up based on
+      // last season's scoring. Tiered ladder rewards real production:
+      //   ≥22 PPG : +4 tiers (elite scorer breaks through anywhere)
+      //   ≥16 PPG : +3 tiers (strong year — clear upgrade unlocked)
+      //   ≥12 PPG : +2 tiers (decent — modest step up)
+      //   ≥8  PPG : +1 tier  (rotation player — sideways at best)
+      //   <8  PPG : 0       (didn't earn it)
+      let tierBoost;
+      if(ppg>=22)      tierBoost=4;
+      else if(ppg>=16) tierBoost=3;
+      else if(ppg>=12) tierBoost=2;
+      else if(ppg>=8)  tierBoost=1;
+      else             tierBoost=0;
+
+      // Build options. Big-school benchwarmers downgrade for minutes; everyone
+      // else gets to climb based on what they put up.
+      let opts;
+      let mode; // 'down' | 'up' | 'lateral'
+      if(fromBig && ppg<12){
+        // Big-school dud → smaller schools with strong PT
+        opts=SCHOOLS.filter(s=>s.prestige<currentPrestige && s.playTime>70);
+        mode="down";
+      } else {
+        // Upgrade path. Effective stars get a boost for proven scorers so a
+        // 2-star who put up 24 PPG can break the 4-star door.
+        const effectiveStars=Math.min(5, playerStars + Math.floor(tierBoost/2));
+        const targetMax=currentPrestige+tierBoost;
+        opts=SCHOOLS.filter(s=>
+          s.prestige>currentPrestige &&
+          s.prestige<=targetMax &&
+          s.minStars<=effectiveStars
+        );
+        // If the minStars filter still locked us out (rare for very low PPG)
+        // and the player has at least a tier-boost of 2, fall back to ignoring
+        // it within the prestige range — production trumps recruit rating.
+        if(opts.length===0 && tierBoost>=2){
+          opts=SCHOOLS.filter(s=>s.prestige>currentPrestige && s.prestige<=targetMax);
+        }
+        mode=tierBoost>=2?"up":"lateral";
+      }
+      // Fallback: nothing matched (e.g. currently at top prestige with bad season
+      // but not under the bench threshold). Show a small default set so the
+      // screen isn't empty.
       const options=opts.length?opts:SCHOOLS.slice(0,4);
+      // Sort by prestige descending so the best options surface first
+      options.sort((a,b)=>b.prestige-a.prestige);
+
+      // Playing-time bonus for transfers who EARNED it. A 22-PPG scorer who
+      // transfers up to a higher-prestige school comes in with a promised
+      // role, so we display (and on commit, store) a boosted PT number.
+      const transferPtBonus=(targetSchool)=>{
+        if(mode==="down") return 0; // already going to high-PT school by choice
+        if(ppg>=22) return 25; // elite scorer = locked-in starter promise
+        if(ppg>=16) return 15;
+        if(ppg>=12) return 8;
+        return 0;
+      };
+
+      const headline=mode==="down"
+        ? `Limited minutes at ${school?.name} — smaller schools offering PT.`
+        : mode==="up"
+          ? `${ppg.toFixed(1)} PPG last year — programs up the ladder are calling.`
+          : `Here are your options.`;
+
       return(
         <MenuFrame sub="Transfer Portal" title="NEW CHAPTER">
-          <div style={{fontSize:13,color:"#ccc",marginBottom:14,lineHeight:1.5}}>
-            {fromBig&&!performed?`Limited minutes at ${school?.name} — smaller schools offering PT.`:!fromBig&&performed?`Breakout year — bigger programs are calling.`:"Here are your options."}
-          </div>
-          {options.map(sc=>(
-            <CardBtn key={sc.id} selected={xferSel?.id===sc.id} onClick={()=>setXferSel(sc)}>
-              <div style={{display:"flex",justifyContent:"space-between"}}>
-                <div><div style={{fontSize:14,fontWeight:700}}>{sc.name}</div><div style={{fontSize:11,color:"#888"}}>{sc.conf}</div></div>
-                <div style={{textAlign:"right"}}><div style={{fontSize:9,color:"#888"}}>PT</div><div style={{fontSize:18,fontWeight:900,color:sc.playTime>75?GR:OR}}>{sc.playTime}%</div></div>
-              </div>
-            </CardBtn>
-          ))}
+          <div style={{fontSize:13,color:"#ccc",marginBottom:14,lineHeight:1.5}}>{headline}</div>
+          {options.map(sc=>{
+            const ptBonus=transferPtBonus(sc);
+            const effectivePt=Math.min(99, sc.playTime+ptBonus);
+            return(
+              <CardBtn key={sc.id} selected={xferSel?.id===sc.id} onClick={()=>setXferSel({...sc, playTime:effectivePt, transferPtBonus:ptBonus})}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:14,fontWeight:700}}>{sc.name}</div>
+                    <div style={{fontSize:11,color:"#888"}}>{sc.conf} · Prestige {sc.prestige}</div>
+                    {ptBonus>0&&(
+                      <div style={{fontSize:9,color:GR,letterSpacing:1.2,fontWeight:700,marginTop:3}}>★ TRANSFER BONUS · GUARANTEED MINUTES</div>
+                    )}
+                  </div>
+                  <div style={{textAlign:"right",flexShrink:0,marginLeft:8}}>
+                    <div style={{fontSize:9,color:"#888"}}>PT</div>
+                    <div style={{fontSize:18,fontWeight:900,color:effectivePt>75?GR:OR}}>{effectivePt}%</div>
+                    {ptBonus>0&&(
+                      <div style={{fontSize:9,color:GR,fontWeight:700,marginTop:1}}>+{ptBonus}</div>
+                    )}
+                  </div>
+                </div>
+              </CardBtn>
+            );
+          })}
           <div style={{display:"flex",gap:8,marginTop:8}}>
             <button onClick={()=>go("recap")} style={{...ghostS,flex:1}}>Back</button>
             <button onClick={()=>{if(!xferSel)return toast("Pick a school!");setSchool(xferSel);setYear(y=>y+1);setPriorities([]);go("signed");}} style={{...btnS,flex:2}}>TRANSFER →</button>
