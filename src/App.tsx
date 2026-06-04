@@ -5018,38 +5018,39 @@ function ArtestPromptScreen({onAccept}){
 }
 
 // Punch-Out style fight. Ron oscillates left/right between phases:
-//   idle (0.35-0.75s random) → winding (0.65s) → attacking (0.25s dodge window)
+//   idle (0.25-0.6s random) → winding (0.6s) → attacking (0.25s dodge window)
 //     ↓ dodged                                ↓ not dodged
-//   stunned (0.7s — bonus damage window)     you take ~20 dmg
+//   stunned (0.6s — bonus damage window)     you take ~20 dmg
 //
-// Ron's cycle tightened further on the third pass — he throws a punch about
-// every ~1.25s now (was ~1.5s, originally ~2s). Constant pressure forces
-// stamina management.
+// Ron's cycle is roughly ~1.1s now. The previous version had a stale-ref bug
+// in the phase loop that effectively doubled his cycle time and got worse as
+// the fight went on (orphan timers compounding). Fixed by passing the next
+// phase explicitly through the scheduler instead of reading from phaseRef.
 //
-// Stamina system: every PUNCH costs 22 stamina (max 100). Stamina regens at
-// 14/sec when you're not punching. Hitting 0 means you physically can't throw
-// — the button stays disabled until you regen to 22. Stops mashing dead in
-// the water; rhythm is now: throw a 2-3 punch burst, breathe, throw again.
+// Stamina: every PUNCH costs 30 stamina (max 100). Regen 10/sec while not
+// punching. ~3 punches max before you're gassed; ~3s per recharged punch.
+// You can't dump stamina into a stunned-window flurry — you have to budget.
 //
-// Player taps PUNCH any time:
+// Player taps PUNCH any time (stamina permitting):
 //   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 4
 //   · winding: 2 dmg (glancing, combo unchanged)
 //   · attacking: 2 dmg AND you eat a 10 dmg counter — combo resets
 //   · stunned: 15 dmg counter punch (combo+1)
-// Each punch animates a fist flying up from below so you can SEE the punch.
 //
-// After either HP hits 0, an overlay covers the arena with "SUSPENDED 5 GAMES"
+// After either HP hits 0, overlay covers the arena: "SUSPENDED 5 GAMES"
 // + REMATCH + WE'RE DONE HERE. Rematches keep the best result.
 function ArtestFightGame({onDone}){
   // gameId increments on rematch — useEffects keyed on it restart the loop.
   const [gameId, setGameId] = useState(0);
   const [artestHp, setArtestHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
-  // Stamina: 0-100, drains per punch, regenerates over time.
+  // Stamina: 0-100, drains per punch, regenerates over time. Punishing
+  // numbers so you can only sustain ~3 punches before needing to recover —
+  // mashing isn't viable, you have to pick your spots.
   const [stamina, setStamina] = useState(100);
   const staminaRef = useRef(100);
-  const STAMINA_COST = 22;
-  const STAMINA_REGEN_PER_SEC = 14;
+  const STAMINA_COST = 30;
+  const STAMINA_REGEN_PER_SEC = 10;
   const [phase, setPhase] = useState("idle"); // idle | winding | attacking | stunned | done
   const [combo, setCombo] = useState(0);
   const [hitFlash, setHitFlash] = useState(null);
@@ -5066,6 +5067,9 @@ function ArtestFightGame({onDone}){
   const floatIdRef = useRef(0);
   const fistIdRef = useRef(0);
   const fistSideRef = useRef("R");
+  // Ref-bridge so the dodge handler can call the latest goToPhase closure
+  // owned by the active useEffect (it's recreated on rematch via gameId).
+  const goToPhaseRef = useRef(null);
 
   const pushFloat = (text, color, x=50, y=40) => {
     const id = ++floatIdRef.current;
@@ -5084,6 +5088,14 @@ function ArtestFightGame({onDone}){
   useEffect(()=>{ phaseRef.current = phase; },[phase]);
 
   // Main phase loop — keyed on gameId so rematches restart cleanly.
+  //
+  // NOTE: this loop takes the NEXT phase as an explicit argument rather than
+  // reading phaseRef. The previous version read phaseRef inside the timer
+  // callback right after calling setPhase(newPhase) — but React state updates
+  // are async, so phaseRef was still stale. Each transition queued a duplicate
+  // timer for the OLD phase, doubling Ron's cycle time. Over a long fight
+  // those stale timers compounded and Ron would sometimes go silent. The
+  // explicit-phase version below has no ref reads in the scheduling path.
   useEffect(()=>{
     finishedRef.current = false;
 
@@ -5092,55 +5104,47 @@ function ArtestFightGame({onDone}){
       finishedRef.current = true;
       setPhase("done");
       setThisResult(won ? "won" : "lost");
-      // Best stays "won" once won — a follow-up loss can't downgrade it.
       setBestResult(prev => prev === "won" ? "won" : (won ? "won" : "lost"));
     };
 
-    const advance = () => {
+    const goToPhase = (next) => {
       if(finishedRef.current) return;
-      const cur = phaseRef.current;
-      if(cur === "idle"){
-        // Random pause 0.55-0.95s before winding up (was 0.9-1.5s)
-        const wait = 350 + Math.random()*400;
+      if(timerRef.current) clearTimeout(timerRef.current);
+      setPhase(next);
+      if(next === "idle"){
+        // 0.25-0.6s between punches. Faster than before — combined with the
+        // bug-fixed loop, Ron is now throwing roughly every ~1.1s.
+        const wait = 250 + Math.random()*350;
+        timerRef.current = setTimeout(()=> goToPhase("winding"), wait);
+      } else if(next === "winding"){
+        timerRef.current = setTimeout(()=> goToPhase("attacking"), 600);
+      } else if(next === "attacking"){
+        // 250ms dodge window — if the timer expires while still attacking,
+        // player ate it. Dodge handler interrupts this timer directly.
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
-          setPhase("winding");
-          advance();
-        }, wait);
-      } else if(cur === "winding"){
-        timerRef.current = setTimeout(()=>{
-          if(finishedRef.current) return;
-          setPhase("attacking");
-          advance();
-        }, 650);
-      } else if(cur === "attacking"){
-        // 250ms dodge window (was 300)
-        timerRef.current = setTimeout(()=>{
-          if(finishedRef.current) return;
-          if(phaseRef.current === "attacking"){
-            setPlayerHp(hp => {
-              const next = Math.max(0, hp - 20);
-              if(next === 0) finish(false);
-              return next;
-            });
-            setHitFlash("player");
-            setTimeout(()=>setHitFlash(null), 200);
-            setCombo(0);
-            pushFloat("-20", RE, 75, 55);
-            setPhase("idle");
-            advance();
-          }
+          setPlayerHp(hp => {
+            const nextHp = Math.max(0, hp - 20);
+            if(nextHp === 0) finish(false);
+            return nextHp;
+          });
+          setHitFlash("player");
+          setTimeout(()=>setHitFlash(null), 200);
+          setCombo(0);
+          pushFloat("-20", RE, 75, 55);
+          goToPhase("idle");
         }, 250);
-      } else if(cur === "stunned"){
-        timerRef.current = setTimeout(()=>{
-          if(finishedRef.current) return;
-          setPhase("idle");
-          advance();
-        }, 650);
+      } else if(next === "stunned"){
+        timerRef.current = setTimeout(()=> goToPhase("idle"), 600);
       }
     };
 
-    advance();
+    // Expose for handleDodge — needs to interrupt the current attack timer
+    // and force the phase straight to "stunned" with proper scheduling.
+    goToPhaseRef.current = goToPhase;
+
+    // Kick off the first cycle from idle (with a wait, not immediately).
+    goToPhase("idle");
     return ()=> { if(timerRef.current) clearTimeout(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   },[gameId]);
@@ -5222,52 +5226,12 @@ function ArtestFightGame({onDone}){
 
   const handleDodge = () => {
     if(finishedRef.current) return;
-    const cur = phaseRef.current;
-    if(cur === "attacking"){
-      if(timerRef.current) clearTimeout(timerRef.current);
-      setPhase("stunned");
+    if(phaseRef.current === "attacking"){
+      // Interrupt the damage timer and hand control back to the main loop —
+      // it knows how to do stunned → idle → winding → ... cleanly. No more
+      // duplicated cycle logic that drifts out of sync.
       pushFloat("DODGED!", BL, 25, 40);
-      // Resume normal cycle after stunned window expires.
-      const idleLoop = () => {
-        if(finishedRef.current) return;
-        if(phaseRef.current === "idle"){
-          const wait = 350 + Math.random()*400;
-          timerRef.current = setTimeout(()=>{
-            if(finishedRef.current) return;
-            setPhase("winding");
-            timerRef.current = setTimeout(()=>{
-              if(finishedRef.current) return;
-              setPhase("attacking");
-              timerRef.current = setTimeout(()=>{
-                if(finishedRef.current) return;
-                if(phaseRef.current === "attacking"){
-                  setPlayerHp(hp => {
-                    const next = Math.max(0, hp - 20);
-                    if(next === 0){
-                      finishedRef.current = true;
-                      setPhase("done");
-                      setThisResult("lost");
-                      setBestResult(prev => prev === "won" ? "won" : "lost");
-                    }
-                    return next;
-                  });
-                  setHitFlash("player");
-                  setTimeout(()=>setHitFlash(null), 200);
-                  setCombo(0);
-                  pushFloat("-20", RE, 75, 55);
-                  setPhase("idle");
-                  idleLoop();
-                }
-              }, 250);
-            }, 650);
-          }, wait);
-        }
-      };
-      timerRef.current = setTimeout(()=>{
-        if(finishedRef.current) return;
-        setPhase("idle");
-        idleLoop();
-      }, 650);
+      if(goToPhaseRef.current) goToPhaseRef.current("stunned");
     }
   };
 
