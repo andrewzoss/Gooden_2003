@@ -4402,6 +4402,18 @@ function calcCareerScore(player, nbaSeasons){
   if(fired.includes("artest_fight_2004")){
     s += player.artestFightWon ? 150 : 50;
   }
+  // Sprite Rising Stars Slam Dunk: champion = real legacy entry, finals =
+  // respectable, eliminated = at least you showed up.
+  if(fired.includes("slam_dunk_contest_2005")){
+    if(player.dunkContestResult === "won")        s += 250;
+    else if(player.dunkContestResult === "finalsLost")  s += 100;
+    else if(player.dunkContestResult === "eliminated")  s += 30;
+    // "declined" → 0, no bonus
+  }
+  // The Soup Incident — souping Damon Jones is iconic franchise lore.
+  if(fired.includes("damon_jones_soup_2018") && player.soupedDamon){
+    s += 75;
+  }
 
   return s;
 }
@@ -4975,6 +4987,8 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
 // Whether you say yes or try to refuse, the fight happens. Win or lose, the
 // event is tracked on player.midseasonEvents so it only fires once per career.
 const ARTEST_EVENT_ID = "artest_fight_2004";
+const SLAM_DUNK_EVENT_ID = "slam_dunk_contest_2005";
+const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
 // routes to the fight (with a brief "you can't say no to Ron Artest" beat).
@@ -5487,6 +5501,684 @@ function ArtestFightGame({onDone}){
   );
 }
 
+// ─── MIDSEASON EVENT: SPRITE RISING STARS SLAM DUNK (2005) ────────────────────
+// All-Star Weekend invite — fires once after the first 41-game stretch of the
+// 2005-06 season. Contestants are the player, Josh Smith, JR Smith, and Chris
+// "Birdman" Andersen. Round 1 is a single dunk (3 attempts to land it cleanly);
+// top 2 advance to the finals. The finals are 2 dunks vs Josh Smith — beat his
+// combined score for a career-score windfall.
+
+// Gesture classifier — takes the raw point trail from a pointerdown→up swipe
+// and returns the dunk type. Tuned forgiving since mobile swipes vary wildly.
+// Returns one of: "360","reverse","tomahawk","windmill","twohand","weak".
+function classifyDunkGesture(points){
+  if(!points || points.length < 4) return "weak";
+  const start = points[0];
+  const end = points[points.length-1];
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const netDist = Math.hypot(dx, dy);
+  let pathLen = 0;
+  for(let i=1;i<points.length;i++){
+    pathLen += Math.hypot(points[i].x-points[i-1].x, points[i].y-points[i-1].y);
+  }
+  // Bounding box
+  let minX=Infinity,maxX=-Infinity,minY=Infinity,maxY=-Infinity;
+  for(const p of points){
+    if(p.x<minX) minX=p.x; if(p.x>maxX) maxX=p.x;
+    if(p.y<minY) minY=p.y; if(p.y>maxY) maxY=p.y;
+  }
+  const width = maxX-minX, height = maxY-minY;
+  // Find the extreme Y points and where they fall in the path. If the LOWEST
+  // point (largest y) is in the middle of the path, that means the user went
+  // down and came back up → tomahawk.
+  let lowestIdx=0, highestIdx=0;
+  for(let i=0;i<points.length;i++){
+    if(points[i].y > points[lowestIdx].y) lowestIdx=i;
+    if(points[i].y < points[highestIdx].y) highestIdx=i;
+  }
+  const mid = points.length;
+  const lowMid = lowestIdx > mid*0.2 && lowestIdx < mid*0.8;
+  const highMid = highestIdx > mid*0.2 && highestIdx < mid*0.8;
+  // Closure: how much the path doubled back. Low = closed shape (circle).
+  const closure = pathLen > 0 ? netDist/pathLen : 1;
+
+  // 360 — long path, doesn't go far from start, decent bounding box
+  if(pathLen > 180 && closure < 0.45 && width > 50 && height > 50){
+    return "360";
+  }
+  // Tomahawk — went down then up, taller than wide
+  if(lowMid && height > 70 && height > width*1.1){
+    return "tomahawk";
+  }
+  // Reverse — clean right-to-left swipe
+  if(Math.abs(dx) > Math.abs(dy)*1.4 && dx < -40 && width > 60){
+    return "reverse";
+  }
+  // Windmill — strong upward motion (or down→up with shorter middle)
+  if(dy < -50 && Math.abs(dx) < height*0.7){
+    return "windmill";
+  }
+  // Default two-hander
+  if(pathLen > 40) return "twohand";
+  return "weak";
+}
+
+// Dunk type metadata — base score, display name, emoji. Backboard bonus
+// applied on top when the player double-tapped to enter backboard mode.
+const DUNK_TYPES = {
+  "360":      {name:"360 Spin",         emoji:"🌀", base:40, color:"#a855f7"},
+  "tomahawk": {name:"Tomahawk",         emoji:"⚔️", base:38, color:"#FA5400"},
+  "reverse":  {name:"Reverse Jam",      emoji:"↩️", base:37, color:"#22c55e"},
+  "windmill": {name:"Windmill",         emoji:"🌪", base:36, color:"#3b82f6"},
+  "twohand":  {name:"Two-Hand Power",   emoji:"💪", base:30, color:"#888"},
+  "weak":     {name:"Weak Attempt",     emoji:"🤷", base:0,  color:"#666"},
+};
+
+// One full dunk attempt: tap (or double-tap for backboard) to gather, then
+// swipe within the timing window to execute. onComplete is called with the
+// final score 0-50 (or null for a miss/timeout).
+function DunkAttempt({attemptNum, onComplete}){
+  // phase: ready → gathered → result. "ready" = waiting for tap/double-tap.
+  // "gathered" = swipe window is open. "result" = showing the dunk score.
+  const [phase, setPhase] = useState("ready");
+  const [backboard, setBackboard] = useState(false);
+  const [swipeProgress, setSwipeProgress] = useState(1.0); // 1.0 → 0.0 as window closes
+  const [dunkResult, setDunkResult] = useState(null); // {type, score, judges:[]}
+  const [pathPoints, setPathPoints] = useState([]); // for drawing the live swipe
+
+  const tapTimerRef = useRef(null);
+  const tapCountRef = useRef(0);
+  const windowStartRef = useRef(0);
+  const windowTimerRef = useRef(null);
+  const swipePointsRef = useRef([]);
+  const isSwipingRef = useRef(false);
+
+  // Cleanup on unmount
+  useEffect(()=>{
+    return ()=> {
+      if(tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      if(windowTimerRef.current) cancelAnimationFrame(windowTimerRef.current);
+    };
+  },[]);
+
+  const openWindow = (isBackboard) => {
+    setBackboard(isBackboard);
+    setPhase("gathered");
+    const duration = isBackboard ? 700 : 1200; // backboard = shorter window
+    windowStartRef.current = performance.now();
+    setSwipeProgress(1);
+    // Drain the progress bar via rAF
+    const tick = () => {
+      const elapsed = performance.now() - windowStartRef.current;
+      const p = Math.max(0, 1 - elapsed/duration);
+      setSwipeProgress(p);
+      if(p <= 0 && !isSwipingRef.current){
+        // Timed out without swiping → miss
+        if(dunkResult == null){
+          finalize({type:"weak", score:0, missed:true});
+        }
+        return;
+      }
+      windowTimerRef.current = requestAnimationFrame(tick);
+    };
+    windowTimerRef.current = requestAnimationFrame(tick);
+  };
+
+  const handleAreaTap = () => {
+    if(phase !== "ready") return;
+    tapCountRef.current += 1;
+    if(tapCountRef.current === 1){
+      // Wait briefly to see if a second tap comes in
+      tapTimerRef.current = setTimeout(()=>{
+        if(tapCountRef.current === 1){
+          openWindow(false);
+        }
+        tapCountRef.current = 0;
+      }, 220);
+    } else {
+      // Double tap → backboard mode
+      if(tapTimerRef.current) clearTimeout(tapTimerRef.current);
+      tapCountRef.current = 0;
+      openWindow(true);
+    }
+  };
+
+  // Swipe handling — collect points, classify on release, score.
+  const handlePointerDown = (e) => {
+    if(phase !== "gathered") return;
+    isSwipingRef.current = true;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const p = {x:e.clientX-rect.left, y:e.clientY-rect.top};
+    swipePointsRef.current = [p];
+    setPathPoints([p]);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const handlePointerMove = (e) => {
+    if(!isSwipingRef.current || phase !== "gathered") return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const p = {x:e.clientX-rect.left, y:e.clientY-rect.top};
+    swipePointsRef.current.push(p);
+    setPathPoints([...swipePointsRef.current]);
+  };
+  const handlePointerUp = () => {
+    if(!isSwipingRef.current || phase !== "gathered") return;
+    isSwipingRef.current = false;
+    const type = classifyDunkGesture(swipePointsRef.current);
+    const dunk = DUNK_TYPES[type];
+    // Score: base + backboard bonus + timing bonus + variance
+    const timingBonus = Math.round(swipeProgress * 6); // 0-6 for early execution
+    const backboardBonus = backboard && type !== "weak" ? 8 : 0;
+    const variance = Math.floor(Math.random()*4) - 1; // -1 to +2
+    const raw = dunk.base + timingBonus + backboardBonus + variance;
+    const score = Math.max(0, Math.min(50, raw));
+    // Generate 5 judge scores that sum near `score`
+    const judges = [];
+    let remaining = score;
+    for(let i=0;i<5;i++){
+      const avg = Math.round(remaining/(5-i));
+      const j = Math.max(6, Math.min(10, avg + Math.floor(Math.random()*3)-1));
+      judges.push(j);
+      remaining -= j;
+    }
+    // Ensure sum matches exactly
+    const sum = judges.reduce((a,b)=>a+b,0);
+    if(sum !== score){
+      const diff = score - sum;
+      judges[0] = Math.max(6, Math.min(10, judges[0]+diff));
+    }
+    finalize({type, score:judges.reduce((a,b)=>a+b,0), judges, backboard, missed: type === "weak"});
+  };
+
+  const finalize = (result) => {
+    if(windowTimerRef.current) cancelAnimationFrame(windowTimerRef.current);
+    setDunkResult(result);
+    setPhase("result");
+    // Show result for a beat, then bubble up
+    setTimeout(()=> onComplete && onComplete(result), 2200);
+  };
+
+  // Render
+  return(
+    <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
+      {/* Court backdrop with rim */}
+      <div style={{
+        position:"relative",height:170,borderRadius:12,overflow:"hidden",marginBottom:12,
+        background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 40%, #c97a3a 60%, #d68a4a 100%)",
+        border:"1px solid rgba(255,255,255,0.1)",
+      }}>
+        {/* Backboard + rim */}
+        <div style={{position:"absolute",left:"50%",top:24,transform:"translateX(-50%)",width:110,height:60,border:"3px solid #fff",borderRadius:4,background:"rgba(255,255,255,0.1)"}}/>
+        <div style={{position:"absolute",left:"50%",top:74,transform:"translateX(-50%)",width:40,height:8,background:"#ff6600",borderRadius:4,border:"2px solid #fff"}}/>
+        {/* Net */}
+        <div style={{position:"absolute",left:"50%",top:82,transform:"translateX(-50%)",width:36,height:16,borderLeft:"1px solid #fff",borderRight:"1px solid #fff",borderBottom:"1px solid #fff",borderRadius:"0 0 18px 18px",opacity:0.5}}/>
+        {/* Court lines */}
+        <div style={{position:"absolute",left:0,right:0,bottom:24,height:2,background:"rgba(255,255,255,0.4)"}}/>
+        <div style={{position:"absolute",left:"50%",bottom:0,transform:"translateX(-50%)",width:80,height:50,border:"2px solid rgba(255,255,255,0.4)",borderBottom:"none",borderRadius:"40px 40px 0 0"}}/>
+
+        {/* Player figure */}
+        <div style={{
+          position:"absolute",left:"50%",bottom:phase==="result"?105:30,
+          transform:`translateX(-50%) ${phase==="result"&&dunkResult?.type==="360"?"rotate(360deg)":""}`,
+          fontSize:38,
+          transition:"bottom 0.5s cubic-bezier(0.34,1.56,0.64,1), transform 0.6s",
+        }}>🏃‍♂️</div>
+
+        {/* Backboard mode banner */}
+        {backboard && phase === "gathered" && (
+          <div style={{position:"absolute",top:6,right:6,padding:"3px 8px",background:"#a855f7",borderRadius:4,fontSize:9,fontWeight:900,letterSpacing:1,color:"#fff"}}>
+            🏀 OFF BACKBOARD
+          </div>
+        )}
+        {/* Attempt counter */}
+        <div style={{position:"absolute",top:6,left:6,padding:"3px 8px",background:"rgba(0,0,0,0.5)",borderRadius:4,fontSize:9,fontWeight:700,letterSpacing:1,color:"#fff"}}>
+          ATTEMPT {attemptNum}/3
+        </div>
+      </div>
+
+      {/* Result overlay shown after dunk */}
+      {phase === "result" && dunkResult && (
+        <div style={{padding:14,background:`linear-gradient(135deg, ${DUNK_TYPES[dunkResult.type]?.color||"#666"}33, rgba(0,0,0,0.4))`,border:`1px solid ${DUNK_TYPES[dunkResult.type]?.color||"#666"}`,borderRadius:10,marginBottom:12,textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:4}}>{DUNK_TYPES[dunkResult.type]?.emoji||"❓"}</div>
+          <div style={{fontSize:14,fontWeight:900,color:"#fff",letterSpacing:1}}>
+            {dunkResult.missed ? "MISSED!" : `${DUNK_TYPES[dunkResult.type]?.name}${dunkResult.backboard?" (off the backboard!)":""}`}
+          </div>
+          {!dunkResult.missed && (
+            <>
+              <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:10}}>
+                {dunkResult.judges?.map((j,i)=>(
+                  <div key={i} style={{padding:"6px 10px",background:"rgba(255,255,255,0.08)",borderRadius:6,fontSize:18,fontWeight:900,color:j>=9?YE:j>=8?OR:"#aaa",fontFamily:"'Barlow Condensed',sans-serif"}}>{j}</div>
+                ))}
+              </div>
+              <div style={{fontSize:28,fontWeight:900,color:OR,marginTop:8,fontFamily:"'Barlow Condensed',sans-serif"}}>
+                SCORE: {dunkResult.score}
+              </div>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Action / swipe area */}
+      {phase === "ready" && (
+        <button onPointerDown={handleAreaTap} style={{
+          width:"100%",padding:"20px 14px",background:OR,border:"none",borderRadius:12,
+          color:"#080c10",fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",
+          cursor:"pointer",userSelect:"none",
+        }}>
+          <div style={{fontSize:18,marginBottom:4}}>👆 TAP TO GATHER</div>
+          <div style={{fontSize:11,opacity:0.8,letterSpacing:1}}>or DOUBLE-TAP for off-the-backboard (shorter window, +8 bonus)</div>
+        </button>
+      )}
+
+      {phase === "gathered" && (
+        <div
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          style={{
+            position:"relative",height:170,
+            background:`linear-gradient(135deg, ${backboard?"#a855f7":OR}22, rgba(0,0,0,0.4))`,
+            border:`2px solid ${backboard?"#a855f7":OR}`,
+            borderRadius:12,padding:10,touchAction:"none",cursor:"crosshair",
+          }}
+        >
+          {/* Timing bar */}
+          <div style={{position:"absolute",top:6,left:10,right:10,height:4,background:"rgba(255,255,255,0.1)",borderRadius:2,overflow:"hidden"}}>
+            <div style={{width:`${swipeProgress*100}%`,height:"100%",background:swipeProgress>0.4?GR:swipeProgress>0.2?YE:RE,transition:"background 0.2s"}}/>
+          </div>
+          <div style={{position:"absolute",top:18,left:0,right:0,textAlign:"center",fontSize:11,letterSpacing:2,color:"#fff",fontWeight:700}}>
+            SWIPE YOUR MOVE
+          </div>
+          <div style={{position:"absolute",bottom:8,left:10,right:10,fontSize:9,color:"rgba(255,255,255,0.6)",letterSpacing:1,textAlign:"center"}}>
+            🌀 CIRCLE = 360 · ↩ RIGHT→LEFT = REVERSE · ↕ DOWN-UP = TOMAHAWK · ↑ UP = WINDMILL
+          </div>
+          {/* Live swipe path */}
+          {pathPoints.length > 1 && (
+            <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%">
+              <polyline
+                points={pathPoints.map(p=>`${p.x},${p.y}`).join(" ")}
+                fill="none"
+                stroke={backboard?"#a855f7":OR}
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Prompt screen — banner, contestant list, two choices. Declining still routes
+// to the contest because the user gets the invite either way.
+function SlamDunkPromptScreen({onAccept, onDecline}){
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      <img src="/dunk.gif" alt="Sprite Rising Stars Slam Dunk" style={{display:"block",width:"100%",maxWidth:380,margin:"0 auto 14px",borderRadius:8}}/>
+
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>⭐ ALL-STAR WEEKEND</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>YOU'VE BEEN INVITED<br/>TO THE DUNK CONTEST</div>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.5}}>
+        Sprite wants you on the All-Star Saturday card. The four contestants:
+        <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
+          {[
+            {name:"YOU",          team:"the future of the league", you:true},
+            {name:"Josh Smith",   team:"Atlanta Hawks"},
+            {name:"JR Smith",     team:"New Orleans Hornets"},
+            {name:"Chris \"Birdman\" Andersen", team:"New Orleans Hornets"},
+          ].map((p,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:p.you?`${OR}22`:"rgba(255,255,255,0.03)",borderRadius:6,border:p.you?`1px solid ${OR}55`:"1px solid rgba(255,255,255,0.06)"}}>
+              <span style={{fontSize:12,fontWeight:p.you?900:700,color:p.you?OR:"#fff"}}>{p.name}</span>
+              <span style={{fontSize:10,color:"#888"}}>{p.team}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        <button onClick={onAccept} style={{...btnS,padding:"14px 20px",fontSize:14,background:GR,color:"#080c10"}}>
+          🏀 LET'S GET BUSY
+        </button>
+        <button onClick={onDecline} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+          Skip — not my thing
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Full contest game — manages stage progression (round1 → results → finals →
+// final-results) and bubbles a result string up to the route's onDone.
+function SlamDunkContestGame({onDone}){
+  // stage: round1 → round1Done → finals → finalsDone
+  const [stage, setStage] = useState("round1");
+  const [round1Score, setRound1Score] = useState(0);
+  const [round1Attempts, setRound1Attempts] = useState(0);
+  const [finalsScores, setFinalsScores] = useState([]); // [dunk1Score, dunk2Score]
+  const [finalsAttempts, setFinalsAttempts] = useState(0);
+  const [currentDunkKey, setCurrentDunkKey] = useState(0); // forces DunkAttempt remount
+
+  // Scripted opponent scores. Josh Smith (the real winner in 2005) is the
+  // toughest challenger; JR and Birdman finish behind to make sure the player
+  // advances if they put up a solid round.
+  const round1Opponents = useMemo(()=>({
+    josh: 42 + Math.floor(Math.random()*4),    // 42-45
+    jr:   36 + Math.floor(Math.random()*4),    // 36-39
+    bird: 33 + Math.floor(Math.random()*4),    // 33-36
+  }),[]);
+  const finalsTotal = useMemo(()=> {
+    // Josh in finals: 42-46 + 43-47 → 85-93 combined. Player needs a strong
+    // dunk OR a backboard bonus to beat him.
+    return [42 + Math.floor(Math.random()*5), 43 + Math.floor(Math.random()*5)];
+  },[]);
+
+  // Handle one attempt — track best score across the 3 allowed attempts.
+  // If they MISS, count it but allow retry (max 3). If they LAND a dunk, also
+  // count it — best of 3 wins.
+  const handleAttempt = (result) => {
+    if(stage === "round1"){
+      const next = Math.max(round1Score, result.score);
+      setRound1Score(next);
+      const attempts = round1Attempts + 1;
+      setRound1Attempts(attempts);
+      // Retry if they missed AND have attempts left
+      if(result.missed && attempts < 3){
+        setCurrentDunkKey(k=>k+1);
+        return;
+      }
+      // Out of attempts or landed something → end round 1
+      setTimeout(()=> setStage("round1Done"), 400);
+    } else if(stage === "finals"){
+      const scores = [...finalsScores];
+      // We're either on dunk 1 (scores.length === 0) or dunk 2 (length === 1)
+      const dunkIdx = scores.length;
+      const bestForThisDunk = scores[dunkIdx] || 0;
+      const newBest = Math.max(bestForThisDunk, result.score);
+      scores[dunkIdx] = newBest;
+      const attempts = finalsAttempts + 1;
+      setFinalsAttempts(attempts);
+      if(result.missed && attempts < 3){
+        setFinalsScores(scores);
+        setCurrentDunkKey(k=>k+1);
+        return;
+      }
+      // Move to next dunk or finish
+      setFinalsScores(scores);
+      if(dunkIdx === 0){
+        // First dunk done, start second
+        setTimeout(()=> {
+          setFinalsAttempts(0);
+          setCurrentDunkKey(k=>k+1);
+        }, 600);
+      } else {
+        setTimeout(()=> setStage("finalsDone"), 400);
+      }
+    }
+  };
+
+  // Round 1 standings — top 2 advance
+  if(stage === "round1Done"){
+    const board = [
+      {name:"YOU", score:round1Score, you:true},
+      {name:"Josh Smith", score:round1Opponents.josh},
+      {name:"JR Smith", score:round1Opponents.jr},
+      {name:"Birdman", score:round1Opponents.bird},
+    ].sort((a,b)=> b.score - a.score);
+    const playerRank = board.findIndex(p=>p.you);
+    const advancing = playerRank < 2;
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>ROUND 1 — STANDINGS</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>TOP 2 ADVANCE</div>
+        </div>
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+          {board.map((p,i)=>(
+            <div key={p.name} style={{
+              display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"10px 12px",
+              background:p.you?`${OR}22`:"rgba(255,255,255,0.04)",
+              border:`1.5px solid ${i<2?GR+"66":i>=2?RE+"33":"rgba(255,255,255,0.08)"}`,
+              borderRadius:8,
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:24,fontSize:13,fontWeight:900,color:i<2?GR:RE}}>
+                  {i===0?"🥇":i===1?"🥈":i===2?"🥉":"4"}
+                </div>
+                <div style={{fontSize:13,fontWeight:p.you?900:700,color:p.you?OR:"#fff"}}>{p.name}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{fontSize:18,fontWeight:900,color:i<2?GR:"#888",fontFamily:"'Barlow Condensed',sans-serif"}}>{p.score}</div>
+                <div style={{fontSize:9,color:i<2?GR:RE,letterSpacing:1.5,fontWeight:700,width:60,textAlign:"right"}}>
+                  {i<2?"ADVANCES":"ELIMINATED"}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={()=>{
+          if(advancing){
+            setStage("finals");
+            setFinalsAttempts(0);
+            setCurrentDunkKey(k=>k+1);
+          } else {
+            onDone && onDone({result:"eliminated", round1Score, finalsTotal:0});
+          }
+        }} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          {advancing ? "🏆 ONTO THE FINALS →" : "← FINISH IT UP"}
+        </button>
+      </div>
+    );
+  }
+
+  // Finals — head-to-head 2 dunks vs Josh Smith
+  if(stage === "finalsDone"){
+    const playerTotal = (finalsScores[0]||0) + (finalsScores[1]||0);
+    const joshTotal = finalsTotal[0] + finalsTotal[1];
+    const won = playerTotal > joshTotal;
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:3,color:won?GO:"#888",marginBottom:4}}>FINAL RESULT</div>
+          <div style={{fontSize:24,fontWeight:900,color:won?GO:"#fff",lineHeight:1}}>{won?"🏆 CHAMPION":"RUNNER-UP"}</div>
+        </div>
+        {/* Head-to-head */}
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <div style={{flex:1,padding:"12px 10px",background:won?`${GO}22`:"rgba(255,255,255,0.04)",border:`1.5px solid ${won?GO:"rgba(255,255,255,0.1)"}`,borderRadius:8,textAlign:"center"}}>
+            <div style={{fontSize:9,letterSpacing:1.5,color:won?GO:"#aaa",fontWeight:700,marginBottom:6}}>YOU</div>
+            <div style={{fontSize:11,color:"#888",marginBottom:2}}>{finalsScores[0]||0} + {finalsScores[1]||0}</div>
+            <div style={{fontSize:30,fontWeight:900,color:won?GO:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>{playerTotal}</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",fontSize:14,color:"#888",fontWeight:900}}>VS</div>
+          <div style={{flex:1,padding:"12px 10px",background:!won?`${GO}22`:"rgba(255,255,255,0.04)",border:`1.5px solid ${!won?GO:"rgba(255,255,255,0.1)"}`,borderRadius:8,textAlign:"center"}}>
+            <div style={{fontSize:9,letterSpacing:1.5,color:!won?GO:"#aaa",fontWeight:700,marginBottom:6}}>JOSH SMITH</div>
+            <div style={{fontSize:11,color:"#888",marginBottom:2}}>{finalsTotal[0]} + {finalsTotal[1]}</div>
+            <div style={{fontSize:30,fontWeight:900,color:!won?GO:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>{joshTotal}</div>
+          </div>
+        </div>
+        <button onClick={()=> onDone && onDone({
+          result: won ? "won" : "finalsLost",
+          round1Score, finalsTotal:playerTotal,
+        })} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          {won ? "🏆 COLLECT THE TROPHY →" : "← HEAD HOME"}
+        </button>
+      </div>
+    );
+  }
+
+  // Active dunking — round 1 (one dunk, up to 3 attempts)
+  if(stage === "round1"){
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:10}}>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>ROUND 1 — YOUR ATTEMPT</div>
+          <div style={{fontSize:14,fontWeight:700,color:"#fff"}}>One dunk · Best of 3 tries</div>
+          {round1Score>0 && <div style={{fontSize:10,color:GR,marginTop:2}}>Best so far: {round1Score}</div>}
+        </div>
+        <DunkAttempt key={currentDunkKey} attemptNum={round1Attempts+1} onComplete={handleAttempt}/>
+      </div>
+    );
+  }
+
+  // Active dunking — finals (two dunks, 3 attempts per dunk)
+  if(stage === "finals"){
+    const dunkIdx = finalsScores.length;
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:10}}>
+          <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:4}}>🏆 FINALS · DUNK {dunkIdx+1} OF 2</div>
+          <div style={{fontSize:13,fontWeight:700,color:"#fff"}}>vs Josh Smith</div>
+          <div style={{fontSize:11,color:"#888",marginTop:2}}>
+            Josh's running total: {finalsTotal[0]}{dunkIdx>=1?` + ${finalsTotal[1]} = ${finalsTotal[0]+finalsTotal[1]}`:""}
+          </div>
+          {finalsScores[0]!=null && <div style={{fontSize:10,color:GR,marginTop:2}}>Your dunk 1: {finalsScores[0]}</div>}
+        </div>
+        <DunkAttempt key={currentDunkKey} attemptNum={finalsAttempts+1} onComplete={handleAttempt}/>
+      </div>
+    );
+  }
+
+  return null;
+}
+
+// ─── MIDSEASON EVENT: THE SOUP INCIDENT (2018) ─────────────────────────────────
+// Damon Jones, assistant coach, is on you at practice. Two choices: throw
+// a hot bowl of Chicken Tortilla soup at him, or "any other reaction." The
+// second option is a trap — you'll be told to go back and pick the soup
+// because the whole bit only works one way. Hitting soup launches an emoji
+// across the screen onto his face, lands with "SOUPED" written across.
+function SoupPromptScreen({onDone}){
+  // stage: "choice" → user picking, "denied" → told to go back, "throwing" →
+  // soup emoji animation, "souped" → final result overlay.
+  const [stage, setStage] = useState("choice");
+
+  const handleSoup = () => {
+    setStage("throwing");
+    // Let the soup fly for a beat, then show the SOUPED overlay
+    setTimeout(()=> setStage("souped"), 900);
+    // Auto-exit after another beat so the player sees the punchline
+    setTimeout(()=> onDone && onDone(), 2800);
+  };
+  const handleOther = () => {
+    setStage("denied");
+  };
+
+  return(
+    <div style={{padding:"4px 0 20px",position:"relative",overflow:"hidden"}}>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>PRACTICE FACILITY · TUESDAY MORNING</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>YOUR ASSISTANT COACH<br/>WON'T LET UP</div>
+      </div>
+
+      {/* Damon Jones picture with optional soup animation overlay */}
+      <div style={{position:"relative",display:"flex",justifyContent:"center",marginBottom:14}}>
+        <div style={{position:"relative",padding:4,background:`linear-gradient(135deg, ${OR}, ${RE})`,borderRadius:"50%",boxShadow:"0 4px 20px rgba(232,135,58,0.4)"}}>
+          <img src="/damon.jpg" alt="Damon Jones" style={{
+            display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",
+            borderRadius:"50%",background:"#000",
+            filter: stage==="souped" ? "brightness(0.7) saturate(1.4)" : "none",
+            transition:"filter 0.3s",
+          }}/>
+          {/* Flying soup emoji — animates from the left edge to the face */}
+          {stage === "throwing" && (
+            <div style={{
+              position:"absolute",
+              left:"-180px",top:"50%",transform:"translateY(-50%)",
+              fontSize:80,
+              animation:"soupFly 0.9s cubic-bezier(0.34,1.56,0.64,1) forwards",
+              pointerEvents:"none",
+              zIndex:5,
+            }}>🍲</div>
+          )}
+          {/* Soup splash + SOUPED label on impact */}
+          {stage === "souped" && (
+            <>
+              <div style={{
+                position:"absolute",inset:0,borderRadius:"50%",
+                background:"radial-gradient(circle at 50% 55%, rgba(255,140,0,0.55) 0%, rgba(255,140,0,0) 60%)",
+                pointerEvents:"none",
+                animation:"splashFade 0.6s ease-out forwards",
+              }}/>
+              {/* Drip effect — emojis at the bottom of the face */}
+              <div style={{position:"absolute",left:"50%",bottom:"5%",transform:"translateX(-50%)",fontSize:32,pointerEvents:"none",animation:"dripIn 0.4s ease-out 0.1s both"}}>💦🍲💦</div>
+            </>
+          )}
+        </div>
+        {/* SOUPED stamp */}
+        {stage === "souped" && (
+          <div style={{
+            position:"absolute",left:"50%",top:"45%",transform:"translate(-50%,-50%) rotate(-8deg)",
+            fontSize:48,fontWeight:900,color:"#fff",letterSpacing:6,
+            fontFamily:"'Barlow Condensed',sans-serif",
+            textShadow:"0 0 16px #ff6600, 0 2px 4px rgba(0,0,0,0.8), 3px 3px 0 #c8501a",
+            animation:"soupedIn 0.4s cubic-bezier(0.34,1.56,0.64,1) both",
+            pointerEvents:"none",
+            zIndex:10,
+          }}>SOUPED</div>
+        )}
+      </div>
+
+      {/* Setup text — only on the initial choice screen */}
+      {stage === "choice" && (
+        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,textAlign:"left",fontSize:13,color:"#ddd",lineHeight:1.5}}>
+          Your assistant coach, <span style={{color:"#fff",fontWeight:700}}>Damon Jones</span>, has been antagonizing you the whole practice. Riding you about your defense, your shot selection, whatever. You're sitting at the team lunch table holding a steaming bowl of <span style={{color:OR,fontWeight:700}}>chicken tortilla soup</span>. How do you respond?
+        </div>
+      )}
+
+      {/* The "you have to pick soup" denial message */}
+      {stage === "denied" && (
+        <div style={{padding:"14px 14px",background:`${YE}22`,border:`1px solid ${YE}66`,borderRadius:10,fontSize:13,fontWeight:700,color:YE,marginBottom:14,textAlign:"center",lineHeight:1.4}}>
+          Sorry, you have to go with the soup. It's the whole premise of this joke.
+        </div>
+      )}
+
+      {/* Buttons — both visible while choosing; only the soup button remains after denial */}
+      {(stage === "choice" || stage === "denied") && (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={handleSoup} style={{...btnS,padding:"14px 20px",fontSize:13,background:OR,color:"#080c10"}}>
+            🍲 THROW A HOT BOWL OF CHICKEN TORTILLA SOUP AT HIM
+          </button>
+          {stage === "choice" && (
+            <button onClick={handleOther} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+              Literally any other reaction
+            </button>
+          )}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes soupFly {
+          0%   { left: -180px; transform: translateY(-50%) rotate(-30deg); opacity: 0.4; }
+          20%  { opacity: 1; }
+          60%  { left: 30%; transform: translateY(-80%) rotate(15deg); opacity: 1; }
+          85%  { left: 45%; transform: translateY(-30%) rotate(40deg); }
+          100% { left: 50%; transform: translate(-50%, -10%) rotate(70deg) scale(0.6); opacity: 0; }
+        }
+        @keyframes splashFade {
+          0%   { opacity: 0; }
+          30%  { opacity: 1; }
+          100% { opacity: 0.55; }
+        }
+        @keyframes dripIn {
+          0%   { opacity: 0; transform: translateX(-50%) translateY(-10px); }
+          100% { opacity: 1; transform: translateX(-50%) translateY(0); }
+        }
+        @keyframes soupedIn {
+          0%   { transform: translate(-50%, -50%) rotate(-8deg) scale(0.3); opacity: 0; }
+          60%  { transform: translate(-50%, -50%) rotate(-8deg) scale(1.15); opacity: 1; }
+          100% { transform: translate(-50%, -50%) rotate(-8deg) scale(1); opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
 // ─── OFFSEASON SCREEN ──────────────────────────────────────────────────────────
 // Processes all offseason events ON MOUNT (skill decay, paycheck, restaurant
 // earnings, album drops, signature shoe eligibility, mentor clearing at 28)
@@ -5863,6 +6555,22 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             if(gp===0 && currentYear===2004 && !firedEvents.includes(ARTEST_EVENT_ID)){
               setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), ARTEST_EVENT_ID]}));
               go("artestPrompt");
+              return;
+            }
+            // 2005-06 season All-Star Weekend — Sprite Rising Stars Slam Dunk
+            // invite. Same once-per-career tracking pattern as the Artest event.
+            if(gp===0 && currentYear===2005 && !firedEvents.includes(SLAM_DUNK_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), SLAM_DUNK_EVENT_ID]}));
+              go("slamDunkPrompt");
+              return;
+            }
+            // 2018-19 season — Damon Jones soup incident. Player has to be in
+            // their year-15 season for this to fire (currentYear 2018 means
+            // nbaSeasons.length === 14). The choice is rigged but the punchline
+            // is worth the bit.
+            if(gp===0 && currentYear===2018 && !firedEvents.includes(SOUP_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), SOUP_EVENT_ID]}));
+              go("soupPrompt");
               return;
             }
           }
@@ -10496,32 +11204,59 @@ export default function App(){
       toast("Mike — Post-Draft Summary loaded","#FFD700");
     }
     else if(preset==="leagueStar"){
-      // IN THE LEAGUE @ 90 OVR — established 5-year vet, elite skills, fully
-      // formed career. Drops straight onto the leagueHub.
+      // IN THE LEAGUE @ 90 OVR — established 10-year vet, elite skills, age 30,
+      // $100M in the bank from a max + endorsements. Drops onto the leagueHub
+      // mid-prime. calcAge = 18 + allYears(3) + nbaSeasons(9) = 30 ✓
       const mike=buildMike({draftPick:5,elite:true});
-      // Push elite skills well past the +15 bump for a genuine 90+ OVR.
       mike.skills={threePoint:90,midRange:92,finishing:90,handles:88,playmaking:85,perimDefense:86,postDefense:78,rebounding:82};
       mike.intangibles=["highIQ","confident","clutch"];
-      // Year 5, in the FINAL year of a 4-year extension signed at end of
-      // rookie deal. Remaining = 1, so the renegotiation button is hot.
+      // 5-year max signed at end of year 7 (free agency after rookie + ext).
+      // Currently in year 3 of 5, two years remaining + the current one.
       mike.contract={
-        type:"extension", signedYear:NBA_START_YEAR+1, years:4,
-        salaries:[14000000,15120000,16329600,17636000],
-        totalValue:63085600, signingBonus:5000000,
+        type:"freeAgent", signedYear:NBA_START_YEAR+7, years:5,
+        salaries:[22000000,23760000,25660800,27713664,29930757],
+        totalValue:129065221, signingBonus:8000000,
         team:"Sacramento Kings",
       };
+      // Real legacy — 1 MVP, 6 All-Star nods, a Finals MVP and a ring.
+      mike.awards=[
+        {year:NBA_START_YEAR+3, type:"as"},   // 2007-08 first All-Star
+        {year:NBA_START_YEAR+4, type:"as"},
+        {year:NBA_START_YEAR+5, type:"as"},
+        {year:NBA_START_YEAR+6, type:"mvp"},  // 2010-11 MVP campaign
+        {year:NBA_START_YEAR+6, type:"as"},
+        {year:NBA_START_YEAR+7, type:"as"},
+        {year:NBA_START_YEAR+8, type:"as"},
+        {year:NBA_START_YEAR+8, type:"fmvp"}, // 2012-13 Finals MVP
+      ];
+      mike.championships=[
+        {year:NBA_START_YEAR+8, team:"Sacramento Kings"},
+      ];
       setPlayer(mike); setNbaTeam("Sacramento Kings");
       setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
       setAgent(AGENTS[0]); // Marcus Webb, rep 10 — superstar rep
-      setMoney(12000000); setSkillPoints(25);
+      setMoney(100000000); setSkillPoints(25);
+      // 3 college years → bumps starting age component to 21 (18 + 3).
+      setAllYears([
+        {year:1,school:"Duke",ppg:14.2,rpg:4.1,apg:3.0,fg:48,record:"24-7",madeTournament:true},
+        {year:2,school:"Duke",ppg:18.4,rpg:5.2,apg:3.8,fg:50,record:"26-6",madeTournament:true},
+        {year:3,school:"Duke",ppg:22.1,rpg:6.0,apg:4.5,fg:52,record:"28-5",madeTournament:true},
+      ]);
+      // 9 completed NBA seasons → currently entering year 10. Stats follow the
+      // arc: dev → All-Star → MVP year → champ → established star.
       setNbaSeasons([
-        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
-        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true, gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true, gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
         {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
         {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
+        {year:"2008-09",team:"Sacramento Kings",teamRecord:"46-36",madePlayoffs:true, gp:80,ppg:27.5,rpg:6.3,apg:5.5,fg:51},
+        {year:"2009-10",team:"Sacramento Kings",teamRecord:"52-30",madePlayoffs:true, gp:81,ppg:28.6,rpg:6.5,apg:5.8,fg:51},
+        {year:"2010-11",team:"Sacramento Kings",teamRecord:"58-24",madePlayoffs:true, gp:79,ppg:29.2,rpg:6.8,apg:6.1,fg:52}, // MVP year
+        {year:"2011-12",team:"Sacramento Kings",teamRecord:"55-27",madePlayoffs:true, gp:78,ppg:27.8,rpg:6.4,apg:5.9,fg:50},
+        {year:"2012-13",team:"Sacramento Kings",teamRecord:"61-21",madePlayoffs:true, gp:80,ppg:26.4,rpg:6.0,apg:5.7,fg:51}, // 🏆 + FMVP
       ]);
       setScreen("leagueHub");
-      toast("Mike — League Star (90+ OVR) loaded","#00dc64");
+      toast("Mike — Age 30, Year 10, $100M, ring + MVP","#00dc64");
     }
     else if(preset==="freeAgent"){
       // FREE AGENCY — year 5 with an expired contract. Lands them directly on
@@ -10567,6 +11302,90 @@ export default function App(){
       setNbaSeasons(decline);
       setScreen("freeAgency");
       toast("Mike — Retirement Check loaded","#888");
+    }
+    else if(preset==="artestFight"){
+      // ARTEST FIGHT — Malice at the Palace. Set up a rookie state (no seasons
+      // logged yet) and route directly to the prompt. State matches what the
+      // organic 2004 midseason trigger would produce.
+      const mike=buildMike({draftPick:5});
+      mike.skills={threePoint:75,midRange:78,finishing:80,handles:75,playmaking:70,perimDefense:72,postDefense:65,rebounding:70};
+      mike.intangibles=["confident"];
+      mike.contract={
+        type:"rookie", signedYear:NBA_START_YEAR, years:4,
+        salaries:[2500000,2700000,2916000,3149280],
+        totalValue:11265280, signingBonus:1000000,
+        team:"Sacramento Kings",
+      };
+      // Mark the event as fired so the organic trigger doesn't re-route us
+      // out of this isolated test.
+      mike.midseasonEvents=[ARTEST_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"reebok",name:"Reebok",maxPick:14,bonus:1000000,skillBonus:5,color:"#DA1A32",subtitle:"Top 14 (lottery)"});
+      setAgent(AGENTS[1]); setMoney(2500000); setSkillPoints(20);
+      setNbaSeasons([]); // rookie year in progress
+      setScreen("artestPrompt");
+      toast("Test — Artest Fight prompt","#e83a3a");
+    }
+    else if(preset==="dunkContest"){
+      // SLAM DUNK CONTEST — All-Star Weekend year 2 (2005-06 season). Player
+      // needs 1 NBA season logged so currentYear computes to 2005.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:80,midRange:82,finishing:84,handles:80,playmaking:74,perimDefense:75,postDefense:68,rebounding:72};
+      mike.intangibles=["confident","clutch"];
+      mike.contract={
+        type:"rookie", signedYear:NBA_START_YEAR, years:4,
+        salaries:[2500000,2700000,2916000,3149280],
+        totalValue:11265280, signingBonus:1000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(4500000); setSkillPoints(25);
+      // One season completed → currentYear becomes 2005-06 mid.
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+      ]);
+      setScreen("slamDunkPrompt");
+      toast("Test — Dunk Contest prompt","#00aa44");
+    }
+    else if(preset==="soupIncident"){
+      // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
+      // currentYear = 2018. Long-tenured vet with money + accolades to match.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:85,midRange:87,finishing:82,handles:84,playmaking:82,perimDefense:78,postDefense:70,rebounding:75};
+      mike.intangibles=["highIQ","confident","clutch","veteran"];
+      mike.contract={
+        type:"veteran", signedYear:NBA_START_YEAR+16, years:2,
+        salaries:[18000000,19000000],
+        totalValue:37000000, signingBonus:2000000,
+        team:"Cleveland Cavaliers",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, SOUP_EVENT_ID];
+      mike.awards=[
+        {year:NBA_START_YEAR+4, type:"as"},
+        {year:NBA_START_YEAR+5, type:"as"},
+        {year:NBA_START_YEAR+6, type:"as"},
+        {year:NBA_START_YEAR+7, type:"as"},
+        {year:NBA_START_YEAR+8, type:"as"},
+      ];
+      setPlayer(mike); setNbaTeam("Cleveland Cavaliers");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(120000000); setSkillPoints(10);
+      // 14 NBA seasons completed → currentYear becomes 2018-19 mid.
+      const seasons=[];
+      const ppgArc=[12,16,19,22,24,26,27,28,27,26,24,22,20,18];
+      for(let i=0;i<14;i++){
+        seasons.push({
+          year:formatSeasonLabel(NBA_START_YEAR+i),
+          team:i<10?"Sacramento Kings":"Cleveland Cavaliers",
+          teamRecord:"48-34",madePlayoffs:true,
+          gp:78,ppg:ppgArc[i],rpg:5.4,apg:5.0,fg:48,
+        });
+      }
+      setNbaSeasons(seasons);
+      setScreen("soupPrompt");
+      toast("Test — Soup Incident prompt","#e8873a");
     }
   };
 
@@ -11219,6 +12038,26 @@ export default function App(){
         <button onClick={()=>jumpToTesting("retirementCheck")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:"linear-gradient(135deg, #444 0%, #1a1a1a 100%)",border:"1px solid rgba(255,255,255,0.10)",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:14,fontWeight:900,color:"#aaa"}}>🏁 END OF CAREER</div>
           <div style={{fontSize:10,color:"#888",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Age 36 · ~55 OVR · Should trigger retirement</div>
+        </button>
+
+        {/* Midseason events — jump straight to the prompt so the actual flow
+            (prompt → game → result toast → back to leagueHub) is testable
+            without playing through the season. */}
+        <div style={{fontSize:9,letterSpacing:2,color:"#666",fontWeight:700,margin:"6px 0 6px 2px"}}>MIDSEASON EVENTS</div>
+
+        <button onClick={()=>jumpToTesting("artestFight")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${RE} 0%, #8a1a1a 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>👊 ARTEST FIGHT (2004)</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Malice at the Palace · Punch-Out mini-game</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("dunkContest")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, #00aa44 0%, #007733 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🏀 DUNK CONTEST (2005)</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Sprite Rising Stars · vs Josh Smith, JR Smith, Birdman</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🍲 SOUP INCIDENT (2018)</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Damon Jones · The trap-choice gag</div>
         </button>
 
         <div style={{fontSize:11,color:"#888",lineHeight:1.5,padding:"10px 12px",background:"rgba(0,0,0,0.25)",borderRadius:8,marginBottom:14}}>
@@ -12201,6 +13040,52 @@ export default function App(){
             artestFightWon: result === "won",
           }));
           toast&&toast("📋 SUSPENDED 5 GAMES",RE);
+          go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    slamDunkPrompt:(
+      <MenuFrame sub="All-Star Saturday Night" title="DUNK CONTEST">
+        <SlamDunkPromptScreen
+          onAccept={()=>go("slamDunkContest")}
+          onDecline={()=>{
+            // Player passed. No career-score boost; just back to the league.
+            setPlayer(p=>({...p, dunkContestResult:"declined"}));
+            toast&&toast("You skipped the dunk contest.","#888");
+            go("leagueHub");
+          }}
+        />
+      </MenuFrame>
+    ),
+    slamDunkContest:(
+      <MenuFrame sub="Sprite Rising Stars" title="SLAM DUNK">
+        <SlamDunkContestGame onDone={(outcome)=>{
+          // outcome: {result:"won"|"finalsLost"|"eliminated", round1Score, finalsTotal}
+          // Persist result for career-score calc + toast a flavor line.
+          setPlayer(p=>({
+            ...p,
+            dunkContestResult: outcome.result,
+            dunkContestScore: outcome.finalsTotal || outcome.round1Score || 0,
+          }));
+          if(outcome.result === "won"){
+            toast&&toast(`🏆 DUNK CHAMPION! Score ${outcome.finalsTotal}`, GO);
+          } else if(outcome.result === "finalsLost"){
+            toast&&toast(`Runner-up — ${outcome.finalsTotal} pts`, YE);
+          } else {
+            toast&&toast(`Eliminated in Round 1 (${outcome.round1Score})`, "#888");
+          }
+          go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    soupPrompt:(
+      <MenuFrame sub="Practice Facility · Lunch" title="THE SOUP INCIDENT">
+        <SoupPromptScreen onDone={()=>{
+          // Flag the outcome on the player so career score picks it up. There's
+          // really only ONE outcome to this event (the joke only works one way),
+          // so we just mark it as souped.
+          setPlayer(p=>({...p, soupedDamon:true}));
+          toast&&toast("🍲 SOUPED — Damon Jones never lived it down", OR);
           go("leagueHub");
         }}/>
       </MenuFrame>
