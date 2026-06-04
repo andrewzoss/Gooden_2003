@@ -4312,6 +4312,105 @@ function deleteFromArchive(id){
 // Criteria (per user spec): at least 1 MVP AND HOF-tier stats.
 // "HOF-tier" = any one of: career PPG ≥ 18, total career points ≥ 20,000,
 // total awards ≥ 5, or championships ≥ 2.
+// ─── CAREER SCORE ──────────────────────────────────────────────────────────────
+// A single legacy number that captures everything you accomplished. Used on
+// the live stats screen, on the retirement summary, and as the sort key for
+// past careers so the leaderboard ranking is meaningful at a glance.
+//
+// Scoring philosophy: counting stats matter, but awards/rings dominate. Off-
+// court ventures and event outcomes add a tail of variance so two equally-
+// productive careers can still have different "vibes" reflected in the total.
+//
+// Pure function — no player mutation. Can be called on a live player or on
+// an archived snapshot since both expose the same fields.
+function calcCareerScore(player, nbaSeasons){
+  if(!player) return 0;
+  const seasons = nbaSeasons || [];
+  const awards = player.awards || [];
+  const championships = player.championships || [];
+  const purchases = player.purchases || {};
+  let s = 0;
+
+  // Awards — the big multipliers. MVP and Finals MVP carry the most weight
+  // because they're the hardest individual hardware to win.
+  for(const a of awards){
+    if(a.type === "mvp") s += 1000;
+    else if(a.type === "fmvp") s += 800;
+    else if(a.type === "dpoy") s += 500;
+    else if(a.type === "roy") s += 300;
+    else if(a.type === "as") s += 200; // All-Star selection
+    else s += 100; // unknown / future award types
+  }
+
+  // Championships — each ring is worth a regular-season MVP.
+  s += championships.length * 1000;
+
+  // HOF bonus — only awarded at retirement; on a live player this stays 0.
+  if(player.hof) s += 2000;
+
+  // Seasons played — durability bonus.
+  s += seasons.length * 50;
+
+  // Per-season production (PPG/RPG/APG weighted) + career counting totals.
+  let totalPts = 0, totalReb = 0, totalAst = 0;
+  for(const yr of seasons){
+    s += Math.round((yr.ppg||0)*5 + (yr.rpg||0)*3 + (yr.apg||0)*4);
+    totalPts += (yr.ppg||0)*(yr.gp||0);
+    totalReb += (yr.rpg||0)*(yr.gp||0);
+    totalAst += (yr.apg||0)*(yr.gp||0);
+  }
+  // Counting-stat tail — career totals divided down so they meaningfully
+  // contribute without dwarfing single-season production.
+  s += Math.round(totalPts/100); // 10000 career pts → +100
+  s += Math.round(totalReb/50);
+  s += Math.round(totalAst/50);
+
+  // Draft position — small but real bonus for going high (sets a baseline
+  // expectation that the rest of the score has to live up to).
+  const pick = player.draftPick || 0;
+  if(pick === 1) s += 500;
+  else if(pick >= 2 && pick <= 5) s += 300;
+  else if(pick >= 6 && pick <= 14) s += 150;
+  else if(pick >= 15 && pick <= 30) s += 50;
+  else if(pick >= 31 && pick <= 60) s += 25;
+
+  // Lifestyle — signature shoes, albums, restaurant ventures, foundation.
+  const sigList = Array.isArray(player.shoeSignatures)
+    ? player.shoeSignatures
+    : (player.shoeSignature ? [player.shoeSignature] : []);
+  s += sigList.length * 200;
+
+  const albums = purchases.albums || [];
+  for(const a of albums){
+    if(a.status === "classic") s += 500;
+    else if(a.status === "hit") s += 300;
+    else if(a.status === "mid") s += 100;
+    else if(a.status === "flop") s += 25; // still a release
+  }
+
+  const restaurants = purchases.restaurants || [];
+  for(const r of restaurants){
+    if(r.type === "invested") s += 75;
+    else s += 100 + (r.locations||1) * 20; // own-chain scales with empire
+  }
+
+  if(purchases.foundation) s += 250;
+
+  // Midseason events — small but flavorful. Brawl with Artest: stepping into
+  // the cage at all earns something; actually winning earns more.
+  const fired = player.midseasonEvents || [];
+  if(fired.includes("artest_fight_2004")){
+    s += player.artestFightWon ? 150 : 50;
+  }
+
+  return s;
+}
+
+// Format career score with thousands separator + caveat for very-new careers.
+function fmtCareerScore(n){
+  return (n||0).toLocaleString();
+}
+
 function evaluateHOF(player, nbaSeasons){
   const seasons=nbaSeasons||[];
   const awards=player?.awards||[];
@@ -4919,31 +5018,39 @@ function ArtestPromptScreen({onAccept}){
 }
 
 // Punch-Out style fight. Ron oscillates left/right between phases:
-//   idle (0.9-1.5s random) → winding (0.8s) → attacking (0.3s dodge window)
-//     ↓ dodged                              ↓ not dodged
-//   stunned (0.75s — bonus damage window)  you take ~20 dmg
+//   idle (0.55-0.95s random) → winding (0.7s) → attacking (0.25s dodge window)
+//     ↓ dodged                                ↓ not dodged
+//   stunned (0.7s — bonus damage window)     you take ~20 dmg
 //
-// Tuned tighter than the prototype — windups come faster, dodge window is
-// short enough that you can't reactively tap; you have to read the winding
-// telegraph and pre-load. Combo threshold raised to 4 hits so you actually
-// have to earn it.
+// Phases tightened further on the second pass — Ron throws a punch roughly
+// every 1.5s now. Reading the winding telegraph is mandatory; reaction time
+// alone won't save you on the 250ms dodge window.
 //
 // Player taps PUNCH any time:
 //   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 4
 //   · winding: 2 dmg (glancing, combo unchanged)
-//   · attacking: 2 dmg AND you eat a counter — combo resets
+//   · attacking: 2 dmg AND you eat a 10 dmg counter — combo resets
 //   · stunned: 15 dmg counter punch (combo+1)
-// Each punch also animates a fist flying up from below so you can SEE the
-// punch land — feedback matters when timing is tight.
-function ArtestFightGame({onResult}){
+// Each punch animates a fist flying up from below so you can SEE the punch
+// land — feedback matters when timing is tight.
+//
+// After either HP hits 0, an overlay covers the arena with "SUSPENDED 5 GAMES"
+// (no win/lose announcement) + REMATCH + WE'RE DONE HERE. Rematches keep the
+// best result across attempts; the outer onDone receives "won"/"lost" once.
+function ArtestFightGame({onDone}){
+  // gameId increments on rematch — useEffects keyed on it restart the loop.
+  const [gameId, setGameId] = useState(0);
   const [artestHp, setArtestHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
   const [phase, setPhase] = useState("idle"); // idle | winding | attacking | stunned | done
   const [combo, setCombo] = useState(0);
-  const [hitFlash, setHitFlash] = useState(null); // "artest" | "player" | null
-  const [floatText, setFloatText] = useState([]); // {id, text, color, x, y}
-  const [fists, setFists] = useState([]); // {id, side: "L"|"R"}
+  const [hitFlash, setHitFlash] = useState(null);
+  const [floatText, setFloatText] = useState([]);
+  const [fists, setFists] = useState([]);
   const [bobX, setBobX] = useState(0);
+  // Result this attempt + best across rematches. Once you've won, score sticks.
+  const [thisResult, setThisResult] = useState(null); // null | "won" | "lost"
+  const [bestResult, setBestResult] = useState(null); // null | "won" | "lost"
   const phaseRef = useRef("idle");
   const timerRef = useRef();
   const bobRef = useRef();
@@ -4952,14 +5059,12 @@ function ArtestFightGame({onResult}){
   const fistIdRef = useRef(0);
   const fistSideRef = useRef("R");
 
-  // Push a transient damage indicator onto the screen
   const pushFloat = (text, color, x=50, y=40) => {
     const id = ++floatIdRef.current;
     setFloatText(arr => [...arr, {id, text, color, x, y}]);
     setTimeout(()=> setFloatText(arr => arr.filter(f => f.id !== id)), 800);
   };
 
-  // Push a fist visual when player punches. Alternates left/right hand each tap.
   const pushFist = () => {
     const id = ++fistIdRef.current;
     const side = fistSideRef.current;
@@ -4968,20 +5073,27 @@ function ArtestFightGame({onResult}){
     setTimeout(()=> setFists(arr => arr.filter(f => f.id !== id)), 320);
   };
 
-  // Sync ref with state so timeout callbacks see the current phase
   useEffect(()=>{ phaseRef.current = phase; },[phase]);
 
-  // Drive Ron's phase cycle on a self-rescheduling chain. Tightened timings
-  // from the prototype so the player has to read windups, not just react.
+  // Main phase loop — keyed on gameId so rematches restart cleanly.
   useEffect(()=>{
-    if(finishedRef.current) return;
+    finishedRef.current = false;
+
+    const finish = (won) => {
+      if(finishedRef.current) return;
+      finishedRef.current = true;
+      setPhase("done");
+      setThisResult(won ? "won" : "lost");
+      // Best stays "won" once won — a follow-up loss can't downgrade it.
+      setBestResult(prev => prev === "won" ? "won" : (won ? "won" : "lost"));
+    };
 
     const advance = () => {
       if(finishedRef.current) return;
       const cur = phaseRef.current;
       if(cur === "idle"){
-        // Random pause between 0.9s and 1.5s before winding up (was 1.4-2.2s)
-        const wait = 900 + Math.random()*600;
+        // Random pause 0.55-0.95s before winding up (was 0.9-1.5s)
+        const wait = 550 + Math.random()*400;
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           setPhase("winding");
@@ -4992,21 +5104,15 @@ function ArtestFightGame({onResult}){
           if(finishedRef.current) return;
           setPhase("attacking");
           advance();
-        }, 800);
+        }, 700);
       } else if(cur === "attacking"){
-        // 300ms dodge window — sharper than reaction time, so you have to
-        // pre-load the dodge from the winding telegraph.
+        // 250ms dodge window (was 300)
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           if(phaseRef.current === "attacking"){
-            // Player missed the dodge — eat damage
             setPlayerHp(hp => {
               const next = Math.max(0, hp - 20);
-              if(next === 0){
-                finishedRef.current = true;
-                setPhase("done");
-                setTimeout(()=>onResult&&onResult({won:false, playerHp:0, artestHp}), 600);
-              }
+              if(next === 0) finish(false);
               return next;
             });
             setHitFlash("player");
@@ -5016,32 +5122,30 @@ function ArtestFightGame({onResult}){
             setPhase("idle");
             advance();
           }
-        }, 300);
+        }, 250);
       } else if(cur === "stunned"){
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           setPhase("idle");
           advance();
-        }, 750);
+        }, 700);
       }
     };
 
     advance();
     return ()=> { if(timerRef.current) clearTimeout(timerRef.current); };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[]);
+  },[gameId]);
 
-  // Idle/winding bob animation — gentle side-to-side. During winding the
-  // bobbing speeds up to telegraph the incoming attack.
+  // Bob animation also keyed on gameId so it restarts cleanly on rematch.
   useEffect(()=>{
-    if(finishedRef.current) return;
     let t = 0;
     const tick = () => {
-      if(finishedRef.current) return;
+      if(finishedRef.current) { setBobX(0); return; }
       t += 1;
       const cur = phaseRef.current;
       let amp = 8, speed = 0.04;
-      if(cur === "winding"){ amp = 4; speed = 0.18; }
+      if(cur === "winding"){ amp = 4; speed = 0.20; }
       else if(cur === "attacking"){ amp = 0; }
       else if(cur === "stunned"){ amp = 16; speed = 0.20; }
       setBobX(Math.sin(t*speed)*amp);
@@ -5049,11 +5153,11 @@ function ArtestFightGame({onResult}){
     };
     bobRef.current = requestAnimationFrame(tick);
     return ()=> { if(bobRef.current) cancelAnimationFrame(bobRef.current); };
-  },[]);
+  },[gameId]);
 
   const handlePunch = () => {
     if(finishedRef.current) return;
-    pushFist(); // always show the fist swing, even on a glancing blow
+    pushFist();
     const cur = phaseRef.current;
     let dmg = 0;
     let comboBump = false;
@@ -5061,16 +5165,16 @@ function ArtestFightGame({onResult}){
       dmg = combo >= 4 ? 8 : 5;
       comboBump = true;
     } else if(cur === "winding"){
-      dmg = 2; // glances off his guard
+      dmg = 2;
     } else if(cur === "attacking"){
-      // Bad timing — you punch into his fist. Small chip + counter.
       dmg = 2;
       setPlayerHp(hp => {
         const next = Math.max(0, hp - 10);
         if(next === 0){
           finishedRef.current = true;
           setPhase("done");
-          setTimeout(()=>onResult&&onResult({won:false, playerHp:0, artestHp}), 600);
+          setThisResult("lost");
+          setBestResult(prev => prev === "won" ? "won" : "lost");
         }
         return next;
       });
@@ -5088,7 +5192,8 @@ function ArtestFightGame({onResult}){
         if(next === 0){
           finishedRef.current = true;
           setPhase("done");
-          setTimeout(()=>onResult&&onResult({won:true, playerHp, artestHp:0}), 600);
+          setThisResult("won");
+          setBestResult("won");
         }
         return next;
       });
@@ -5103,50 +5208,67 @@ function ArtestFightGame({onResult}){
     if(finishedRef.current) return;
     const cur = phaseRef.current;
     if(cur === "attacking"){
-      // Successful dodge — Ron is exposed for 0.75s
       if(timerRef.current) clearTimeout(timerRef.current);
       setPhase("stunned");
       pushFloat("DODGED!", BL, 25, 40);
-      // restart advance loop
-      const restart = () => {
+      // Resume normal cycle after stunned window expires.
+      const idleLoop = () => {
         if(finishedRef.current) return;
-        if(phaseRef.current === "stunned"){
+        if(phaseRef.current === "idle"){
+          const wait = 550 + Math.random()*400;
           timerRef.current = setTimeout(()=>{
             if(finishedRef.current) return;
-            setPhase("idle");
-            // continue normal cycle
-            const idleNext = () => {
+            setPhase("winding");
+            timerRef.current = setTimeout(()=>{
               if(finishedRef.current) return;
-              if(phaseRef.current === "idle"){
-                const wait = 900 + Math.random()*600;
-                timerRef.current = setTimeout(()=>{
-                  if(finishedRef.current) return;
-                  setPhase("winding");
-                  timerRef.current = setTimeout(()=>{
-                    if(finishedRef.current) return;
-                    setPhase("attacking");
-                    timerRef.current = setTimeout(()=>{
-                      if(finishedRef.current) return;
-                      if(phaseRef.current === "attacking"){
-                        setPlayerHp(hp => Math.max(0, hp - 20));
-                        setHitFlash("player");
-                        setTimeout(()=>setHitFlash(null), 200);
-                        setCombo(0);
-                        pushFloat("-20", RE, 75, 55);
-                        setPhase("idle");
-                        idleNext();
-                      }
-                    }, 300);
-                  }, 800);
-                }, wait);
-              }
-            };
-            idleNext();
-          }, 750);
+              setPhase("attacking");
+              timerRef.current = setTimeout(()=>{
+                if(finishedRef.current) return;
+                if(phaseRef.current === "attacking"){
+                  setPlayerHp(hp => {
+                    const next = Math.max(0, hp - 20);
+                    if(next === 0){
+                      finishedRef.current = true;
+                      setPhase("done");
+                      setThisResult("lost");
+                      setBestResult(prev => prev === "won" ? "won" : "lost");
+                    }
+                    return next;
+                  });
+                  setHitFlash("player");
+                  setTimeout(()=>setHitFlash(null), 200);
+                  setCombo(0);
+                  pushFloat("-20", RE, 75, 55);
+                  setPhase("idle");
+                  idleLoop();
+                }
+              }, 250);
+            }, 700);
+          }, wait);
         }
       };
-      restart();
+      timerRef.current = setTimeout(()=>{
+        if(finishedRef.current) return;
+        setPhase("idle");
+        idleLoop();
+      }, 700);
     }
+  };
+
+  const handleRematch = () => {
+    setArtestHp(100);
+    setPlayerHp(100);
+    setPhase("idle");
+    setCombo(0);
+    setThisResult(null);
+    setHitFlash(null);
+    setFloatText([]);
+    setFists([]);
+    setGameId(g => g + 1);
+  };
+
+  const handleDoneClick = () => {
+    onDone && onDone(bestResult || "lost");
   };
 
   // Visual state derived from phase
@@ -5246,6 +5368,26 @@ function ArtestFightGame({onResult}){
         {phase==="attacking" && (
           <div style={{position:"absolute",left:"50%",top:"20%",transform:"translateX(-50%)",fontSize:13,fontWeight:900,color:RE,letterSpacing:2,padding:"4px 10px",background:"rgba(0,0,0,0.6)",borderRadius:5,border:`1px solid ${RE}`,animation:"pulse 0.3s infinite alternate"}}>
             DODGE NOW!
+          </div>
+        )}
+
+        {/* Post-fight overlay — suspended notice + REMATCH / WE'RE DONE HERE.
+            Deliberately doesn't say who won. Rematches preserve the best
+            result so a comeback win still counts. */}
+        {thisResult && (
+          <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,0.82)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:16,padding:20,backdropFilter:"blur(2px)"}}>
+            <div style={{fontSize:14,letterSpacing:4,color:"#888",fontWeight:700}}>STERN HAS SPOKEN</div>
+            <div style={{fontSize:26,letterSpacing:2,color:RE,fontWeight:900,textAlign:"center",lineHeight:1.1,textShadow:"0 2px 10px rgba(220,38,38,0.5)"}}>
+              📋 SUSPENDED<br/>5 GAMES
+            </div>
+            <div style={{display:"flex",flexDirection:"column",gap:8,width:"100%",maxWidth:240,marginTop:12}}>
+              <button onPointerDown={handleRematch} style={{padding:"13px 16px",background:OR,border:"none",borderRadius:10,color:"#080c10",fontWeight:900,letterSpacing:2,fontSize:13,fontFamily:"'Barlow Condensed',sans-serif",cursor:"pointer",userSelect:"none"}}>
+                🥊 REMATCH
+              </button>
+              <button onPointerDown={handleDoneClick} style={{padding:"13px 16px",background:"transparent",border:"1px solid rgba(255,255,255,0.25)",borderRadius:10,color:"#ddd",fontWeight:700,letterSpacing:2,fontSize:12,fontFamily:"'Barlow Condensed',sans-serif",cursor:"pointer",userSelect:"none"}}>
+                WE'RE DONE HERE →
+              </button>
+            </div>
           </div>
         )}
       </div>
@@ -8848,6 +8990,17 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
             <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>MVPs</div><div style={{fontSize:18,fontWeight:900,color:GO}}>{hofEval.mvps}</div></div>
             <div><div style={{fontSize:9,color:"#666",letterSpacing:1,fontWeight:700}}>RINGS</div><div style={{fontSize:18,fontWeight:900,color:GO}}>{hofEval.titleCount}</div></div>
           </div>
+          {/* Career score — projected with HOF status baked in so the final
+              number matches what the archive will record. */}
+          <div style={{marginTop:12,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+            <div>
+              <div style={{fontSize:9,color:OR,letterSpacing:2,fontWeight:700}}>CAREER SCORE</div>
+              <div style={{fontSize:9,color:"#666",marginTop:2}}>Includes a +2,000 HOF bonus if inducted</div>
+            </div>
+            <div style={{fontSize:24,fontWeight:900,color:OR,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              {fmtCareerScore(calcCareerScore({...player, hof:hofEval.inducted}, nbaSeasons))}
+            </div>
+          </div>
         </div>
         <button onClick={()=>setStage("ceremony")} style={{...btnS,width:"100%",padding:13,fontSize:14,marginBottom:8}}>
           PROCEED TO CEREMONY →
@@ -8898,6 +9051,10 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
       purchases:player.purchases,
       // Final team
       finalTeam:nbaTeam,
+      // Career Score — pre-computed at archive time so PastCareers can sort by
+      // it without re-running calcCareerScore on every render. Computed with
+      // the live `hof` flag baked into the player snapshot above.
+      careerScore:calcCareerScore({...player, hof:hofEval.inducted}, nbaSeasons),
     };
     archiveAndExit(snapshot);
   };
@@ -9027,6 +9184,16 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
 function PastCareersScreen({entries, openCareer, deleteCareer, go}){
   // ID of the career awaiting delete confirmation. Null = no modal.
   const [confirmDelete,setConfirmDelete]=useState(null);
+  // Sort by career score descending — the best legacy floats to the top.
+  // Pre-2025 archives that didn't store careerScore fall back to a live calc
+  // off their snapshot so they still rank correctly without re-archiving.
+  const sortedEntries=useMemo(()=>{
+    const withScore=(entries||[]).map(e=>{
+      const score = (typeof e.careerScore==="number") ? e.careerScore : calcCareerScore(e, e.nbaSeasons||[]);
+      return {...e, careerScore:score};
+    });
+    return withScore.sort((a,b)=>(b.careerScore||0)-(a.careerScore||0));
+  },[entries]);
   return(
     <div>
       <button onClick={()=>go("title")} style={{...ghostS,marginBottom:12,width:"auto",padding:"6px 12px",fontSize:11,letterSpacing:1}}>← Back to Home</button>
@@ -9034,16 +9201,16 @@ function PastCareersScreen({entries, openCareer, deleteCareer, go}){
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4,textTransform:"uppercase"}}>Archive</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>PAST CAREERS</div>
         <div style={{fontSize:11,color:"#aaa",marginTop:4}}>
-          {entries.length===0?"No retired players yet":`${entries.length} career${entries.length===1?"":"s"} on file`}
+          {sortedEntries.length===0?"No retired players yet":`${sortedEntries.length} career${sortedEntries.length===1?"":"s"} on file · sorted by Career Score`}
         </div>
       </div>
-      {entries.length===0?(
+      {sortedEntries.length===0?(
         <div style={{background:"rgba(255,255,255,0.03)",border:"1px solid rgba(255,255,255,0.06)",borderRadius:12,padding:20,textAlign:"center",fontSize:12,color:"#888",lineHeight:1.6}}>
-          Finish a career and retire from the NBA to start your archive. Hall of Fame inductees show up first.
+          Finish a career and retire from the NBA to start your archive. Highest Career Score shows up first.
         </div>
       ):(
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {entries.map(entry=>{
+          {sortedEntries.map((entry,rank)=>{
             const retireTeam=entry.retirementTeam||entry.hofJerseyTeam||entry.finalTeam;
             const td=retireTeam?NBA_TEAM_DATA[retireTeam]||{p:"#444",s:"#888",abbr:"???"}:null;
             return(
@@ -9053,6 +9220,10 @@ function PastCareersScreen({entries, openCareer, deleteCareer, go}){
             <div key={entry.id} style={{display:"flex",alignItems:"stretch",background:entry.hof?`linear-gradient(135deg, ${GO}22 0%, rgba(0,0,0,0.4) 100%)`:"rgba(255,255,255,0.04)",border:`1.5px solid ${entry.hof?GO+"66":"rgba(255,255,255,0.08)"}`,borderRadius:10,overflow:"hidden",fontFamily:"'Barlow Condensed',sans-serif"}}>
               <button onClick={()=>openCareer(entry.id)} style={{flex:1,display:"block",textAlign:"left",padding:"12px 14px",background:"transparent",border:"none",color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif",minWidth:0}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  {/* Rank badge — top 3 get a medal, others get #N */}
+                  <div style={{width:28,textAlign:"center",fontSize:rank<3?20:13,fontWeight:900,color:rank<3?"#fff":"#888",flexShrink:0}}>
+                    {rank===0?"🥇":rank===1?"🥈":rank===2?"🥉":`#${rank+1}`}
+                  </div>
                   {/* Player face primary avatar with a small team logo badge
                       in the bottom-right corner. HOF inductees get a gold rim
                       around the face circle to signal status. */}
@@ -9076,7 +9247,11 @@ function PastCareersScreen({entries, openCareer, deleteCareer, go}){
                       {entry.position} · {entry.careerPpg} PPG · {entry.awards?.length||0} awards · {entry.championships?.length||0} rings
                     </div>
                   </div>
-                  <div style={{fontSize:18,color:"#888"}}>›</div>
+                  {/* Career score on the right — primary sort metric */}
+                  <div style={{textAlign:"right",flexShrink:0,paddingRight:4}}>
+                    <div style={{fontSize:15,fontWeight:900,color:OR,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1}}>{fmtCareerScore(entry.careerScore)}</div>
+                    <div style={{fontSize:8,color:"#666",letterSpacing:1.5,marginTop:2}}>SCORE</div>
+                  </div>
                 </div>
               </button>
               {/* Delete trash button — opens the confirm modal. Subtle so it
@@ -9095,7 +9270,7 @@ function PastCareersScreen({entries, openCareer, deleteCareer, go}){
           player actually wants to do it. Wipes the entry from localStorage
           and updates the live archive state via the deleteCareer prop. */}
       {confirmDelete&&(()=>{
-        const entry=entries.find(e=>e.id===confirmDelete);
+        const entry=sortedEntries.find(e=>e.id===confirmDelete);
         if(!entry){setConfirmDelete(null);return null;}
         return(
           <div onClick={()=>setConfirmDelete(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,display:"flex",alignItems:"center",justifyContent:"center",padding:18}}>
@@ -9154,6 +9329,21 @@ function PastCareerStatsScreen({entry, go}){
           {entry.position} · Retired age {entry.age} · {entry.seasonsPlayed} seasons
         </div>
       </div>
+
+      {/* Career Score — pulled from the snapshot. Older archives that didn't
+          store this field get a live recompute fallback. */}
+      {(()=>{
+        const cs = (typeof entry.careerScore==="number") ? entry.careerScore : calcCareerScore(entry, entry.nbaSeasons||[]);
+        return(
+          <div style={{background:`linear-gradient(135deg, ${OR}22, rgba(255,255,255,0.02))`,border:`1px solid ${OR}55`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase"}}>Career Score</div>
+              <div style={{fontSize:10,color:"#888",marginTop:1}}>Final legacy rating</div>
+            </div>
+            <div style={{fontSize:28,fontWeight:900,color:OR,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1}}>{fmtCareerScore(cs)}</div>
+          </div>
+        );
+      })()}
 
       {/* HOF badge if inducted — now includes team logo bubble */}
       {entry.hof&&(()=>{
@@ -9710,6 +9900,23 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
           {player.name||"You"} · {player.position||"--"} · Age {age}
         </div>
       </div>
+
+      {/* Career Score — single legacy metric that rolls up everything: awards,
+          rings, stats, draft slot, sig shoes, hit records, foundation, even
+          your scrap with Ron Artest. Builds over time and is what past-careers
+          sorts by. */}
+      {(()=>{
+        const cs=calcCareerScore(player,nbaSeasons);
+        return(
+          <div style={{background:`linear-gradient(135deg, ${OR}22, rgba(255,255,255,0.02))`,border:`1px solid ${OR}55`,borderRadius:10,padding:"10px 14px",marginBottom:14,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+            <div>
+              <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,textTransform:"uppercase"}}>Career Score</div>
+              <div style={{fontSize:10,color:"#888",marginTop:1}}>Awards + stats + lifestyle + legacy</div>
+            </div>
+            <div style={{fontSize:28,fontWeight:900,color:OR,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1}}>{fmtCareerScore(cs)}</div>
+          </div>
+        );
+      })()}
 
       {/* Accolades section — listed once at the top so the player can see
           career totals at a glance. Per-season chips appear on the NBA table
@@ -11769,11 +11976,15 @@ export default function App(){
     ),
     artestFight:(
       <MenuFrame sub="No Refs. No Rules." title="THE BRAWL">
-        <ArtestFightGame onResult={(result)=>{
-          // Fight outcome doesn't matter — Stern suspends both players 5 games
-          // regardless of who won. The 5 games come off the second-half stretch
-          // via player.pendingSuspension, so the final season GP shows 77/82.
-          setPlayer(p=>({...p, pendingSuspension:5}));
+        <ArtestFightGame onDone={(result)=>{
+          // Stern suspends both players 5 games regardless of who won.
+          // Best result across rematches is preserved on player.artestFightWon
+          // for the career-score calc later.
+          setPlayer(p=>({
+            ...p,
+            pendingSuspension:5,
+            artestFightWon: result === "won",
+          }));
           toast&&toast("📋 SUSPENDED 5 GAMES",RE);
           go("leagueHub");
         }}/>
