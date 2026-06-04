@@ -1128,15 +1128,19 @@ function calcOVR(skills, intangibles=[], position=null, height=null) {
 // Pre-combine version: optional combineScore/interviewScore params boost the projection
 // once you've done those. Returns {pick, range, tier, label}.
 function projectDraft({ovr, starTier, school, allYears, combineScore=null, interviewScore=null}){
-  // Base off OVR. Calibrated to actual OVR range: starting ~58-62, peak after 4 years ~65-78.
-  // OVR 75+ → top 5, 70+ → lottery, 66+ → first round mid, 62+ → late 1st, 58+ → early 2nd, 54+ → late 2nd.
+  // Base off OVR. Brackets shifted +3 from the original calibration to
+  // account for the positional-OVR weighting (which added ~4 points of OVR
+  // across the board, since players now get the bonus for matching their
+  // position's strength profile). Without this shift, a same-skill player
+  // was getting drafted ~10 picks earlier than intended.
+  // OVR 79+ → top 5, 75+ → lottery, 71+ → first round mid, 67+ → late 1st, 63+ → early 2nd, 59+ → late 2nd.
   let basePick;
-  if(ovr>=76) basePick=2;
-  else if(ovr>=72) basePick=8;
-  else if(ovr>=68) basePick=16;
-  else if(ovr>=64) basePick=26;
-  else if(ovr>=60) basePick=36;
-  else if(ovr>=56) basePick=48;
+  if(ovr>=79) basePick=2;
+  else if(ovr>=75) basePick=8;
+  else if(ovr>=71) basePick=16;
+  else if(ovr>=67) basePick=26;
+  else if(ovr>=63) basePick=36;
+  else if(ovr>=59) basePick=48;
   else basePick=62; // undrafted-ish
   // Star tier — centered on 3-star (no adjustment). 5-star moves you up 4, 1-star down 4.
   const starAdj=starTier?(3-starTier.stars)*2:0;
@@ -7216,9 +7220,11 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
   ];
   // Two parallel palettes — primary leads with the brand's signature color,
   // accent leads with the classics (white, black) since those are most common
-  // as secondary hits on real shoes.
-  const PRIMARY_COLORS=[brandColor,"#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#000000","#FFFFFF"];
-  const ACCENT_COLORS =["#FFFFFF","#000000","#FA5400","#ef4444","#22c55e","#3b82f6","#a855f7","#eab308","#ec4899","#9ca3af"];
+  // as secondary hits on real shoes. Expanded with teals, grays, and more
+  // tones for variety. A native color wheel picker also sits at the end of
+  // each row for anything outside the preset palettes.
+  const PRIMARY_COLORS=[brandColor,"#FA5400","#ef4444","#dc2626","#f59e0b","#eab308","#84cc16","#22c55e","#10b981","#14b8a6","#06b6d4","#0ea5e9","#3b82f6","#6366f1","#8b5cf6","#a855f7","#d946ef","#ec4899","#f43f5e","#78350f","#000000","#374151","#6b7280","#9ca3af","#d1d5db","#FFFFFF"];
+  const ACCENT_COLORS =["#FFFFFF","#d1d5db","#9ca3af","#6b7280","#374151","#000000","#FA5400","#ef4444","#f59e0b","#eab308","#84cc16","#22c55e","#10b981","#14b8a6","#06b6d4","#0ea5e9","#3b82f6","#8b5cf6","#a855f7","#ec4899","#78350f"];
   const ready=name.trim().length>=2;
 
   const finalize=()=>{
@@ -7289,21 +7295,33 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
         </div>
       </div>
 
-      {/* Colorways — primary (upper) + accent (midsole, swoosh, heel tab) */}
+      {/* Colorways — primary (upper) + accent (midsole, swoosh, heel tab).
+          Each row ends with a 🎨 color-wheel swatch that opens the native
+          color picker so the player can choose ANY color, not just preset
+          swatches. */}
       <div style={{marginBottom:12}}>
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Primary Colorway</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           {PRIMARY_COLORS.map((c,i)=>(
-            <button key={c+i} onClick={()=>setColor(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Primary ${c}`}/>
+            <button key={c+i} onClick={()=>setColor(c)} style={{width:30,height:30,borderRadius:7,background:c,border:`2.5px solid ${color===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Primary ${c}`}/>
           ))}
+          {/* Color wheel — native picker styled as a swatch */}
+          <label style={{position:"relative",width:30,height:30,borderRadius:7,background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",border:`2.5px solid ${PRIMARY_COLORS.includes(color)?"rgba(255,255,255,0.15)":"#fff"}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+            <input type="color" value={color} onChange={e=>setColor(e.target.value)} style={{position:"absolute",inset:0,opacity:0,cursor:"pointer",border:"none"}}/>
+            <span style={{fontSize:11,color:"#fff",textShadow:"0 0 3px rgba(0,0,0,0.7)",pointerEvents:"none",fontWeight:900}}>+</span>
+          </label>
         </div>
       </div>
       <div style={{marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:2,color:"#aaa",fontWeight:700,marginBottom:6,textTransform:"uppercase"}}>Accent Colorway</div>
         <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
           {ACCENT_COLORS.map((c,i)=>(
-            <button key={c+i} onClick={()=>setAccent(c)} style={{width:34,height:34,borderRadius:8,background:c,border:`2.5px solid ${accent===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Accent ${c}`}/>
+            <button key={c+i} onClick={()=>setAccent(c)} style={{width:30,height:30,borderRadius:7,background:c,border:`2.5px solid ${accent===c?"#fff":"rgba(255,255,255,0.15)"}`,cursor:"pointer",padding:0}} aria-label={`Accent ${c}`}/>
           ))}
+          <label style={{position:"relative",width:30,height:30,borderRadius:7,background:"conic-gradient(red,yellow,lime,cyan,blue,magenta,red)",border:`2.5px solid ${ACCENT_COLORS.includes(accent)?"rgba(255,255,255,0.15)":"#fff"}`,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",overflow:"hidden"}}>
+            <input type="color" value={accent} onChange={e=>setAccent(e.target.value)} style={{position:"absolute",inset:0,opacity:0,cursor:"pointer",border:"none"}}/>
+            <span style={{fontSize:11,color:"#fff",textShadow:"0 0 3px rgba(0,0,0,0.7)",pointerEvents:"none",fontWeight:900}}>+</span>
+          </label>
         </div>
       </div>
 
@@ -9881,6 +9899,12 @@ export default function App(){
   // resumed). Also intercepts when the player has an expired contract — they
   // need to handle free agency before going back to the hub.
   const go=(s)=>{
+    // Auto-exit testing mode when returning to the main title screen. Lets
+    // the player tinker in a test scenario, then return to the menu without
+    // having to manually toggle testing off.
+    if(s==="title"&&testingMode){
+      setTestingMode(false);
+    }
     if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.metKerry&&!testingMode){
       setScreen("kerryWelcome");
       return;
