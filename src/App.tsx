@@ -9907,11 +9907,14 @@ export default function App(){
   // resumed). Also intercepts when the player has an expired contract — they
   // need to handle free agency before going back to the hub.
   const go=(s)=>{
-    // Auto-exit testing mode when returning to the main title screen. Lets
-    // the player tinker in a test scenario, then return to the menu without
-    // having to manually toggle testing off.
+    // Auto-exit testing mode when returning to the main title screen. Uses
+    // the full exitTesting() flow rather than just flipping the flag — this
+    // restores the real career (or clears in-memory state) so the auto-save
+    // doesn't see a testing player at a real-career screen and overwrite
+    // the save with Mike's data.
     if(s==="title"&&testingMode){
-      setTestingMode(false);
+      exitTesting();
+      return;
     }
     if(s==="leagueHub"&&nbaTeam&&player&&player.name&&!player.metKerry&&!testingMode){
       setScreen("kerryWelcome");
