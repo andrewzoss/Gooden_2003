@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { getNbaSeasonData } from "./data/nbaRosters";
 
 // ─── SEASON & TIMELINE ────────────────────────────────────────────────────────
@@ -7968,9 +7968,10 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, nbaSeasons, go,
     : (player?.shoeSignature ? [player.shoeSignature] : []);
   // Default name suggestion: PLAYER FIRST NAME + roman numeral based on how
   // many signatures the player has already designed (so the series feels real).
+  // 0 sigs → "Mike I", 1 sig → "Mike II", 2 sigs → "Mike III", etc.
   const firstName=(player?.name||"Mike").split(" ")[0];
-  const nextIdx=Math.min(4,existingSigs.length);
-  const defaultName=existingSigs.length>0?`${firstName} ${["II","III","IV","V","VI"][nextIdx]}`:`${firstName} I`;
+  const ROMANS=["I","II","III","IV","V","VI","VII"];
+  const defaultName=`${firstName} ${ROMANS[Math.min(ROMANS.length-1, existingSigs.length)]}`;
   const [name,setName]=useState(defaultName);
   const [design,setDesign]=useState("lowtop");
   const [color,setColor]=useState(brandColor);
@@ -8032,7 +8033,7 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, nbaSeasons, go,
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:4,textTransform:"uppercase",fontWeight:700}}>★ Signature Shoe</div>
         <div style={{fontSize:24,fontWeight:900,color:"#fff"}}>DESIGN YOUR SHOE</div>
-        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{brandName} wants to make this happen{previousSig?" — refresh your line":""}</div>
+        <div style={{fontSize:11,color:"#aaa",marginTop:4}}>{brandName} wants to make this happen{existingSigs.length>0?" — refresh your line":""}</div>
       </div>
 
       {/* Live preview — proper SVG silhouette renders so changing the design
