@@ -5018,20 +5018,20 @@ function ArtestPromptScreen({onAccept}){
 }
 
 // Punch-Out style fight. Ron oscillates left/right between phases:
-//   idle (0.25-0.6s random) → winding (0.6s) → attacking (0.25s dodge window)
+//   idle (0.25-0.6s random) → winding (0.6s) → attacking (0.35s dodge window)
 //     ↓ dodged                                ↓ not dodged
-//   stunned (0.6s — bonus damage window)     you take ~20 dmg
+//   stunned (0.6s — bonus damage window)     you take 20 dmg
 //
-// Ron's cycle is roughly ~1.1s now. The previous version had a stale-ref bug
-// in the phase loop that effectively doubled his cycle time and got worse as
-// the fight went on (orphan timers compounding). Fixed by passing the next
-// phase explicitly through the scheduler instead of reading from phaseRef.
+// Two ways to dodge: tap during ATTACKING (350ms window) OR tap during the
+// 0.6s WINDING phase to pre-arm. A pre-armed dodge fires automatically the
+// instant Ron's attack starts — natural for players who read windups instead
+// of reacting to red flashes. Tapping during idle/stunned does nothing.
 //
-// Stamina: every PUNCH costs 30 stamina (max 100). Regen 10/sec while not
-// punching. ~3 punches max before you're gassed; ~3s per recharged punch.
-// You can't dump stamina into a stunned-window flurry — you have to budget.
+// Stamina: every PUNCH costs 20. Regen 14/sec. ~4 punches max → ~1.5s per
+// recharged punch. Looser than v1 — you can land a real flurry on a stunned
+// Ron, but you can't mash continuously.
 //
-// Player taps PUNCH any time (stamina permitting):
+// Player taps PUNCH (stamina permitting):
 //   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 4
 //   · winding: 2 dmg (glancing, combo unchanged)
 //   · attacking: 2 dmg AND you eat a 10 dmg counter — combo resets
@@ -5044,13 +5044,13 @@ function ArtestFightGame({onDone}){
   const [gameId, setGameId] = useState(0);
   const [artestHp, setArtestHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
-  // Stamina: 0-100, drains per punch, regenerates over time. Punishing
-  // numbers so you can only sustain ~3 punches before needing to recover —
-  // mashing isn't viable, you have to pick your spots.
+  // Stamina: 0-100, drains per punch, regenerates over time. Tuned for ~4
+  // punches before gassed and ~1.5s per recharged punch — strict enough to
+  // stop mashing but loose enough that you're not constantly stalling.
   const [stamina, setStamina] = useState(100);
   const staminaRef = useRef(100);
-  const STAMINA_COST = 30;
-  const STAMINA_REGEN_PER_SEC = 10;
+  const STAMINA_COST = 20;
+  const STAMINA_REGEN_PER_SEC = 14;
   const [phase, setPhase] = useState("idle"); // idle | winding | attacking | stunned | done
   const [combo, setCombo] = useState(0);
   const [hitFlash, setHitFlash] = useState(null);
@@ -5070,6 +5070,12 @@ function ArtestFightGame({onDone}){
   // Ref-bridge so the dodge handler can call the latest goToPhase closure
   // owned by the active useEffect (it's recreated on rematch via gameId).
   const goToPhaseRef = useRef(null);
+  // Pre-dodge: if player taps DODGE during "winding", arm a flag that auto-
+  // fires the dodge the instant the attack starts. Mirrors how a real fighter
+  // reads the windup and starts evading BEFORE the punch lands. Without this,
+  // the player only has ~250ms to react after the visual flips to "DODGE NOW!",
+  // which feels broken even when timed well.
+  const dodgeArmedRef = useRef(false);
 
   const pushFloat = (text, color, x=50, y=40) => {
     const id = ++floatIdRef.current;
@@ -5112,15 +5118,24 @@ function ArtestFightGame({onDone}){
       if(timerRef.current) clearTimeout(timerRef.current);
       setPhase(next);
       if(next === "idle"){
-        // 0.25-0.6s between punches. Faster than before — combined with the
-        // bug-fixed loop, Ron is now throwing roughly every ~1.1s.
+        // 0.25-0.6s between punches. Clear any leftover dodge intent — each
+        // attack has to be read fresh.
+        dodgeArmedRef.current = false;
         const wait = 250 + Math.random()*350;
         timerRef.current = setTimeout(()=> goToPhase("winding"), wait);
       } else if(next === "winding"){
         timerRef.current = setTimeout(()=> goToPhase("attacking"), 600);
       } else if(next === "attacking"){
-        // 250ms dodge window — if the timer expires while still attacking,
-        // player ate it. Dodge handler interrupts this timer directly.
+        // If the player armed a dodge during the windup, fire it instantly —
+        // a perfect read. Otherwise open the 350ms dodge window.
+        if(dodgeArmedRef.current){
+          dodgeArmedRef.current = false;
+          pushFloat("DODGED!", BL, 25, 40);
+          goToPhase("stunned");
+          return;
+        }
+        // 350ms dodge window — extended from 250 because reacting after the
+        // visual flips to attacking was unfair on mobile tap latency.
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           setPlayerHp(hp => {
@@ -5133,8 +5148,10 @@ function ArtestFightGame({onDone}){
           setCombo(0);
           pushFloat("-20", RE, 75, 55);
           goToPhase("idle");
-        }, 250);
+        }, 350);
       } else if(next === "stunned"){
+        // Bonus damage window — clear armed dodge state.
+        dodgeArmedRef.current = false;
         timerRef.current = setTimeout(()=> goToPhase("idle"), 600);
       }
     };
@@ -5226,28 +5243,40 @@ function ArtestFightGame({onDone}){
 
   const handleDodge = () => {
     if(finishedRef.current) return;
-    if(phaseRef.current === "attacking"){
-      // Interrupt the damage timer and hand control back to the main loop —
-      // it knows how to do stunned → idle → winding → ... cleanly. No more
-      // duplicated cycle logic that drifts out of sync.
+    const cur = phaseRef.current;
+    if(cur === "attacking"){
+      // Direct dodge — interrupt the damage timer and go to stunned.
       pushFloat("DODGED!", BL, 25, 40);
       if(goToPhaseRef.current) goToPhaseRef.current("stunned");
+    } else if(cur === "winding"){
+      // Pre-arm the dodge — fires automatically the moment Ron's punch lands.
+      // This is the natural way to time a block: see the windup, start moving.
+      dodgeArmedRef.current = true;
+      pushFloat("READY", BL, 25, 60);
     }
+    // idle/stunned/done: no-op. Tapping dodge when nothing's coming costs
+    // nothing but also does nothing.
   };
 
   // Stamina regen — fills back at STAMINA_REGEN_PER_SEC, paused when fight
-  // is over. Keyed on gameId so rematches restart cleanly.
+  // is over. Keyed on gameId so rematches restart cleanly. Throttles the
+  // React state update to ~30Hz (every other frame), which is more than
+  // enough for a visual bar and avoids batching weirdness where 60Hz updates
+  // could leave the displayed number out of sync with the bar.
   useEffect(()=>{
-    let raf, last = performance.now();
+    let raf, last = performance.now(), accum = 0;
     const tick = (now) => {
-      if(finishedRef.current){
-        return; // don't reschedule
-      }
+      if(finishedRef.current) return;
       const dt = (now - last) / 1000;
       last = now;
       if(staminaRef.current < 100){
         staminaRef.current = Math.min(100, staminaRef.current + STAMINA_REGEN_PER_SEC * dt);
-        setStamina(staminaRef.current);
+        accum += dt;
+        // Flush to React state at most every ~33ms — number + bar stay in sync.
+        if(accum >= 0.033){
+          accum = 0;
+          setStamina(staminaRef.current);
+        }
       }
       raf = requestAnimationFrame(tick);
     };
@@ -5318,7 +5347,9 @@ function ArtestFightGame({onDone}){
           <div style={{
             width:`${stamina}%`,height:"100%",
             background: stamina>=STAMINA_COST ? `linear-gradient(90deg, ${YE}, ${OR})` : RE,
-            transition:"width 0.15s, background 0.2s",
+            // No width transition — caused the bar to perpetually chase the
+            // number when regen ticks at 30Hz. Direct mapping = no lag.
+            transition:"background 0.2s",
           }}/>
         </div>
       </div>
