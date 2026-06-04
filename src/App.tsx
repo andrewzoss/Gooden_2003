@@ -1144,11 +1144,19 @@ function projectDraft({ovr, starTier, school, allYears, combineScore=null, inter
   else basePick=62; // undrafted-ish
   // Star tier — centered on 3-star (no adjustment). 5-star moves you up 4, 1-star down 4.
   const starAdj=starTier?(3-starTier.stars)*2:0;
-  // Exposure — centered on 60. ±5 swing.
-  const exposureAdj=school?Math.round((60-school.exposure)/12):0;
-  // Performance — centered on 14 PPG. Hot scorer moves up, dud moves down.
-  const avgPpg=allYears.length?allYears.reduce((a,y)=>a+(y.stats?.ppg||0),0)/allYears.length:14;
-  const perfAdj=Math.round((14-avgPpg)*0.7);
+  // Exposure — major-conference programs (Duke ~85, Kentucky ~88) get a big
+  // boost; small-school grinders (VCU ~50, low-D1 ~35) pay a real cost. The
+  // divisor was 12 (±5 swing) which barely moved the needle — now it's 4
+  // (±15 swing), so playing at a small school can drop you a full round.
+  const exposureAdj=school?Math.round((60-school.exposure)/4):0;
+  // Performance — centered on 18 PPG with a 1.5× multiplier (was 14 / 0.7).
+  // 18 PPG was the average for recent #1 picks (Cade 20, Edwards 19, Paolo
+  // 17, Wemby 22). The old centerpoint of 14 with a weak multiplier meant
+  // averaging 12 PPG cost you only 1 pick; now it costs you ~9. A scorer
+  // averaging 22 PPG gets a real ~6-pick boost. This is what makes a
+  // 12-ppg-at-VCU profile slide to the 2nd round even with decent OVR.
+  const avgPpg=allYears.length?allYears.reduce((a,y)=>a+(y.stats?.ppg||0),0)/allYears.length:18;
+  const perfAdj=Math.round((18-avgPpg)*1.5);
   // Combine and interview adjustments (post-pre-draft)
   const combineAdj=combineScore!==null?Math.round((60-combineScore)/7):0;
   const interviewAdj=interviewScore!==null?Math.round((6-interviewScore)*1.0):0;
