@@ -4893,12 +4893,11 @@ function ArtestPromptScreen({onAccept}){
       <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:14,lineHeight:1.2}}>RON ARTEST<br/>WANTS YOUR ASS</div>
 
       <div style={{display:"inline-block",position:"relative",padding:4,background:`linear-gradient(135deg, ${RE}, ${OR})`,borderRadius:"50%",boxShadow:"0 4px 20px rgba(232,58,58,0.4)",marginBottom:14}}>
-        <img src="/artest.webp" alt="Ron Artest" style={{display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"#000"}}/>
+        <img src="/artest.png" alt="Ron Artest" style={{display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"#000"}}/>
       </div>
 
       <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,textAlign:"left",fontSize:13,color:"#ddd",lineHeight:1.5}}>
-        Ah fuck. Some <i>white kid in the front row</i> just threw a cup of water at Ron Artest, and now he's looking at the bench like a man possessed. He spots you. He's pointing at you. He wants to fight your bitch ass.
-        <div style={{marginTop:8,fontSize:11,color:"#888",fontStyle:"italic"}}>Fight and risk suspension?</div>
+        Ah fuck, some white kid threw water at Ron Artest and he wants to fight your bitch ass. Fight and risk suspension?
       </div>
 
       {denied ? (
@@ -4920,17 +4919,22 @@ function ArtestPromptScreen({onAccept}){
 }
 
 // Punch-Out style fight. Ron oscillates left/right between phases:
-//   idle (1.6-2.4s random) → winding (1.0s) → attacking (0.45s dodge window)
+//   idle (0.9-1.5s random) → winding (0.8s) → attacking (0.3s dodge window)
 //     ↓ dodged                              ↓ not dodged
-//   stunned (1.0s — bonus damage window)   you take ~18 dmg
+//   stunned (0.75s — bonus damage window)  you take ~20 dmg
+//
+// Tuned tighter than the prototype — windups come faster, dodge window is
+// short enough that you can't reactively tap; you have to read the winding
+// telegraph and pre-load. Combo threshold raised to 4 hits so you actually
+// have to earn it.
 //
 // Player taps PUNCH any time:
-//   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 3
+//   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 4
 //   · winding: 2 dmg (glancing, combo unchanged)
 //   · attacking: 2 dmg AND you eat a counter — combo resets
 //   · stunned: 15 dmg counter punch (combo+1)
-// Player taps DODGE during attacking → success. Other times: whiff (ignored).
-// First to 0 HP loses. Both HP start at 100.
+// Each punch also animates a fist flying up from below so you can SEE the
+// punch land — feedback matters when timing is tight.
 function ArtestFightGame({onResult}){
   const [artestHp, setArtestHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
@@ -4938,12 +4942,15 @@ function ArtestFightGame({onResult}){
   const [combo, setCombo] = useState(0);
   const [hitFlash, setHitFlash] = useState(null); // "artest" | "player" | null
   const [floatText, setFloatText] = useState([]); // {id, text, color, x, y}
+  const [fists, setFists] = useState([]); // {id, side: "L"|"R"}
   const [bobX, setBobX] = useState(0);
   const phaseRef = useRef("idle");
   const timerRef = useRef();
   const bobRef = useRef();
   const finishedRef = useRef(false);
   const floatIdRef = useRef(0);
+  const fistIdRef = useRef(0);
+  const fistSideRef = useRef("R");
 
   // Push a transient damage indicator onto the screen
   const pushFloat = (text, color, x=50, y=40) => {
@@ -4952,10 +4959,20 @@ function ArtestFightGame({onResult}){
     setTimeout(()=> setFloatText(arr => arr.filter(f => f.id !== id)), 800);
   };
 
+  // Push a fist visual when player punches. Alternates left/right hand each tap.
+  const pushFist = () => {
+    const id = ++fistIdRef.current;
+    const side = fistSideRef.current;
+    fistSideRef.current = side === "R" ? "L" : "R";
+    setFists(arr => [...arr, {id, side}]);
+    setTimeout(()=> setFists(arr => arr.filter(f => f.id !== id)), 320);
+  };
+
   // Sync ref with state so timeout callbacks see the current phase
   useEffect(()=>{ phaseRef.current = phase; },[phase]);
 
-  // Drive Ron's phase cycle on a self-rescheduling chain
+  // Drive Ron's phase cycle on a self-rescheduling chain. Tightened timings
+  // from the prototype so the player has to read windups, not just react.
   useEffect(()=>{
     if(finishedRef.current) return;
 
@@ -4963,8 +4980,8 @@ function ArtestFightGame({onResult}){
       if(finishedRef.current) return;
       const cur = phaseRef.current;
       if(cur === "idle"){
-        // Random pause between 1.4s and 2.2s before winding up
-        const wait = 1400 + Math.random()*800;
+        // Random pause between 0.9s and 1.5s before winding up (was 1.4-2.2s)
+        const wait = 900 + Math.random()*600;
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           setPhase("winding");
@@ -4975,15 +4992,16 @@ function ArtestFightGame({onResult}){
           if(finishedRef.current) return;
           setPhase("attacking");
           advance();
-        }, 1000);
+        }, 800);
       } else if(cur === "attacking"){
-        // 450ms dodge window — if still in attacking after that, player got hit
+        // 300ms dodge window — sharper than reaction time, so you have to
+        // pre-load the dodge from the winding telegraph.
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           if(phaseRef.current === "attacking"){
             // Player missed the dodge — eat damage
             setPlayerHp(hp => {
-              const next = Math.max(0, hp - 18);
+              const next = Math.max(0, hp - 20);
               if(next === 0){
                 finishedRef.current = true;
                 setPhase("done");
@@ -4994,17 +5012,17 @@ function ArtestFightGame({onResult}){
             setHitFlash("player");
             setTimeout(()=>setHitFlash(null), 200);
             setCombo(0);
-            pushFloat("-18", RE, 75, 55);
+            pushFloat("-20", RE, 75, 55);
             setPhase("idle");
             advance();
           }
-        }, 450);
+        }, 300);
       } else if(cur === "stunned"){
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           setPhase("idle");
           advance();
-        }, 1000);
+        }, 750);
       }
     };
 
@@ -5023,7 +5041,7 @@ function ArtestFightGame({onResult}){
       t += 1;
       const cur = phaseRef.current;
       let amp = 8, speed = 0.04;
-      if(cur === "winding"){ amp = 4; speed = 0.15; }
+      if(cur === "winding"){ amp = 4; speed = 0.18; }
       else if(cur === "attacking"){ amp = 0; }
       else if(cur === "stunned"){ amp = 16; speed = 0.20; }
       setBobX(Math.sin(t*speed)*amp);
@@ -5035,11 +5053,12 @@ function ArtestFightGame({onResult}){
 
   const handlePunch = () => {
     if(finishedRef.current) return;
+    pushFist(); // always show the fist swing, even on a glancing blow
     const cur = phaseRef.current;
     let dmg = 0;
     let comboBump = false;
     if(cur === "idle"){
-      dmg = combo >= 3 ? 8 : 5;
+      dmg = combo >= 4 ? 8 : 5;
       comboBump = true;
     } else if(cur === "winding"){
       dmg = 2; // glances off his guard
@@ -5047,7 +5066,7 @@ function ArtestFightGame({onResult}){
       // Bad timing — you punch into his fist. Small chip + counter.
       dmg = 2;
       setPlayerHp(hp => {
-        const next = Math.max(0, hp - 8);
+        const next = Math.max(0, hp - 10);
         if(next === 0){
           finishedRef.current = true;
           setPhase("done");
@@ -5057,7 +5076,7 @@ function ArtestFightGame({onResult}){
       });
       setHitFlash("player");
       setTimeout(()=>setHitFlash(null), 150);
-      pushFloat("-8 counter", RE, 75, 60);
+      pushFloat("-10 counter", RE, 75, 60);
       setCombo(0);
     } else if(cur === "stunned"){
       dmg = 15;
@@ -5075,7 +5094,7 @@ function ArtestFightGame({onResult}){
       });
       setHitFlash("artest");
       setTimeout(()=>setHitFlash(null), 150);
-      pushFloat(`-${dmg}${cur==="stunned"?" CTR!":(combo>=3?" COMBO":"")}`, cur==="stunned"?YE:GR, 50, 30);
+      pushFloat(`-${dmg}${cur==="stunned"?" CTR!":(combo>=4?" COMBO":"")}`, cur==="stunned"?YE:GR, 50, 30);
       if(comboBump) setCombo(c => c+1);
     }
   };
@@ -5084,7 +5103,7 @@ function ArtestFightGame({onResult}){
     if(finishedRef.current) return;
     const cur = phaseRef.current;
     if(cur === "attacking"){
-      // Successful dodge — Ron is exposed for 1 second
+      // Successful dodge — Ron is exposed for 0.75s
       if(timerRef.current) clearTimeout(timerRef.current);
       setPhase("stunned");
       pushFloat("DODGED!", BL, 25, 40);
@@ -5099,7 +5118,7 @@ function ArtestFightGame({onResult}){
             const idleNext = () => {
               if(finishedRef.current) return;
               if(phaseRef.current === "idle"){
-                const wait = 1400 + Math.random()*800;
+                const wait = 900 + Math.random()*600;
                 timerRef.current = setTimeout(()=>{
                   if(finishedRef.current) return;
                   setPhase("winding");
@@ -5109,21 +5128,21 @@ function ArtestFightGame({onResult}){
                     timerRef.current = setTimeout(()=>{
                       if(finishedRef.current) return;
                       if(phaseRef.current === "attacking"){
-                        setPlayerHp(hp => Math.max(0, hp - 18));
+                        setPlayerHp(hp => Math.max(0, hp - 20));
                         setHitFlash("player");
                         setTimeout(()=>setHitFlash(null), 200);
                         setCombo(0);
-                        pushFloat("-18", RE, 75, 55);
+                        pushFloat("-20", RE, 75, 55);
                         setPhase("idle");
                         idleNext();
                       }
-                    }, 450);
-                  }, 1000);
+                    }, 300);
+                  }, 800);
                 }, wait);
               }
             };
             idleNext();
-          }, 1000);
+          }, 750);
         }
       };
       restart();
@@ -5207,6 +5226,22 @@ function ArtestFightGame({onResult}){
           }}>{f.text}</div>
         ))}
 
+        {/* Player fists — each PUNCH tap spawns one that flies up from below
+            and hits the Artest area. Alternates left/right so combos look
+            like a real one-two flurry. */}
+        {fists.map(f=>(
+          <div key={f.id} style={{
+            position:"absolute",
+            bottom:"-30px",
+            left:f.side==="L"?"22%":"68%",
+            fontSize:60,
+            pointerEvents:"none",
+            animation:`punchFly${f.side} 0.30s cubic-bezier(0.34,1.56,0.64,1) forwards`,
+            filter:"drop-shadow(0 3px 6px rgba(0,0,0,0.6))",
+            transform:`scaleX(${f.side==="L"?-1:1})`,
+          }}>👊</div>
+        ))}
+
         {/* Phase indicator overlay */}
         {phase==="attacking" && (
           <div style={{position:"absolute",left:"50%",top:"20%",transform:"translateX(-50%)",fontSize:13,fontWeight:900,color:RE,letterSpacing:2,padding:"4px 10px",background:"rgba(0,0,0,0.6)",borderRadius:5,border:`1px solid ${RE}`,animation:"pulse 0.3s infinite alternate"}}>
@@ -5233,6 +5268,18 @@ function ArtestFightGame({onResult}){
         @keyframes pulse {
           from { opacity: 0.7; }
           to { opacity: 1; }
+        }
+        @keyframes punchFlyL {
+          0%   { transform: scaleX(-1) translateY(0) rotate(-30deg); opacity: 0; }
+          25%  { opacity: 1; }
+          70%  { transform: scaleX(-1) translateY(-180px) rotate(10deg); opacity: 1; }
+          100% { transform: scaleX(-1) translateY(-200px) rotate(20deg); opacity: 0; }
+        }
+        @keyframes punchFlyR {
+          0%   { transform: translateY(0) rotate(30deg); opacity: 0; }
+          25%  { opacity: 1; }
+          70%  { transform: translateY(-180px) rotate(-10deg); opacity: 1; }
+          100% { transform: translateY(-200px) rotate(-20deg); opacity: 0; }
         }
       `}</style>
     </div>
@@ -5521,12 +5568,17 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
   }
 
   // Active game stretch (regular or playoff).
-  const stretchSize=isPlayoffRun?16:41;
+  // pendingSuspension docks games from the second-half stretch (set by the
+  // Artest midseason event). The nbaGamesPlayed counter still advances by 41
+  // so regSeasonDone triggers normally — only the stat-accumulation stretch
+  // is shortened, which is what shows up in the final GP/PPG line.
+  const suspGames=(gp===41 && player?.pendingSuspension)?player.pendingSuspension:0;
+  const stretchSize=isPlayoffRun?16:(41-suspGames);
   return(
     <div>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:isPlayoffRun?YE:OR,marginBottom:4,textTransform:"uppercase"}}>
-          {isPlayoffRun?"🏆 Playoff Run":(gp===0?`${yearLabel} Season — Games 1-41`:`Games 42-82`)}
+          {isPlayoffRun?"🏆 Playoff Run":(gp===0?`${yearLabel} Season — Games 1-41`:suspGames>0?`Games 42-82 (Suspended ${suspGames})`:`Games 42-82`)}
         </div>
         <div style={{fontSize:13,color:"#aaa"}}>
           {isStarter?"STARTER":`Bench · slot ${slot+1}`} · ~{minutes} MPG
@@ -5574,6 +5626,9 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             toast&&toast(`Playoffs done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,YE);
           } else {
             setNbaGamesPlayed(g=>g+41);
+            // Clear the suspension after it's been applied (the shortened
+            // stretchSize already docked stats this run).
+            if(suspGames>0) setPlayer(p=>({...p, pendingSuspension:0}));
             toast&&toast(`Stretch done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,OR);
             // Midseason event check — fires AFTER the first stretch of the
             // 2004-05 season (Nov 2004 = Malice at the Palace). gp is still 0
@@ -11715,13 +11770,11 @@ export default function App(){
     artestFight:(
       <MenuFrame sub="No Refs. No Rules." title="THE BRAWL">
         <ArtestFightGame onResult={(result)=>{
-          if(result.won){
-            toast&&toast("👊 You handled Ron Artest! +1 SP",GR);
-            setSkillPoints&&setSkillPoints(p=>(p||0)+1);
-          } else {
-            toast&&toast("Ron washed you. $25k fine for fighting in the stands.",RE);
-            setMoney&&setMoney(m=>Math.max(0,(m||0)-25000));
-          }
+          // Fight outcome doesn't matter — Stern suspends both players 5 games
+          // regardless of who won. The 5 games come off the second-half stretch
+          // via player.pendingSuspension, so the final season GP shows 77/82.
+          setPlayer(p=>({...p, pendingSuspension:5}));
+          toast&&toast("📋 SUSPENDED 5 GAMES",RE);
           go("leagueHub");
         }}/>
       </MenuFrame>
