@@ -525,6 +525,16 @@ const SHOP_ITEMS = [
     description:"A 14,000 sq ft monstrosity with a marble foyer, indoor pool, six-car garage, home theater, and a fountain shaped like your jersey number. The producers are already on the phone — welcome to MTV Cribs.",
     color:"#a855f7",
   },
+  {
+    // Bryan Johnson Pills — anti-aging cocktail. Pushes the skill-decay
+    // threshold from 30 to 32, giving the player two extra peak years before
+    // the aging curve kicks in. Definitely-not-FDA-approved.
+    id:"bryan_johnson_pills", category:"wellness",
+    name:"Sketchy Bryan Johnson Pills", subtitle:"Don't Die™ Protocol",
+    price:1500000, icon:"💊",
+    description:"A daily cocktail of 47 supplements, plasma swaps, and red-light therapy from that tech weirdo who keeps a Google Doc of his erections. Stops skill decay from kicking in until you turn 32 instead of 30. Probably perfectly safe.",
+    color:"#22c55e",
+  },
 ];
 // Lookup by id — used after purchase to display item details.
 const SHOP_ITEM_BY_ID = Object.fromEntries(SHOP_ITEMS.map(i=>[i.id,i]));
@@ -537,6 +547,10 @@ function ensurePurchases(player){
   // Returns the purchases object, lazily initializing if missing. Migrates
   // legacy single-restaurant / single-album saves into the array format.
   // Each restaurant/album gets a stable `id` so list ops can target them.
+  // IMPORTANT: spreads `raw` first so we preserve fields we don't manage
+  // here (foundation, shoeSignatures, etc.). Previously this function dropped
+  // anything not in {items, restaurants, albums}, which silently DELETED the
+  // player's foundation every time ensurePurchases ran.
   const raw=player.purchases||{};
   let restaurants=Array.isArray(raw.restaurants)?raw.restaurants:[];
   let albums=Array.isArray(raw.albums)?raw.albums:[];
@@ -548,6 +562,7 @@ function ensurePurchases(player){
     albums=[{...raw.album, id:raw.album.id||`a_${Date.now()}_${Math.random().toString(36).slice(2,6)}`}];
   }
   return {
+    ...raw,        // preserves foundation, anything else
     items:raw.items||[],
     restaurants, albums,
   };
@@ -1863,6 +1878,8 @@ function ShotMeterGame({player, difficulty, onResult}){
   const winXRef=useRef(60);
   const winWRef=useRef(60);
   const animRef=useRef(); const t0=useRef(); const BAR=260;
+  // Guard against double-fires (see StealAndDunkGame for details).
+  const submittedRef=useRef(false);
 
   const pick=(act)=>{
     const sv=player.skills[act.skill]||50;
@@ -1904,6 +1921,8 @@ function ShotMeterGame({player, difficulty, onResult}){
     setPhase("res");
     setTimeout(()=>{
       if(newLog.length>=TOTAL_SHOTS){
+        if(submittedRef.current) return;
+        submittedRef.current=true;
         const total=newLog.reduce((a,b)=>a+b.pts,0);
         const madeCt=newLog.filter(x=>x.made).length;
         // Average it back into the 0-3 scoring scale the orchestrator expects
@@ -1979,6 +1998,8 @@ function DefenseGame({player, difficulty, onResult}){
   const [score,setScore]=useState(0);
   const [success,setSuccess]=useState(false);
   const frameRef=useRef(); const lastRef=useRef();
+  // Guard against double-fires (see StealAndDunkGame for details).
+  const submittedRef=useRef(false);
   const DURATION=Math.round(4500/difficulty); // harder = longer hold time
   const TOLERANCE=22; // a touch more forgiving
 
@@ -2043,6 +2064,8 @@ function DefenseGame({player, difficulty, onResult}){
 
   useEffect(()=>{
     if(phase==="done"){
+      if(submittedRef.current) return;
+      submittedRef.current=true;
       const pts=success?3:score>50?1:0;
       setTimeout(()=>onResult({type:"defense",made:success||score>50,pts}),800);
     }
@@ -2103,6 +2126,11 @@ function StealAndDunkGame({player, difficulty, onResult}){
   const [result,setResult]=useState(null);
   const [stealWindow,setStealWindow]=useState({x:0,w:30});
   const animRef=useRef(); const t0=useRef();
+  // submittedRef guards against double-fires of onResult. Without this, a
+  // rapid double-tap on the action button could queue two setTimeout(onResult)
+  // calls — both would fire 800ms later and each would append a result, which
+  // pushes results.length past MINI_GAMES.length and SKIPS the next game.
+  const submittedRef=useRef(false);
   const TAP_TARGET=Math.max(5,Math.round(5*difficulty));
   // Pass speed and steal-window width — both eased from prior values. The
   // previous tuning (290 base, 30/difficulty width) made 5-star prospects
@@ -2139,10 +2167,11 @@ function StealAndDunkGame({player, difficulty, onResult}){
 
   const swipe=()=>{
     if(phase!=="steal") return;
+    if(submittedRef.current) return;
     cancelAnimationFrame(animRef.current);
     const hit=passX>=stealWindow.x&&passX<=(stealWindow.x+stealWindow.w);
     if(hit){setPhase("sprint");setTaps(0);}
-    else{setResult({made:false,pts:0});setPhase("done");setTimeout(()=>onResult({type:"steal",made:false,pts:0}),800);}
+    else{submittedRef.current=true;setResult({made:false,pts:0});setPhase("done");setTimeout(()=>onResult({type:"steal",made:false,pts:0}),800);}
   };
 
   const tap=()=>{
@@ -2164,6 +2193,8 @@ function StealAndDunkGame({player, difficulty, onResult}){
 
   const holdDunk=()=>{
     if(phase!=="dunk") return;
+    if(submittedRef.current) return;
+    submittedRef.current=true;
     cancelAnimationFrame(animRef.current);
     // Dunk sweet spot tightens with difficulty so 5-star prospects need
     // sharper timing, but kept generous enough to be fair: 3-star gets a
@@ -2235,6 +2266,8 @@ function PassingGame({player, difficulty, onResult}){
   const [chosen,setChosen]=useState(null);
   const [timeLeft,setTimeLeft]=useState(0);
   const timerRef=useRef();
+  // Guard against double-fires (see StealAndDunkGame for details).
+  const submittedRef=useRef(false);
   const DECISION_TIME=Math.round(3000/difficulty);
 
   const startPlay=()=>{
@@ -2243,13 +2276,15 @@ function PassingGame({player, difficulty, onResult}){
     setPhase("decide");
     timerRef.current=setInterval(()=>{
       setTimeLeft(t=>{
-        if(t<=100){clearInterval(timerRef.current);setPhase("done");setTimeout(()=>onResult({type:"pass",made:false,pts:0}),600);return 0;}
+        if(t<=100){clearInterval(timerRef.current);if(submittedRef.current)return 0;submittedRef.current=true;setPhase("done");setTimeout(()=>onResult({type:"pass",made:false,pts:0}),600);return 0;}
         return t-100;
       });
     },100);
   };
 
   const choose=(id)=>{
+    if(submittedRef.current) return;
+    submittedRef.current=true;
     clearInterval(timerRef.current);
     setChosen(id);
     const correct=id===open;
@@ -2327,6 +2362,8 @@ function OffensivePossessionGame({player, difficulty, onResult}){
   const [result,setResult]=useState(null);
   const [passCount,setPassCount]=useState(0);
   const tickRef=useRef(); const meterRef=useRef(); const closeTimerRef=useRef(); const passAnimRef=useRef();
+  // Guard against double-fires (see StealAndDunkGame for details).
+  const submittedRef=useRef(false);
 
   const start=()=>{
     setPhase("play");setHolderId(0);setHolderStatus("covered");
@@ -2347,6 +2384,8 @@ function OffensivePossessionGame({player, difficulty, onResult}){
         const nc=c-dt;
         if(nc<=0){
           cancelAnimationFrame(tickRef.current);
+          if(submittedRef.current) return 0;
+          submittedRef.current=true;
           setResult({made:false,pts:0,reason:"Shot clock violation"});
           setPhase("result");
           setTimeout(()=>onResult({type:"possession",made:false,pts:0}),900);
@@ -2439,6 +2478,8 @@ function OffensivePossessionGame({player, difficulty, onResult}){
 
   const releaseShot=()=>{
     if(phase!=="shooting") return;
+    if(submittedRef.current) return;
+    submittedRef.current=true;
     cancelAnimationFrame(meterRef.current);
     const holder=COURT.find(p=>p.id===holderId);
     const wasOpen=holderStatus==="open";
@@ -2621,9 +2662,18 @@ function SeasonGame({player, school, priorities, year, starTier, allYears=[], on
   const [gameIdx,setGameIdx]=useState(0);
   const [results,setResults]=useState([]);
   const [phase,setPhase]=useState("intro");
+  // Belt-and-suspenders guard: even if a child mini-game double-fires onResult,
+  // we shouldn't accept more than 5 results total or accept multiple results
+  // for the same game index. Each game's submittedRef should prevent double-
+  // fires at the child level, but if anything slips through we lose at most a
+  // duplicate result rather than skipping the next mini-game.
+  const lastSubmittedIdxRef=useRef(-1);
   const allOpts=SKILLS;
 
   const handleResult=(r)=>{
+    // Reject if this game's result has already been recorded
+    if(lastSubmittedIdxRef.current>=gameIdx) return;
+    lastSubmittedIdxRef.current=gameIdx;
     const next=[...results,r];
     setResults(next);
     if(next.length>=MINI_GAMES.length){finalize(next);}
@@ -4480,12 +4530,22 @@ function NbaGameSequence({player, mentor, minutes, onComplete}){
     setTimeout(()=>onComplete&&onComplete({totalPts,made,details:all}),0);
   };
 
+  // Tracks the index of the most recently accepted result, so double-fires
+  // from a single mini-game can't sneak through (e.g., user double-taps a
+  // submit button faster than React commits the phase state).
+  const lastAcceptedIdxRef=useRef(-1);
+
   const handleResult=(r)=>{
     if(completedRef.current) return; // already finalized — ignore late fires
     setResults(prev=>{
       // Don't add more results once we've hit the cap — guards against
       // double-fire bugs (event bubbling, late setTimeout, strict mode).
       if(prev.length>=MINI_GAMES.length) return prev;
+      // Reject duplicate result for the same game (current game = prev.length).
+      // Without this, a double-tap could append two results before either
+      // setState commits, jumping us past the next mini-game.
+      if(lastAcceptedIdxRef.current>=prev.length) return prev;
+      lastAcceptedIdxRef.current=prev.length;
       const next=[...prev,r];
       if(next.length>=MINI_GAMES.length){
         finalize(next);
@@ -4810,8 +4870,625 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   );
 }
 
+// ─── MIDSEASON EVENT: ARTEST FIGHT (2004) ─────────────────────────────────────
+// "Malice at the Palace" callback — fires once after the first 41-game stretch
+// of the 2004-05 NBA season. A water cup gets thrown, Ron wants to fight you.
+// Whether you say yes or try to refuse, the fight happens. Win or lose, the
+// event is tracked on player.midseasonEvents so it only fires once per career.
+const ARTEST_EVENT_ID = "artest_fight_2004";
+
+// Prompt screen — shows context, two choices, image of Ron. "Hell no" still
+// routes to the fight (with a brief "you can't say no to Ron Artest" beat).
+function ArtestPromptScreen({onAccept}){
+  const [denied, setDenied] = useState(false);
+
+  const handleNo = () => {
+    setDenied(true);
+    setTimeout(()=>onAccept(), 1800);
+  };
+
+  return(
+    <div style={{textAlign:"center",padding:"4px 0 20px"}}>
+      <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>⚠️ MIDSEASON INCIDENT</div>
+      <div style={{fontSize:22,fontWeight:900,color:"#fff",marginBottom:14,lineHeight:1.2}}>RON ARTEST<br/>WANTS YOUR ASS</div>
+
+      <div style={{display:"inline-block",position:"relative",padding:4,background:`linear-gradient(135deg, ${RE}, ${OR})`,borderRadius:"50%",boxShadow:"0 4px 20px rgba(232,58,58,0.4)",marginBottom:14}}>
+        <img src="/artest.webp" alt="Ron Artest" style={{display:"block",width:200,height:200,objectFit:"cover",objectPosition:"center top",borderRadius:"50%",background:"#000"}}/>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,textAlign:"left",fontSize:13,color:"#ddd",lineHeight:1.5}}>
+        Ah fuck. Some <i>white kid in the front row</i> just threw a cup of water at Ron Artest, and now he's looking at the bench like a man possessed. He spots you. He's pointing at you. He wants to fight your bitch ass.
+        <div style={{marginTop:8,fontSize:11,color:"#888",fontStyle:"italic"}}>Fight and risk suspension?</div>
+      </div>
+
+      {denied ? (
+        <div style={{padding:"14px 12px",background:`${RE}22`,border:`1px solid ${RE}55`,borderRadius:10,fontSize:13,fontWeight:700,color:RE,marginBottom:14}}>
+          Too bad, you can't say no to Ron Artest lol
+        </div>
+      ) : (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={onAccept} style={{...btnS,padding:"14px 20px",fontSize:14,background:RE}}>
+            👊 LET'S DO IT
+          </button>
+          <button onClick={handleNo} style={{...ghostS,padding:"14px 20px",fontSize:13}}>
+            😬 Hell no, Ron's crazy!
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Punch-Out style fight. Ron oscillates left/right between phases:
+//   idle (1.6-2.4s random) → winding (1.0s) → attacking (0.45s dodge window)
+//     ↓ dodged                              ↓ not dodged
+//   stunned (1.0s — bonus damage window)   you take ~18 dmg
+//
+// Player taps PUNCH any time:
+//   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 3
+//   · winding: 2 dmg (glancing, combo unchanged)
+//   · attacking: 2 dmg AND you eat a counter — combo resets
+//   · stunned: 15 dmg counter punch (combo+1)
+// Player taps DODGE during attacking → success. Other times: whiff (ignored).
+// First to 0 HP loses. Both HP start at 100.
+function ArtestFightGame({onResult}){
+  const [artestHp, setArtestHp] = useState(100);
+  const [playerHp, setPlayerHp] = useState(100);
+  const [phase, setPhase] = useState("idle"); // idle | winding | attacking | stunned | done
+  const [combo, setCombo] = useState(0);
+  const [hitFlash, setHitFlash] = useState(null); // "artest" | "player" | null
+  const [floatText, setFloatText] = useState([]); // {id, text, color, x, y}
+  const [bobX, setBobX] = useState(0);
+  const phaseRef = useRef("idle");
+  const timerRef = useRef();
+  const bobRef = useRef();
+  const finishedRef = useRef(false);
+  const floatIdRef = useRef(0);
+
+  // Push a transient damage indicator onto the screen
+  const pushFloat = (text, color, x=50, y=40) => {
+    const id = ++floatIdRef.current;
+    setFloatText(arr => [...arr, {id, text, color, x, y}]);
+    setTimeout(()=> setFloatText(arr => arr.filter(f => f.id !== id)), 800);
+  };
+
+  // Sync ref with state so timeout callbacks see the current phase
+  useEffect(()=>{ phaseRef.current = phase; },[phase]);
+
+  // Drive Ron's phase cycle on a self-rescheduling chain
+  useEffect(()=>{
+    if(finishedRef.current) return;
+
+    const advance = () => {
+      if(finishedRef.current) return;
+      const cur = phaseRef.current;
+      if(cur === "idle"){
+        // Random pause between 1.4s and 2.2s before winding up
+        const wait = 1400 + Math.random()*800;
+        timerRef.current = setTimeout(()=>{
+          if(finishedRef.current) return;
+          setPhase("winding");
+          advance();
+        }, wait);
+      } else if(cur === "winding"){
+        timerRef.current = setTimeout(()=>{
+          if(finishedRef.current) return;
+          setPhase("attacking");
+          advance();
+        }, 1000);
+      } else if(cur === "attacking"){
+        // 450ms dodge window — if still in attacking after that, player got hit
+        timerRef.current = setTimeout(()=>{
+          if(finishedRef.current) return;
+          if(phaseRef.current === "attacking"){
+            // Player missed the dodge — eat damage
+            setPlayerHp(hp => {
+              const next = Math.max(0, hp - 18);
+              if(next === 0){
+                finishedRef.current = true;
+                setPhase("done");
+                setTimeout(()=>onResult&&onResult({won:false, playerHp:0, artestHp}), 600);
+              }
+              return next;
+            });
+            setHitFlash("player");
+            setTimeout(()=>setHitFlash(null), 200);
+            setCombo(0);
+            pushFloat("-18", RE, 75, 55);
+            setPhase("idle");
+            advance();
+          }
+        }, 450);
+      } else if(cur === "stunned"){
+        timerRef.current = setTimeout(()=>{
+          if(finishedRef.current) return;
+          setPhase("idle");
+          advance();
+        }, 1000);
+      }
+    };
+
+    advance();
+    return ()=> { if(timerRef.current) clearTimeout(timerRef.current); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  // Idle/winding bob animation — gentle side-to-side. During winding the
+  // bobbing speeds up to telegraph the incoming attack.
+  useEffect(()=>{
+    if(finishedRef.current) return;
+    let t = 0;
+    const tick = () => {
+      if(finishedRef.current) return;
+      t += 1;
+      const cur = phaseRef.current;
+      let amp = 8, speed = 0.04;
+      if(cur === "winding"){ amp = 4; speed = 0.15; }
+      else if(cur === "attacking"){ amp = 0; }
+      else if(cur === "stunned"){ amp = 16; speed = 0.20; }
+      setBobX(Math.sin(t*speed)*amp);
+      bobRef.current = requestAnimationFrame(tick);
+    };
+    bobRef.current = requestAnimationFrame(tick);
+    return ()=> { if(bobRef.current) cancelAnimationFrame(bobRef.current); };
+  },[]);
+
+  const handlePunch = () => {
+    if(finishedRef.current) return;
+    const cur = phaseRef.current;
+    let dmg = 0;
+    let comboBump = false;
+    if(cur === "idle"){
+      dmg = combo >= 3 ? 8 : 5;
+      comboBump = true;
+    } else if(cur === "winding"){
+      dmg = 2; // glances off his guard
+    } else if(cur === "attacking"){
+      // Bad timing — you punch into his fist. Small chip + counter.
+      dmg = 2;
+      setPlayerHp(hp => {
+        const next = Math.max(0, hp - 8);
+        if(next === 0){
+          finishedRef.current = true;
+          setPhase("done");
+          setTimeout(()=>onResult&&onResult({won:false, playerHp:0, artestHp}), 600);
+        }
+        return next;
+      });
+      setHitFlash("player");
+      setTimeout(()=>setHitFlash(null), 150);
+      pushFloat("-8 counter", RE, 75, 60);
+      setCombo(0);
+    } else if(cur === "stunned"){
+      dmg = 15;
+      comboBump = true;
+    }
+    if(dmg > 0){
+      setArtestHp(hp => {
+        const next = Math.max(0, hp - dmg);
+        if(next === 0){
+          finishedRef.current = true;
+          setPhase("done");
+          setTimeout(()=>onResult&&onResult({won:true, playerHp, artestHp:0}), 600);
+        }
+        return next;
+      });
+      setHitFlash("artest");
+      setTimeout(()=>setHitFlash(null), 150);
+      pushFloat(`-${dmg}${cur==="stunned"?" CTR!":(combo>=3?" COMBO":"")}`, cur==="stunned"?YE:GR, 50, 30);
+      if(comboBump) setCombo(c => c+1);
+    }
+  };
+
+  const handleDodge = () => {
+    if(finishedRef.current) return;
+    const cur = phaseRef.current;
+    if(cur === "attacking"){
+      // Successful dodge — Ron is exposed for 1 second
+      if(timerRef.current) clearTimeout(timerRef.current);
+      setPhase("stunned");
+      pushFloat("DODGED!", BL, 25, 40);
+      // restart advance loop
+      const restart = () => {
+        if(finishedRef.current) return;
+        if(phaseRef.current === "stunned"){
+          timerRef.current = setTimeout(()=>{
+            if(finishedRef.current) return;
+            setPhase("idle");
+            // continue normal cycle
+            const idleNext = () => {
+              if(finishedRef.current) return;
+              if(phaseRef.current === "idle"){
+                const wait = 1400 + Math.random()*800;
+                timerRef.current = setTimeout(()=>{
+                  if(finishedRef.current) return;
+                  setPhase("winding");
+                  timerRef.current = setTimeout(()=>{
+                    if(finishedRef.current) return;
+                    setPhase("attacking");
+                    timerRef.current = setTimeout(()=>{
+                      if(finishedRef.current) return;
+                      if(phaseRef.current === "attacking"){
+                        setPlayerHp(hp => Math.max(0, hp - 18));
+                        setHitFlash("player");
+                        setTimeout(()=>setHitFlash(null), 200);
+                        setCombo(0);
+                        pushFloat("-18", RE, 75, 55);
+                        setPhase("idle");
+                        idleNext();
+                      }
+                    }, 450);
+                  }, 1000);
+                }, wait);
+              }
+            };
+            idleNext();
+          }, 1000);
+        }
+      };
+      restart();
+    }
+  };
+
+  // Visual state derived from phase
+  let bgGlow = "rgba(255,255,255,0.02)";
+  let spriteFilter = "none";
+  let spriteScale = 1.0;
+  if(phase === "winding"){ bgGlow = "rgba(234,179,8,0.18)"; spriteFilter = "drop-shadow(0 0 12px rgba(234,179,8,0.7))"; spriteScale = 1.03; }
+  if(phase === "attacking"){ bgGlow = "rgba(220,38,38,0.30)"; spriteFilter = "drop-shadow(0 0 16px rgba(220,38,38,0.9))"; spriteScale = 1.08; }
+  if(phase === "stunned"){ bgGlow = "rgba(74,168,255,0.22)"; spriteFilter = "drop-shadow(0 0 12px rgba(74,168,255,0.7))"; spriteScale = 0.96; }
+
+  return(
+    <div style={{position:"relative",padding:"4px 0 14px",userSelect:"none"}}>
+      {/* Header */}
+      <div style={{textAlign:"center",marginBottom:8}}>
+        <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>👊 THE BRAWL</div>
+        <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>YOU vs RON ARTEST</div>
+      </div>
+
+      {/* HP bars */}
+      <div style={{marginBottom:8}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,letterSpacing:1.5,color:"#aaa",marginBottom:3}}>
+          <span>RON ARTEST</span><span>{artestHp}/100</span>
+        </div>
+        <div style={{height:10,background:"rgba(255,255,255,0.08)",borderRadius:5,overflow:"hidden",border:hitFlash==="artest"?`2px solid ${YE}`:"none"}}>
+          <div style={{width:`${artestHp}%`,height:"100%",background:`linear-gradient(90deg, ${RE}, ${OR})`,transition:"width 0.2s"}}/>
+        </div>
+      </div>
+      <div style={{marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:10,letterSpacing:1.5,color:"#aaa",marginBottom:3}}>
+          <span>YOU</span><span>{playerHp}/100</span>
+        </div>
+        <div style={{height:10,background:"rgba(255,255,255,0.08)",borderRadius:5,overflow:"hidden",border:hitFlash==="player"?`2px solid ${RE}`:"none"}}>
+          <div style={{width:`${playerHp}%`,height:"100%",background:`linear-gradient(90deg, ${GR}, ${BL})`,transition:"width 0.2s"}}/>
+        </div>
+      </div>
+
+      {/* Combo + phase label */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,fontSize:11,letterSpacing:1}}>
+        <div style={{color:combo>=3?YE:"#888",fontWeight:700}}>
+          {combo>=3?`🔥 ${combo}× COMBO`:combo>0?`${combo}× combo`:""}
+        </div>
+        <div style={{color:phase==="winding"?YE:phase==="attacking"?RE:phase==="stunned"?BL:"#888",fontWeight:700,textTransform:"uppercase"}}>
+          {phase==="winding"?"⚠ WINDING UP":phase==="attacking"?"🥊 INCOMING!":phase==="stunned"?"💫 STUNNED!":phase==="done"?"":"…"}
+        </div>
+      </div>
+
+      {/* Arena / sprite */}
+      <div style={{
+        position:"relative", height:320, borderRadius:14, overflow:"hidden",
+        background:`radial-gradient(ellipse at 50% 30%, ${bgGlow} 0%, rgba(0,0,0,0.6) 70%)`,
+        border:`1px solid ${phase==="attacking"?RE+"66":"rgba(255,255,255,0.08)"}`,
+        transition:"background 0.15s, border-color 0.15s",
+        marginBottom:12,
+      }}>
+        {/* Court lines */}
+        <div style={{position:"absolute",left:0,right:0,bottom:0,height:80,background:"linear-gradient(180deg, transparent, rgba(232,135,58,0.15))"}}/>
+        <div style={{position:"absolute",left:"50%",bottom:30,width:120,height:60,border:"2px solid rgba(255,255,255,0.1)",borderTop:"none",borderRadius:"0 0 60px 60px",transform:"translateX(-50%)"}}/>
+        <div style={{position:"absolute",left:0,right:0,bottom:30,height:2,background:"rgba(255,255,255,0.1)"}}/>
+
+        {/* Artest sprite */}
+        <div style={{
+          position:"absolute", left:"50%", top:"50%",
+          transform:`translate(-50%, -50%) translateX(${bobX}px) scale(${spriteScale}) ${phase==="stunned"?"rotate(-4deg)":""}`,
+          transition:"transform 0.1s, filter 0.15s",
+          filter:spriteFilter,
+        }}>
+          <img src="/artest2.png" alt="Ron Artest" style={{display:"block",width:200,height:200,objectFit:"contain",imageRendering:"pixelated"}}/>
+        </div>
+
+        {/* Floating damage text */}
+        {floatText.map(f=>(
+          <div key={f.id} style={{
+            position:"absolute", left:`${f.x}%`, top:`${f.y}%`, transform:"translate(-50%,-50%)",
+            fontSize:16, fontWeight:900, color:f.color, textShadow:"0 1px 4px rgba(0,0,0,0.8)",
+            pointerEvents:"none", animation:"floatUp 0.8s ease-out forwards",
+            fontFamily:"'Barlow Condensed',sans-serif", letterSpacing:1,
+          }}>{f.text}</div>
+        ))}
+
+        {/* Phase indicator overlay */}
+        {phase==="attacking" && (
+          <div style={{position:"absolute",left:"50%",top:"20%",transform:"translateX(-50%)",fontSize:13,fontWeight:900,color:RE,letterSpacing:2,padding:"4px 10px",background:"rgba(0,0,0,0.6)",borderRadius:5,border:`1px solid ${RE}`,animation:"pulse 0.3s infinite alternate"}}>
+            DODGE NOW!
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+        <button onPointerDown={handleDodge} style={{padding:"16px 0",background:phase==="attacking"?BL:"rgba(74,168,255,0.15)",border:phase==="attacking"?`2px solid ${BL}`:"1px solid rgba(74,168,255,0.3)",borderRadius:10,color:"#fff",fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",cursor:"pointer",userSelect:"none"}}>
+          🛡 DODGE
+        </button>
+        <button onPointerDown={handlePunch} style={{padding:"16px 0",background:phase==="stunned"?YE:OR,border:"none",borderRadius:10,color:"#080c10",fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",cursor:"pointer",userSelect:"none"}}>
+          👊 PUNCH
+        </button>
+      </div>
+
+      <style>{`
+        @keyframes floatUp {
+          0% { opacity: 1; transform: translate(-50%, -50%) translateY(0); }
+          100% { opacity: 0; transform: translate(-50%, -50%) translateY(-30px); }
+        }
+        @keyframes pulse {
+          from { opacity: 0.7; }
+          to { opacity: 1; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ─── OFFSEASON SCREEN ──────────────────────────────────────────────────────────
+// Processes all offseason events ON MOUNT (skill decay, paycheck, restaurant
+// earnings, album drops, signature shoe eligibility, mentor clearing at 28)
+// and displays them as a scrollable readable list. Previously these flashed
+// as fast-stacking toasts during the transition to next season — easy to miss.
+// Now the user sees the full summary before clicking NEXT SEASON to advance.
+function OffseasonScreen({
+  yearLabel, nbaSeasonTotals, season, madePlayoffs,
+  player, setPlayer, setMoney,
+  nbaSeasons, setNbaSeasons, setNbaGamesPlayed, setNbaSeasonTotals, setPlayoffsDone,
+  nbaMentor, setNbaMentor,
+  allYears, currentYear, signedShoeBrand, teamName, go,
+}){
+  const [events, setEvents] = useState([]);
+  // Ref ensures the offseason logic only runs ONCE per visit even though
+  // setState calls below trigger re-renders.
+  const processedRef = useRef(false);
+
+  useEffect(()=>{
+    if(processedRef.current) return;
+    processedRef.current=true;
+    const collected=[];
+
+    // (1) Paycheck — flat salary deposit from this season's contract.
+    const paycheck=player.contract?currentYearSalary(player.contract,currentYear):0;
+    if(paycheck>0&&setMoney){
+      setMoney(m=>(m||0)+paycheck);
+      collected.push({type:"paycheck", icon:"💰", title:"Paycheck deposited", subtitle:`${yearLabel} season salary`, amount:paycheck, tone:GR});
+    }
+
+    // (2) Restaurant earnings — one line per restaurant + totals on each.
+    const restaurantsList=ensurePurchases(player).restaurants||[];
+    if(restaurantsList.length>0&&setMoney){
+      const earnings=restaurantsList.map(r=>({
+        id:r.id,
+        label:r.type==="invested"?r.chainName:r.name,
+        kind:r.type==="invested"?"Investment dividend":`${r.locations||1} location${(r.locations||1)===1?"":"s"}`,
+        inc:r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations),
+      }));
+      const totalInc=earnings.reduce((sum,e)=>sum+e.inc,0);
+      if(totalInc>0){
+        setMoney(m=>(m||0)+totalInc);
+        setPlayer(p=>{
+          const purchases=ensurePurchases(p);
+          const updated=(purchases.restaurants||[]).map(r=>{
+            const e=earnings.find(x=>x.id===r.id);
+            return e?{...r, totalEarned:(r.totalEarned||0)+e.inc}:r;
+          });
+          return {...p, purchases:{...purchases, restaurants:updated}};
+        });
+        earnings.forEach(e=>{
+          if(e.inc>0) collected.push({type:"restaurant", icon:"🍔", title:e.label, subtitle:e.kind, amount:e.inc, tone:YE});
+        });
+      }
+    }
+
+    // (3) Album outcomes — any album in "recording" status drops THIS offseason.
+    const allAlbums=ensurePurchases(player).albums||[];
+    const recording=allAlbums.filter(a=>a.status==="recording");
+    if(recording.length>0&&setMoney){
+      const results=recording.map(album=>({id:album.id, name:album.name, outcome:rollAlbumOutcome(album)}));
+      const totalPayout=results.reduce((s,r)=>s+r.outcome.payout,0);
+      setMoney(m=>(m||0)+totalPayout);
+      setPlayer(p=>{
+        const purchases=ensurePurchases(p);
+        const updated=(purchases.albums||[]).map(a=>{
+          const r=results.find(x=>x.id===a.id);
+          return r?{...a, status:r.outcome.status, payout:r.outcome.payout}:a;
+        });
+        return {...p, purchases:{...purchases, albums:updated}};
+      });
+      results.forEach(r=>{
+        const status=r.outcome.status;
+        const tone=status==="flop"?RE:status==="classic"?YE:status==="mid"?"#aaa":GR;
+        const label=status==="classic"?"💎 CLASSIC":status==="hit"?"🔥 HIT":status==="mid"?"📊 MID":"💔 FLOP";
+        collected.push({type:"album", icon:"💿", title:r.name, subtitle:`Album dropped — ${label}`, amount:r.outcome.payout, tone});
+      });
+    }
+
+    // (4) Age-based skill decay — tiered curve. Bryan Johnson Pills push the
+    // start threshold from 30 to 32 (two extra peak years). 30-32 tier was
+    // beefed up so peak OVR genuinely lands at age 30 most of the time.
+    //   30-32: 80% chance, 2 skills, 2-4 points each (was 60% / 1-2 / 1-3)
+    //   33-34: 90% chance, 2 skills, 2-4 points each
+    //   35-37: 100% chance, 2-3 skills, 2-5 points each
+    //   38+:   100% chance, 3-4 skills, 3-6 points each
+    const ageAfterSeason=calcAge(allYears,nbaSeasons)+1;
+    const onPills=playerOwns(player,"bryan_johnson_pills");
+    const decayThreshold=onPills?32:30;
+    if(ageAfterSeason>=decayThreshold){
+      let decayChance, numToDecay, dropMin, dropMax;
+      if(ageAfterSeason>=38){
+        decayChance=1.0; numToDecay=3+Math.floor(Math.random()*2); dropMin=3; dropMax=6;
+      } else if(ageAfterSeason>=35){
+        decayChance=1.0; numToDecay=2+Math.floor(Math.random()*2); dropMin=2; dropMax=5;
+      } else if(ageAfterSeason>=33){
+        decayChance=0.90; numToDecay=2; dropMin=2; dropMax=4;
+      } else {
+        // 30-32 (or 32 only if pills are owned)
+        decayChance=0.80; numToDecay=2; dropMin=2; dropMax=4;
+      }
+      if(Math.random()<decayChance){
+        const skills={...(player.skills||{})};
+        const keys=Object.keys(skills);
+        if(keys.length>0){
+          const shuffled=[...keys].sort(()=>Math.random()-0.5);
+          const decayedSkills=[];
+          for(let i=0;i<numToDecay && i<shuffled.length;i++){
+            const k=shuffled[i];
+            const drop=dropMin+Math.floor(Math.random()*(dropMax-dropMin+1));
+            const newVal=Math.max(30,(skills[k]||50)-drop);
+            if(newVal<skills[k]){
+              decayedSkills.push({skill:k, drop:skills[k]-newVal, from:skills[k], to:newVal});
+              skills[k]=newVal;
+            }
+          }
+          if(decayedSkills.length>0){
+            setPlayer(p=>({...p, skills:{...(p.skills||{}), ...skills}}));
+            collected.push({
+              type:"decay", icon:"📉", title:`Age ${ageAfterSeason} — Skill decay`,
+              subtitle:decayedSkills.map(d=>`${d.skill} ${d.from}→${d.to}`).join(" · "),
+              amount:null, tone:RE,
+            });
+          }
+        }
+      }
+    } else if(onPills && ageAfterSeason>=30 && ageAfterSeason<32){
+      // Pills are working — give the player a tiny acknowledgment so they know
+      // the $1.5M wasn't wasted.
+      collected.push({type:"pills", icon:"💊", title:"Bryan Johnson protocol holding", subtitle:`Skill decay delayed to age 32`, amount:null, tone:"#22c55e"});
+    }
+
+    // (5) Signature shoe eligibility — if the player has a shoe deal AND has
+    // grown into the brand's sigOVR AND hasn't designed a signature THIS year
+    // yet, surface it as an alert. Doesn't auto-trigger anything; user has
+    // to navigate to the agent screen and tap DESIGN SIGNATURE.
+    if(signedShoeBrand){
+      const brand=PRO_SHOE_BRAND_BY_ID[signedShoeBrand.id];
+      if(brand){
+        const ovr=calcOVR(player.skills||{}, player.intangibles||[], player.position, player.height);
+        const qualifies=ovr>=brand.sigOVR;
+        const sigList=Array.isArray(player.shoeSignatures)
+          ? player.shoeSignatures
+          : (player.shoeSignature ? [player.shoeSignature] : []);
+        const hasThisYear=sigList.some(s=>s && s.year===currentYear);
+        if(qualifies && !hasThisYear){
+          collected.push({
+            type:"sigShoe", icon:"★", title:"Signature shoe unlocked",
+            subtitle:`Design your ${brand.name} signature at AGENT → DESIGN SIGNATURE`,
+            amount:null, tone:GO,
+          });
+        }
+      }
+    }
+
+    // (6) Mentor retirement — once player turns 28, the mentor slot is gone
+    // for good. Surface it as an event the season they age out so the player
+    // knows why they lost their +5% boost.
+    if(nbaMentor && ageAfterSeason>=28){
+      const oldMentor=nbaMentor;
+      setNbaMentor&&setNbaMentor(null);
+      collected.push({
+        type:"mentor", icon:"🎓", title:"Mentor era over",
+        subtitle:`You're a vet now — ${oldMentor} steps aside`,
+        amount:null, tone:"#aaa",
+      });
+    }
+
+    setEvents(collected);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+
+  const advance=()=>{
+    const totals=nbaSeasonTotals;
+    const seasonEntry={
+      year:yearLabel, team:teamName, teamRecord:`${season.w}-${season.l}`, madePlayoffs,
+      gp:totals.games,
+      ppg:totals.games>0?+(totals.pts/totals.games).toFixed(1):0,
+      rpg:totals.games>0?+(totals.reb/totals.games).toFixed(1):0,
+      apg:totals.games>0?+(totals.ast/totals.games).toFixed(1):0,
+      fg:totals.fga>0?Math.round((totals.fgm/totals.fga)*100):0,
+    };
+    setNbaSeasons(prev=>[...prev,seasonEntry]);
+    setNbaGamesPlayed(0);
+    setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
+    setPlayoffsDone(false);
+    go("didYouKnow");
+  };
+
+  return(
+    <div style={{textAlign:"center",padding:"24px 0"}}>
+      <div style={{fontSize:10,letterSpacing:3,color:"#aaa",marginBottom:6}}>{yearLabel} SEASON</div>
+      <div style={{fontSize:24,fontWeight:900,color:OR,marginBottom:14}}>OFFSEASON</div>
+
+      {/* Final stats card */}
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:12,padding:16,marginBottom:14,textAlign:"left"}}>
+        <Lbl color="#ddd">Final {yearLabel} Stats</Lbl>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,textAlign:"center",marginTop:8}}>
+          {[
+            ["PPG",nbaSeasonTotals.games>0?(nbaSeasonTotals.pts/nbaSeasonTotals.games).toFixed(1):"--"],
+            ["RPG",nbaSeasonTotals.games>0?(nbaSeasonTotals.reb/nbaSeasonTotals.games).toFixed(1):"--"],
+            ["APG",nbaSeasonTotals.games>0?(nbaSeasonTotals.ast/nbaSeasonTotals.games).toFixed(1):"--"],
+            ["GP",nbaSeasonTotals.games],
+          ].map(([l,v])=>(
+            <div key={l}>
+              <div style={{fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:2}}>{l}</div>
+              <div style={{fontSize:18,fontWeight:900,color:OR}}>{v}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{marginTop:12,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",fontSize:11,color:"#aaa"}}>
+          Team record: <span style={{color:GR,fontWeight:700}}>{season.w}</span>-<span style={{color:RE,fontWeight:700}}>{season.l}</span> {madePlayoffs?"· Made playoffs ✓":"· Missed playoffs"}
+        </div>
+      </div>
+
+      {/* Offseason events list */}
+      {events.length>0 && (
+        <div style={{marginBottom:14, textAlign:"left"}}>
+          <div style={{fontSize:10,letterSpacing:2,color:"#888",fontWeight:700,marginBottom:8,textTransform:"uppercase"}}>Offseason Report</div>
+          <div style={{display:"flex",flexDirection:"column",gap:6}}>
+            {events.map((e,i)=>(
+              <div key={i} style={{
+                background:`linear-gradient(135deg, ${e.tone}1a, rgba(255,255,255,0.03))`,
+                border:`1px solid ${e.tone}44`,
+                borderRadius:10, padding:"10px 12px",
+                display:"flex", alignItems:"center", gap:10,
+              }}>
+                <div style={{fontSize:22, width:32, textAlign:"center", flexShrink:0}}>{e.icon}</div>
+                <div style={{flex:1, minWidth:0}}>
+                  <div style={{fontSize:13, fontWeight:900, color:"#fff", lineHeight:1.2}}>{e.title}</div>
+                  {e.subtitle && <div style={{fontSize:10, color:"#aaa", marginTop:2, lineHeight:1.3}}>{e.subtitle}</div>}
+                </div>
+                {e.amount!=null && (
+                  <div style={{fontSize:14, fontWeight:900, color:e.tone, whiteSpace:"nowrap", flexShrink:0}}>
+                    +{fmtMoney(e.amount)}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <button onClick={advance} style={{...btnS,padding:"12px 32px"}}>NEXT SEASON →</button>
+    </div>
+  );
+}
+
 // ─── NBA PLAY (game stretch screen) ────────────────────────────────────────────
-function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, allYears, go, toast}){
+function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesPlayed, nbaSeasonTotals, setNbaSeasonTotals, nbaSeasons, setNbaSeasons, nbaMentor, setNbaMentor, playoffsDone, setPlayoffsDone, skillPoints, setSkillPoints, setMoney, signedShoeBrand, allYears, go, toast}){
   const seasonsPlayed=nbaSeasons.length;
   const currentYear=NBA_START_YEAR+seasonsPlayed;
   const id=getTeamIdentity(nbaTeam,currentYear);
@@ -4831,168 +5508,15 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
   // and bounce back to the hub.
   if((regSeasonDone&&!madePlayoffs)||(regSeasonDone&&madePlayoffs&&playoffsDone)){
     return(
-      <div style={{textAlign:"center",padding:"24px 0"}}>
-        <div style={{fontSize:10,letterSpacing:3,color:"#aaa",marginBottom:6}}>{yearLabel} SEASON</div>
-        <div style={{fontSize:24,fontWeight:900,color:OR,marginBottom:14}}>OFFSEASON</div>
-        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:12,padding:16,marginBottom:14,textAlign:"left"}}>
-          <Lbl color="#ddd">Final {yearLabel} Stats</Lbl>
-          <div style={{display:"grid",gridTemplateColumns:"repeat(4,1fr)",gap:8,textAlign:"center",marginTop:8}}>
-            {[
-              ["PPG",nbaSeasonTotals.games>0?(nbaSeasonTotals.pts/nbaSeasonTotals.games).toFixed(1):"--"],
-              ["RPG",nbaSeasonTotals.games>0?(nbaSeasonTotals.reb/nbaSeasonTotals.games).toFixed(1):"--"],
-              ["APG",nbaSeasonTotals.games>0?(nbaSeasonTotals.ast/nbaSeasonTotals.games).toFixed(1):"--"],
-              ["GP",nbaSeasonTotals.games],
-            ].map(([l,v])=>(
-              <div key={l}>
-                <div style={{fontSize:9,color:"#666",letterSpacing:1.5,marginBottom:2}}>{l}</div>
-                <div style={{fontSize:18,fontWeight:900,color:OR}}>{v}</div>
-              </div>
-            ))}
-          </div>
-          <div style={{marginTop:12,paddingTop:10,borderTop:"1px solid rgba(255,255,255,0.06)",fontSize:11,color:"#aaa"}}>
-            Team record: <span style={{color:GR,fontWeight:700}}>{season.w}</span>-<span style={{color:RE,fontWeight:700}}>{season.l}</span> {madePlayoffs?"· Made playoffs ✓":"· Missed playoffs"}
-          </div>
-        </div>
-        <button onClick={()=>{
-          // Push this season into history, then reset for next year.
-          const totals=nbaSeasonTotals;
-          const seasonEntry={
-            // Use the historical display name so a Sonics-era season shows
-            // "Seattle SuperSonics" while OKC-era seasons show "Oklahoma City
-            // Thunder" — both still tied to the same canonical nbaTeam.
-            year:yearLabel, team:id.name, teamRecord:`${season.w}-${season.l}`, madePlayoffs,
-            gp:totals.games,
-            ppg:totals.games>0?+(totals.pts/totals.games).toFixed(1):0,
-            rpg:totals.games>0?+(totals.reb/totals.games).toFixed(1):0,
-            apg:totals.games>0?+(totals.ast/totals.games).toFixed(1):0,
-            fg:totals.fga>0?Math.round((totals.fgm/totals.fga)*100):0,
-          };
-          // Pay this year's salary into the bank — happens once per season at
-          // the end-of-year transition. Free agents (no contract) earn nothing.
-          const paycheck=player.contract?currentYearSalary(player.contract,currentYear):0;
-          if(paycheck>0&&setMoney){
-            setMoney(m=>(m||0)+paycheck);
-            toast&&toast(`Paycheck deposited: ${fmtMoney(paycheck)}`,GR);
-          }
-          // Restaurant income — loop ALL owned restaurants (invested chains
-          // pay flat dividend, own chains scale with locations). Each gets
-          // its own toast so the player can see per-venture earnings, and
-          // cumulative `totalEarned` is bumped on each restaurant object.
-          const restaurantsList=ensurePurchases(player).restaurants||[];
-          if(restaurantsList.length>0&&setMoney){
-            const earnings=restaurantsList.map(r=>{
-              const inc=r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations);
-              return {id:r.id, label:r.type==="invested"?r.chainName:r.name, inc};
-            });
-            const totalInc=earnings.reduce((sum,e)=>sum+e.inc,0);
-            if(totalInc>0){
-              setMoney(m=>(m||0)+totalInc);
-              setPlayer(p=>{
-                const purchases=ensurePurchases(p);
-                const updated=(purchases.restaurants||[]).map(r=>{
-                  const e=earnings.find(x=>x.id===r.id);
-                  return e?{...r, totalEarned:(r.totalEarned||0)+e.inc}:r;
-                });
-                return {...p, purchases:{...purchases, restaurants:updated}};
-              });
-              // Stagger toasts so they don't stack on top of each other
-              earnings.forEach((e,idx)=>{
-                if(e.inc>0) setTimeout(()=>toast&&toast(`${e.label}: ${fmtMoney(e.inc)}`,YE), 600+idx*350);
-              });
-            }
-          }
-          // Album outcome — any album in "recording" status drops THIS offseason.
-          // Only one album recording at a time so this is at most one roll, but
-          // loop the array anyway in case of future changes.
-          const allAlbums=ensurePurchases(player).albums||[];
-          const recording=allAlbums.filter(a=>a.status==="recording");
-          if(recording.length>0&&setMoney){
-            const results=recording.map(album=>{
-              const outcome=rollAlbumOutcome(album);
-              return {id:album.id, name:album.name, outcome};
-            });
-            const totalPayout=results.reduce((s,r)=>s+r.outcome.payout,0);
-            setMoney(m=>(m||0)+totalPayout);
-            setPlayer(p=>{
-              const purchases=ensurePurchases(p);
-              const updated=(purchases.albums||[]).map(a=>{
-                const r=results.find(x=>x.id===a.id);
-                return r?{...a, status:r.outcome.status, payout:r.outcome.payout}:a;
-              });
-              return {...p, purchases:{...purchases, albums:updated}};
-            });
-            results.forEach((r,idx)=>{
-              const tone=r.outcome.status==="flop"?RE:r.outcome.status==="classic"?YE:GR;
-              const label=r.outcome.status==="classic"?"💎 CLASSIC":r.outcome.status==="hit"?"🔥 HIT":r.outcome.status==="mid"?"📊 Mid":"💔 Flop";
-              setTimeout(()=>toast&&toast(`${r.name}: ${label} (${fmtMoney(r.outcome.payout)})`,tone), 1200+idx*400);
-            });
-          }
-          // Age-based skill decay — starts at 30, ramps hard in the mid-30s,
-          // and gets brutal in the late 30s. Tiers:
-          //   30-32: 60% chance, decay 1-2 skills by 1-3 points
-          //   33-34: 85% chance, decay 2 skills by 2-4 points
-          //   35-37: 100% chance, decay 2-3 skills by 2-5 points
-          //   38+:   100% chance, decay 3-4 skills by 3-6 points
-          // Floor still 30 — players can't drop below replacement level.
-          const ageAfterSeason=calcAge(allYears,nbaSeasons)+1;
-          if(ageAfterSeason>=30){
-            // Tier-based parameters. Old curve only hit 95% by 35 and capped
-            // damage at 1-3 points per skill; the new curve makes 35+ a real
-            // problem the player has to plan around.
-            let decayChance, numToDecay, dropMin, dropMax;
-            if(ageAfterSeason>=38){
-              decayChance=1.0;
-              numToDecay=3+Math.floor(Math.random()*2); // 3 or 4
-              dropMin=3; dropMax=6;
-            } else if(ageAfterSeason>=35){
-              decayChance=1.0;
-              numToDecay=2+Math.floor(Math.random()*2); // 2 or 3
-              dropMin=2; dropMax=5;
-            } else if(ageAfterSeason>=33){
-              decayChance=0.85;
-              numToDecay=2;
-              dropMin=2; dropMax=4;
-            } else {
-              // 30-32
-              decayChance=0.60;
-              numToDecay=Math.random()<0.5?1:2;
-              dropMin=1; dropMax=3;
-            }
-            if(Math.random()<decayChance){
-              setPlayer(p=>{
-                const skills={...(p.skills||{})};
-                const keys=Object.keys(skills);
-                if(keys.length===0) return p;
-                // Decay N skills (without replacement so the same skill isn't
-                // hit twice in one offseason) — pick distinct random keys.
-                const shuffled=[...keys].sort(()=>Math.random()-0.5);
-                const decayedSkills=[];
-                for(let i=0;i<numToDecay && i<shuffled.length;i++){
-                  const k=shuffled[i];
-                  const drop=dropMin+Math.floor(Math.random()*(dropMax-dropMin+1));
-                  const newVal=Math.max(30,(skills[k]||50)-drop);
-                  if(newVal<skills[k]){
-                    decayedSkills.push({skill:k, drop:skills[k]-newVal});
-                    skills[k]=newVal;
-                  }
-                }
-                if(decayedSkills.length>0){
-                  setTimeout(()=>toast&&toast(`Age ${ageAfterSeason}: ${decayedSkills.map(d=>`${d.skill} -${d.drop}`).join(", ")}`,RE), 1800);
-                }
-                return {...p, skills};
-              });
-            }
-          }
-          setNbaSeasons(prev=>[...prev,seasonEntry]);
-          setNbaGamesPlayed(0);
-          setNbaSeasonTotals({pts:0,reb:0,ast:0,games:0,fgm:0,fga:0});
-          setPlayoffsDone(false);
-          // Route directly to the trivia loading screen — go() has no
-          // interceptor for "didYouKnow" so this is unconditional. From there,
-          // dismiss returns to leagueHub (FA gate handles expired contracts).
-          go("didYouKnow");
-        }} style={{...btnS,padding:"12px 32px"}}>NEXT SEASON →</button>
-      </div>
+      <OffseasonScreen
+        yearLabel={yearLabel} nbaSeasonTotals={nbaSeasonTotals} season={season} madePlayoffs={madePlayoffs}
+        player={player} setPlayer={setPlayer} setMoney={setMoney}
+        nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} setNbaGamesPlayed={setNbaGamesPlayed}
+        setNbaSeasonTotals={setNbaSeasonTotals} setPlayoffsDone={setPlayoffsDone}
+        nbaMentor={nbaMentor} setNbaMentor={setNbaMentor}
+        allYears={allYears} currentYear={currentYear} signedShoeBrand={signedShoeBrand}
+        teamName={id.name} go={go}
+      />
     );
   }
 
@@ -5027,9 +5551,9 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
           // Award SP based on stretch performance — totalPts maxes around 15
           // (5 mini-games × 3 max pts each), so the formula gives 1-8 SP per
           // stretch. Floors at 1 so showing up always earns something. Players
-          // 32+ stop earning skill points (their skill ceiling is locked).
+          // 31+ stop earning skill points (their skill ceiling is locked at peak).
           const ageNow=calcAge(allYears,nbaSeasons);
-          const spEarned=ageNow>=32?0:Math.max(1,Math.round(totalPts/2));
+          const spEarned=ageNow>=31?0:Math.max(1,Math.round(totalPts/2));
           setSkillPoints&&setSkillPoints(p=>(p||0)+spEarned);
           if(isPlayoffRun){
             setPlayoffsDone(true);
@@ -5051,6 +5575,16 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
           } else {
             setNbaGamesPlayed(g=>g+41);
             toast&&toast(`Stretch done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,OR);
+            // Midseason event check — fires AFTER the first stretch of the
+            // 2004-05 season (Nov 2004 = Malice at the Palace). gp is still 0
+            // in this closure (the +41 update is queued). Tracked on
+            // player.midseasonEvents so it only ever fires once per career.
+            const firedEvents=player?.midseasonEvents||[];
+            if(gp===0 && currentYear===2004 && !firedEvents.includes(ARTEST_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), ARTEST_EVENT_ID]}));
+              go("artestPrompt");
+              return;
+            }
           }
           go("leagueHub");
         }}
@@ -5228,7 +5762,7 @@ function NbaSkillsScreen({player, setPlayer, skillPoints, setSkillPoints, go, to
 
 // ─── NBA TEAM ──────────────────────────────────────────────────────────────────
 // Roster view by position with depth chart. Mentor selection at the top.
-function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, skillPoints, setSkillPoints, go, toast}){
+function NbaTeamScreen({player, nbaTeam, nbaSeasons, allYears, nbaMentor, setNbaMentor, skillPoints, setSkillPoints, go, toast}){
   const currentYear=NBA_START_YEAR+(nbaSeasons||[]).length;
   const id=getTeamIdentity(nbaTeam,currentYear);
   const teamData={p:id.p,s:id.s,abbr:id.abbr,logoUrl:id.logoUrl};
@@ -5240,8 +5774,22 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
   // Role label by slot — gives the player a feel for where they fit beyond just MPG.
   const roleLabel=slot===0?"STARTER":slot===1?"6TH MAN":slot===2?"ROTATION":slot===3?"BENCH":"DEEP BENCH";
   const [showMentorPick,setShowMentorPick]=useState(false);
+  // Player's actual current age — used to gate the mentor system. Once you
+  // hit 28 you're considered a vet yourself and the mentor slot disappears.
+  const ageNow=calcAge(allYears||[],nbaSeasons||[]);
+  const mentorEra=ageNow<28;
+
+  // If the player aged past 28 with a mentor still set, clear it on next
+  // render. Old saves with a stale mentor get migrated automatically.
+  useEffect(()=>{
+    if(!mentorEra && nbaMentor) setNbaMentor(null);
+  },[mentorEra, nbaMentor, setNbaMentor]);
 
   const chooseMentor=(name)=>{
+    if(!mentorEra){
+      toast&&toast("You're a vet now — no mentor slot","#888");
+      return;
+    }
     if(nbaMentor){
       toast&&toast(`You already have a mentor: ${nbaMentor}`,"#888");
       return;
@@ -5268,7 +5816,9 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
         </div>
       </div>
 
-      {/* Mentor block */}
+      {/* Mentor block — only shown to younger players (under 28). Once you
+          hit 28 you're a vet yourself, mentor system retires. */}
+      {mentorEra && (
       <div style={{background:"rgba(255,215,0,0.06)",border:`1px solid ${nbaMentor?GO:"rgba(255,215,0,0.18)"}55`,borderRadius:10,padding:12,marginBottom:14}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <div>
@@ -5290,6 +5840,7 @@ function NbaTeamScreen({player, nbaTeam, nbaSeasons, nbaMentor, setNbaMentor, sk
           </div>
         )}
       </div>
+      )}
 
       {/* STARTING FIVE — one per position, in PG-SG-SF-PF-C order */}
       <div style={{background:"rgba(255,255,255,0.03)",borderRadius:8,padding:"10px 12px",marginBottom:10}}>
@@ -6938,19 +7489,24 @@ function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, onBackToList
 // Compact card sitting on the Agent screen between the player contract and
 // the trade/extension request panel. Shows current brand + bonus + signature
 // shoe (if any), plus a "BROWSE OFFERS" link that opens the picker.
-function ShoeContractCard({signedShoeBrand, shoeSignature, shoeContract, ovr, currentYear, onBrowse, onDesignSignature}){
+function ShoeContractCard({signedShoeBrand, shoeSignature, shoeSignatures, shoeContract, ovr, currentYear, onBrowse, onDesignSignature}){
   const hasDeal=!!signedShoeBrand;
   const currentColor=signedShoeBrand?.color||"#888";
   const remainingYears=shoeContract?shoeDealRemainingYears(shoeContract,currentYear):0;
   const locked=remainingYears>0;
   // Does the player CURRENTLY qualify for a signature shoe with their existing
-  // brand but doesn't already have one for this brand? This is the trigger
+  // brand but doesn't already have one for this year? This is the trigger
   // for the standalone "Design Signature Shoe" prompt — the user grew into
   // the threshold mid-deal and doesn't need to re-sign to claim it.
+  // Limit is now ONE signature PER YEAR (used to be one per brand). Multiple
+  // sigs per career are allowed and form a series.
   const currentBrandData=signedShoeBrand?PRO_SHOE_BRAND_BY_ID[signedShoeBrand.id]:null;
   const qualifiesForCurrentSig=currentBrandData && ovr>=currentBrandData.sigOVR;
-  const hasSigForCurrentBrand=shoeSignature && shoeSignature.brandId===signedShoeBrand?.id;
-  const canDesignNewSignature=qualifiesForCurrentSig && !hasSigForCurrentBrand;
+  const sigList=Array.isArray(shoeSignatures)
+    ? shoeSignatures
+    : (shoeSignature ? [shoeSignature] : []);
+  const hasSigThisYear=sigList.some(s=>s && s.year===currentYear);
+  const canDesignNewSignature=qualifiesForCurrentSig && !hasSigThisYear;
   // Tease an upgrade brand only when no lock OR a clearly better brand opens
   const bestBrand=PRO_SHOE_BRANDS.find(b=>ovr>=b.minOVR);
   const showUpgradeTease=!locked&&bestBrand && (!hasDeal || (PRO_SHOE_BRAND_BY_ID[signedShoeBrand?.id]?.baseBonus||0) < bestBrand.baseBonus);
@@ -7202,16 +7758,22 @@ function ShoeDealPicker({ovr, currentBrandId, shoeContract, currentYear, onClose
 // They name the shoe, pick a silhouette, and a colorway. Saves to
 // player.shoeSignature. Refreshable: each new qualifying deal lets them
 // re-design (or skip if they want to keep the old one).
-function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
+function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, nbaSeasons, go, toast}){
   // The pending context was set by the picker before navigating here.
   const pending=player?.shoeSignaturePending;
   const brandColor=pending?.brandColor||signedShoeBrand?.color||OR;
   const brandName=pending?.brandName||signedShoeBrand?.name||"Brand";
-  // Default name suggestion: PLAYER FIRST NAME + roman numeral based on
-  // whether they've already had a signature (so it feels like a series).
-  const previousSig=player?.shoeSignature;
+  const currentYear=NBA_START_YEAR+(nbaSeasons||[]).length;
+  // Existing signatures (back-compat: if only the single `shoeSignature` field
+  // exists from old saves, treat it as a one-element list).
+  const existingSigs=Array.isArray(player?.shoeSignatures)
+    ? player.shoeSignatures
+    : (player?.shoeSignature ? [player.shoeSignature] : []);
+  // Default name suggestion: PLAYER FIRST NAME + roman numeral based on how
+  // many signatures the player has already designed (so the series feels real).
   const firstName=(player?.name||"Mike").split(" ")[0];
-  const defaultName=previousSig?`${firstName} ${["II","III","IV","V","VI"][Math.min(4,(player?.shoeSignatureCount||1))]}`:`${firstName} I`;
+  const nextIdx=Math.min(4,existingSigs.length);
+  const defaultName=existingSigs.length>0?`${firstName} ${["II","III","IV","V","VI"][nextIdx]}`:`${firstName} I`;
   const [name,setName]=useState(defaultName);
   const [design,setDesign]=useState("lowtop");
   const [color,setColor]=useState(brandColor);
@@ -7237,16 +7799,27 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, go, toast}){
 
   const finalize=()=>{
     if(!ready) return;
-    setPlayer(p=>({
-      ...p,
-      shoeSignature:{
-        name:name.trim(), design, color, accent,
-        brandId:pending?.brandId,
-        brandName:pending?.brandName,
-      },
-      shoeSignaturePending:null,
-      shoeSignatureCount:(p?.shoeSignatureCount||0)+1,
-    }));
+    const newSig={
+      name:name.trim(), design, color, accent,
+      brandId:pending?.brandId,
+      brandName:pending?.brandName,
+      year:currentYear,
+    };
+    setPlayer(p=>{
+      const prev=Array.isArray(p?.shoeSignatures)
+        ? p.shoeSignatures
+        : (p?.shoeSignature ? [p.shoeSignature] : []);
+      return {
+        ...p,
+        // shoeSignature stays as the most-recent for back-compat with views
+        // that only know about the single field. shoeSignatures is the full
+        // ordered history (newest first).
+        shoeSignature:newSig,
+        shoeSignatures:[newSig, ...prev],
+        shoeSignaturePending:null,
+        shoeSignatureCount:(p?.shoeSignatureCount||0)+1,
+      };
+    });
     toast&&toast(`${name.trim()} unveiled by ${brandName}!`,GO);
     go("nbaAgent");
   };
@@ -7645,6 +8218,7 @@ function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam
       <ShoeContractCard
         signedShoeBrand={signedShoeBrand}
         shoeSignature={player?.shoeSignature}
+        shoeSignatures={player?.shoeSignatures}
         shoeContract={player?.shoeContract}
         ovr={ovr}
         currentYear={currentYear}
@@ -8265,7 +8839,7 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
       // Legacy alias for back-compat with archives written before this field
       // was generalized. Display code falls back to retirementTeam.
       hofJerseyTeam:hofEval.inducted?jerseyTeam:null,
-      // Purchases (so leaderboard can show business empire if any)
+      // Purchases (so the past-career detail screen can show business empire)
       purchases:player.purchases,
       // Final team
       finalTeam:nbaTeam,
@@ -11080,7 +11654,7 @@ export default function App(){
     ),
     nbaPlay:(
       <MenuFrame sub={`${nbaTeam?getTeamIdentity(nbaTeam,NBA_START_YEAR+nbaSeasons.length).name:"Team"} · Season`} title="GAMETIME">
-        <NbaPlayScreen player={player} setPlayer={setPlayer} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} allYears={allYears} go={go} toast={toast}/>
+        <NbaPlayScreen player={player} setPlayer={setPlayer} nbaTeam={nbaTeam} nbaGamesPlayed={nbaGamesPlayed} setNbaGamesPlayed={setNbaGamesPlayed} nbaSeasonTotals={nbaSeasonTotals} setNbaSeasonTotals={setNbaSeasonTotals} nbaSeasons={nbaSeasons} setNbaSeasons={setNbaSeasons} nbaMentor={nbaMentor} setNbaMentor={setNbaMentor} playoffsDone={playoffsDone} setPlayoffsDone={setPlayoffsDone} skillPoints={skillPoints} setSkillPoints={setSkillPoints} setMoney={setMoney} signedShoeBrand={signedShoeBrand} allYears={allYears} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaSkills:(
@@ -11090,7 +11664,7 @@ export default function App(){
     ),
     nbaTeam:(
       <MenuFrame sub="Roster & Mentor" title="TEAM">
-        <NbaTeamScreen player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} nbaMentor={nbaMentor} setNbaMentor={setNbaMentor} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
+        <NbaTeamScreen player={player} nbaTeam={nbaTeam} nbaSeasons={nbaSeasons} allYears={allYears} nbaMentor={nbaMentor} setNbaMentor={setNbaMentor} skillPoints={skillPoints} setSkillPoints={setSkillPoints} go={go} toast={toast}/>
       </MenuFrame>
     ),
     nbaAgent:(
@@ -11130,7 +11704,26 @@ export default function App(){
     ),
     shoeDesigner:(
       <MenuFrame sub="Signature Series" title="DESIGN STUDIO">
-        <ShoeDesignerScreen player={player} setPlayer={setPlayer} signedShoeBrand={signedShoeBrand} go={go} toast={toast}/>
+        <ShoeDesignerScreen player={player} setPlayer={setPlayer} signedShoeBrand={signedShoeBrand} nbaSeasons={nbaSeasons} go={go} toast={toast}/>
+      </MenuFrame>
+    ),
+    artestPrompt:(
+      <MenuFrame sub="The Palace · Detroit" title="MIDSEASON INCIDENT">
+        <ArtestPromptScreen onAccept={()=>go("artestFight")}/>
+      </MenuFrame>
+    ),
+    artestFight:(
+      <MenuFrame sub="No Refs. No Rules." title="THE BRAWL">
+        <ArtestFightGame onResult={(result)=>{
+          if(result.won){
+            toast&&toast("👊 You handled Ron Artest! +1 SP",GR);
+            setSkillPoints&&setSkillPoints(p=>(p||0)+1);
+          } else {
+            toast&&toast("Ron washed you. $25k fine for fighting in the stands.",RE);
+            setMoney&&setMoney(m=>Math.max(0,(m||0)-25000));
+          }
+          go("leagueHub");
+        }}/>
       </MenuFrame>
     ),
     nbaAwards:(
