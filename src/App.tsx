@@ -5578,14 +5578,30 @@ const DUNK_TYPES = {
 // One full dunk attempt: tap (or double-tap for backboard) to gather, then
 // swipe within the timing window to execute. onComplete is called with the
 // final score 0-50 (or null for a miss/timeout).
+// Visual gesture references — used by the on-screen dunk-guide card so the
+// player can see what each swipe looks like before they have to draw it.
+const DUNK_GESTURE_PATHS = {
+  "360":      "M 22 12 Q 36 12 36 22 Q 36 32 22 32 Q 8 32 8 22 Q 8 12 22 12",  // circle
+  "tomahawk": "M 8 8 L 22 32 L 36 8",                                          // V (down-up)
+  "reverse":  "M 36 22 L 8 22",                                                // right→left
+  "windmill": "M 22 32 L 22 8",                                                // up
+  "twohand":  "M 12 22 L 32 22",                                               // short flat
+};
+
+// One full dunk attempt — the new meter mechanic.
+//   1. Tap LEFT pad (or double-tap for backboard mode) → opens the window.
+//   2. Swipe 1 or 2 moves in the middle area (each accepted move logs).
+//   3. Tap RIGHT pad → finish the dunk and score it.
+// Combo bonus for landing 2 moves. Timing bonus for tapping right before the
+// window expires (don't drag it out). Backboard mode adds a flat +6.
 function DunkAttempt({attemptNum, onComplete}){
-  // phase: ready → gathered → result. "ready" = waiting for tap/double-tap.
-  // "gathered" = swipe window is open. "result" = showing the dunk score.
+  // phase: ready → gathered → result
   const [phase, setPhase] = useState("ready");
   const [backboard, setBackboard] = useState(false);
-  const [swipeProgress, setSwipeProgress] = useState(1.0); // 1.0 → 0.0 as window closes
-  const [dunkResult, setDunkResult] = useState(null); // {type, score, judges:[]}
-  const [pathPoints, setPathPoints] = useState([]); // for drawing the live swipe
+  const [moves, setMoves] = useState([]); // array of dunk-type ids landed
+  const [windowProgress, setWindowProgress] = useState(1);
+  const [pathPoints, setPathPoints] = useState([]);
+  const [dunkResult, setDunkResult] = useState(null);
 
   const tapTimerRef = useRef(null);
   const tapCountRef = useRef(0);
@@ -5593,8 +5609,9 @@ function DunkAttempt({attemptNum, onComplete}){
   const windowTimerRef = useRef(null);
   const swipePointsRef = useRef([]);
   const isSwipingRef = useRef(false);
+  const movesRef = useRef([]);
+  const finishedRef = useRef(false);
 
-  // Cleanup on unmount
   useEffect(()=>{
     return ()=> {
       if(tapTimerRef.current) clearTimeout(tapTimerRef.current);
@@ -5605,19 +5622,19 @@ function DunkAttempt({attemptNum, onComplete}){
   const openWindow = (isBackboard) => {
     setBackboard(isBackboard);
     setPhase("gathered");
-    const duration = isBackboard ? 700 : 1200; // backboard = shorter window
+    // 2.5s window normal, 1.8s backboard — generous enough to fit 2 moves
+    // and a deliberate right-tap.
+    const duration = isBackboard ? 1800 : 2500;
     windowStartRef.current = performance.now();
-    setSwipeProgress(1);
-    // Drain the progress bar via rAF
+    setWindowProgress(1);
     const tick = () => {
+      if(finishedRef.current) return;
       const elapsed = performance.now() - windowStartRef.current;
       const p = Math.max(0, 1 - elapsed/duration);
-      setSwipeProgress(p);
-      if(p <= 0 && !isSwipingRef.current){
-        // Timed out without swiping → miss
-        if(dunkResult == null){
-          finalize({type:"weak", score:0, missed:true});
-        }
+      setWindowProgress(p);
+      if(p <= 0){
+        // Timed out — auto-finalize with whatever moves we logged.
+        finalize();
         return;
       }
       windowTimerRef.current = requestAnimationFrame(tick);
@@ -5625,28 +5642,31 @@ function DunkAttempt({attemptNum, onComplete}){
     windowTimerRef.current = requestAnimationFrame(tick);
   };
 
-  const handleAreaTap = () => {
+  // LEFT pad tap — gather. Single = normal, double = backboard.
+  const handleLeftTap = () => {
     if(phase !== "ready") return;
     tapCountRef.current += 1;
     if(tapCountRef.current === 1){
-      // Wait briefly to see if a second tap comes in
       tapTimerRef.current = setTimeout(()=>{
-        if(tapCountRef.current === 1){
-          openWindow(false);
-        }
+        if(tapCountRef.current === 1){ openWindow(false); }
         tapCountRef.current = 0;
       }, 220);
     } else {
-      // Double tap → backboard mode
       if(tapTimerRef.current) clearTimeout(tapTimerRef.current);
       tapCountRef.current = 0;
       openWindow(true);
     }
   };
 
-  // Swipe handling — collect points, classify on release, score.
+  // RIGHT pad tap — finish the dunk.
+  const handleRightTap = () => {
+    if(phase !== "gathered" || isSwipingRef.current) return;
+    finalize();
+  };
+
+  // Swipe in the middle area — each completed pointerdown→up cycle is one move.
   const handlePointerDown = (e) => {
-    if(phase !== "gathered") return;
+    if(phase !== "gathered" || movesRef.current.length >= 2) return;
     isSwipingRef.current = true;
     const rect = e.currentTarget.getBoundingClientRect();
     const p = {x:e.clientX-rect.left, y:e.clientY-rect.top};
@@ -5655,24 +5675,49 @@ function DunkAttempt({attemptNum, onComplete}){
     e.currentTarget.setPointerCapture?.(e.pointerId);
   };
   const handlePointerMove = (e) => {
-    if(!isSwipingRef.current || phase !== "gathered") return;
+    if(!isSwipingRef.current) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const p = {x:e.clientX-rect.left, y:e.clientY-rect.top};
     swipePointsRef.current.push(p);
     setPathPoints([...swipePointsRef.current]);
   };
   const handlePointerUp = () => {
-    if(!isSwipingRef.current || phase !== "gathered") return;
+    if(!isSwipingRef.current) return;
     isSwipingRef.current = false;
     const type = classifyDunkGesture(swipePointsRef.current);
-    const dunk = DUNK_TYPES[type];
-    // Score: base + backboard bonus + timing bonus + variance
-    const timingBonus = Math.round(swipeProgress * 6); // 0-6 for early execution
-    const backboardBonus = backboard && type !== "weak" ? 8 : 0;
-    const variance = Math.floor(Math.random()*4) - 1; // -1 to +2
-    const raw = dunk.base + timingBonus + backboardBonus + variance;
+    if(type !== "weak"){
+      movesRef.current.push(type);
+      setMoves([...movesRef.current]);
+    }
+    swipePointsRef.current = [];
+    // Clear the live path after a brief flash so the player sees what they drew
+    setTimeout(()=> setPathPoints([]), 250);
+  };
+
+  const finalize = () => {
+    if(finishedRef.current) return;
+    finishedRef.current = true;
+    if(windowTimerRef.current) cancelAnimationFrame(windowTimerRef.current);
+
+    // No moves landed → missed
+    if(movesRef.current.length === 0){
+      const result = {types:[], score:0, judges:[], backboard, missed:true};
+      setDunkResult(result);
+      setPhase("result");
+      setTimeout(()=> onComplete && onComplete({...result, type:"weak"}), 2000);
+      return;
+    }
+
+    // Score = best move base + combo bonus + timing bonus + backboard bonus + variance
+    const bestBase = Math.max(...movesRef.current.map(t => DUNK_TYPES[t].base));
+    const comboBonus = movesRef.current.length >= 2 ? 6 : 0;
+    const timingBonus = Math.round(windowProgress * 4); // 0-4 for finishing early
+    const backboardBonus = backboard ? 6 : 0;
+    const variance = Math.floor(Math.random()*4) - 1;
+    const raw = bestBase + comboBonus + timingBonus + backboardBonus + variance;
     const score = Math.max(0, Math.min(50, raw));
-    // Generate 5 judge scores that sum near `score`
+
+    // 5 judge scores summing to exactly `score`
     const judges = [];
     let remaining = score;
     for(let i=0;i<5;i++){
@@ -5681,118 +5726,149 @@ function DunkAttempt({attemptNum, onComplete}){
       judges.push(j);
       remaining -= j;
     }
-    // Ensure sum matches exactly
     const sum = judges.reduce((a,b)=>a+b,0);
     if(sum !== score){
       const diff = score - sum;
       judges[0] = Math.max(6, Math.min(10, judges[0]+diff));
     }
-    finalize({type, score:judges.reduce((a,b)=>a+b,0), judges, backboard, missed: type === "weak"});
-  };
 
-  const finalize = (result) => {
-    if(windowTimerRef.current) cancelAnimationFrame(windowTimerRef.current);
+    const result = {
+      types: [...movesRef.current],
+      type: movesRef.current[0], // primary type for legacy callsite
+      score: judges.reduce((a,b)=>a+b,0),
+      judges, backboard,
+      missed: false,
+      isCombo: movesRef.current.length >= 2,
+    };
     setDunkResult(result);
     setPhase("result");
-    // Show result for a beat, then bubble up
-    setTimeout(()=> onComplete && onComplete(result), 2200);
+    setTimeout(()=> onComplete && onComplete(result), 2400);
   };
 
-  // Render
-  return(
-    <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
-      {/* Court backdrop with rim */}
-      <div style={{
-        position:"relative",height:170,borderRadius:12,overflow:"hidden",marginBottom:12,
-        background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 40%, #c97a3a 60%, #d68a4a 100%)",
-        border:"1px solid rgba(255,255,255,0.1)",
-      }}>
-        {/* Backboard + rim */}
-        <div style={{position:"absolute",left:"50%",top:24,transform:"translateX(-50%)",width:110,height:60,border:"3px solid #fff",borderRadius:4,background:"rgba(255,255,255,0.1)"}}/>
-        <div style={{position:"absolute",left:"50%",top:74,transform:"translateX(-50%)",width:40,height:8,background:"#ff6600",borderRadius:4,border:"2px solid #fff"}}/>
-        {/* Net */}
-        <div style={{position:"absolute",left:"50%",top:82,transform:"translateX(-50%)",width:36,height:16,borderLeft:"1px solid #fff",borderRight:"1px solid #fff",borderBottom:"1px solid #fff",borderRadius:"0 0 18px 18px",opacity:0.5}}/>
-        {/* Court lines */}
-        <div style={{position:"absolute",left:0,right:0,bottom:24,height:2,background:"rgba(255,255,255,0.4)"}}/>
-        <div style={{position:"absolute",left:"50%",bottom:0,transform:"translateX(-50%)",width:80,height:50,border:"2px solid rgba(255,255,255,0.4)",borderBottom:"none",borderRadius:"40px 40px 0 0"}}/>
-
-        {/* Player figure */}
-        <div style={{
-          position:"absolute",left:"50%",bottom:phase==="result"?105:30,
-          transform:`translateX(-50%) ${phase==="result"&&dunkResult?.type==="360"?"rotate(360deg)":""}`,
-          fontSize:38,
-          transition:"bottom 0.5s cubic-bezier(0.34,1.56,0.64,1), transform 0.6s",
-        }}>🏃‍♂️</div>
-
-        {/* Backboard mode banner */}
-        {backboard && phase === "gathered" && (
-          <div style={{position:"absolute",top:6,right:6,padding:"3px 8px",background:"#a855f7",borderRadius:4,fontSize:9,fontWeight:900,letterSpacing:1,color:"#fff"}}>
-            🏀 OFF BACKBOARD
-          </div>
-        )}
-        {/* Attempt counter */}
-        <div style={{position:"absolute",top:6,left:6,padding:"3px 8px",background:"rgba(0,0,0,0.5)",borderRadius:4,fontSize:9,fontWeight:700,letterSpacing:1,color:"#fff"}}>
-          ATTEMPT {attemptNum}/3
+  // Render result overlay
+  if(phase === "result" && dunkResult){
+    const primaryType = dunkResult.types?.[0] || dunkResult.type || "weak";
+    const dunkColor = DUNK_TYPES[primaryType]?.color || "#666";
+    return(
+      <div style={{padding:14,background:`linear-gradient(135deg, ${dunkColor}33, rgba(0,0,0,0.4))`,border:`1px solid ${dunkColor}`,borderRadius:10,marginBottom:12,textAlign:"center"}}>
+        <div style={{fontSize:36,marginBottom:4}}>
+          {dunkResult.types?.map((t,i)=>(<span key={i} style={{marginRight:i<dunkResult.types.length-1?6:0}}>{DUNK_TYPES[t]?.emoji}</span>))||"🤷"}
         </div>
-      </div>
-
-      {/* Result overlay shown after dunk */}
-      {phase === "result" && dunkResult && (
-        <div style={{padding:14,background:`linear-gradient(135deg, ${DUNK_TYPES[dunkResult.type]?.color||"#666"}33, rgba(0,0,0,0.4))`,border:`1px solid ${DUNK_TYPES[dunkResult.type]?.color||"#666"}`,borderRadius:10,marginBottom:12,textAlign:"center"}}>
-          <div style={{fontSize:32,marginBottom:4}}>{DUNK_TYPES[dunkResult.type]?.emoji||"❓"}</div>
-          <div style={{fontSize:14,fontWeight:900,color:"#fff",letterSpacing:1}}>
-            {dunkResult.missed ? "MISSED!" : `${DUNK_TYPES[dunkResult.type]?.name}${dunkResult.backboard?" (off the backboard!)":""}`}
-          </div>
-          {!dunkResult.missed && (
-            <>
-              <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:10}}>
-                {dunkResult.judges?.map((j,i)=>(
-                  <div key={i} style={{padding:"6px 10px",background:"rgba(255,255,255,0.08)",borderRadius:6,fontSize:18,fontWeight:900,color:j>=9?YE:j>=8?OR:"#aaa",fontFamily:"'Barlow Condensed',sans-serif"}}>{j}</div>
-                ))}
-              </div>
-              <div style={{fontSize:28,fontWeight:900,color:OR,marginTop:8,fontFamily:"'Barlow Condensed',sans-serif"}}>
-                SCORE: {dunkResult.score}
-              </div>
-            </>
+        <div style={{fontSize:14,fontWeight:900,color:"#fff",letterSpacing:1}}>
+          {dunkResult.missed ? "MISSED!" :
+            (dunkResult.isCombo
+              ? `${DUNK_TYPES[dunkResult.types[0]]?.name} → ${DUNK_TYPES[dunkResult.types[1]]?.name}`
+              : DUNK_TYPES[primaryType]?.name)
+          }
+          {dunkResult.backboard && !dunkResult.missed && (
+            <span style={{display:"block",fontSize:11,color:"#a855f7",marginTop:2,letterSpacing:1}}>off the backboard!</span>
           )}
         </div>
-      )}
+        {!dunkResult.missed && (
+          <>
+            <div style={{display:"flex",justifyContent:"center",gap:6,marginTop:10}}>
+              {dunkResult.judges?.map((j,i)=>(
+                <div key={i} style={{padding:"6px 10px",background:"rgba(255,255,255,0.08)",borderRadius:6,fontSize:18,fontWeight:900,color:j>=9?YE:j>=8?OR:"#aaa",fontFamily:"'Barlow Condensed',sans-serif"}}>{j}</div>
+              ))}
+            </div>
+            <div style={{fontSize:28,fontWeight:900,color:OR,marginTop:8,fontFamily:"'Barlow Condensed',sans-serif"}}>
+              SCORE: {dunkResult.score}
+            </div>
+          </>
+        )}
+      </div>
+    );
+  }
 
-      {/* Action / swipe area */}
-      {phase === "ready" && (
-        <button onPointerDown={handleAreaTap} style={{
-          width:"100%",padding:"20px 14px",background:OR,border:"none",borderRadius:12,
-          color:"#080c10",fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",
-          cursor:"pointer",userSelect:"none",
-        }}>
-          <div style={{fontSize:18,marginBottom:4}}>👆 TAP TO GATHER</div>
-          <div style={{fontSize:11,opacity:0.8,letterSpacing:1}}>or DOUBLE-TAP for off-the-backboard (shorter window, +8 bonus)</div>
+  // Build the meter UI
+  const isReady = phase === "ready";
+  const isActive = phase === "gathered";
+  const moveCount = moves.length;
+
+  return(
+    <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
+      {/* Header strip — attempt counter + backboard indicator */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,fontSize:10,letterSpacing:1.5,color:"#aaa",fontWeight:700}}>
+        <span>ATTEMPT {attemptNum}/3</span>
+        {backboard && <span style={{color:"#a855f7"}}>🏀 OFF-BACKBOARD MODE</span>}
+        <span style={{color:isActive?(windowProgress>0.4?GR:windowProgress>0.2?YE:RE):"#666"}}>
+          {isReady ? "AWAITING GATHER" : isActive ? `${Math.ceil(windowProgress*2.5)}s LEFT` : ""}
+        </span>
+      </div>
+
+      {/* The big meter — three sections in a row */}
+      <div style={{
+        display:"flex",alignItems:"stretch",gap:6,height:180,marginBottom:10,
+        opacity:phase==="result"?0.4:1,
+      }}>
+        {/* LEFT TAP PAD */}
+        <button
+          onPointerDown={handleLeftTap}
+          disabled={!isReady}
+          style={{
+            flex:"0 0 22%",
+            background: isReady ? `linear-gradient(135deg, ${GR}, #006633)` : "rgba(255,255,255,0.04)",
+            border: isReady ? `2px solid ${GR}` : "2px solid rgba(255,255,255,0.08)",
+            borderRadius:10,
+            color: isReady ? "#080c10" : "#444",
+            fontWeight:900,
+            cursor: isReady ? "pointer" : "default",
+            userSelect:"none",
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,
+            fontFamily:"'Barlow Condensed',sans-serif",
+            transition:"opacity 0.15s",
+          }}
+        >
+          <div style={{fontSize:28}}>👆</div>
+          <div style={{fontSize:14,letterSpacing:2}}>TAP</div>
+          <div style={{fontSize:8,letterSpacing:1,opacity:0.7,textAlign:"center",padding:"0 4px",lineHeight:1.2}}>
+            {isReady ? "GATHER · double for backboard" : "✓"}
+          </div>
         </button>
-      )}
 
-      {phase === "gathered" && (
+        {/* MIDDLE SWIPE ZONE */}
         <div
           onPointerDown={handlePointerDown}
           onPointerMove={handlePointerMove}
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
           style={{
-            position:"relative",height:170,
-            background:`linear-gradient(135deg, ${backboard?"#a855f7":OR}22, rgba(0,0,0,0.4))`,
-            border:`2px solid ${backboard?"#a855f7":OR}`,
-            borderRadius:12,padding:10,touchAction:"none",cursor:"crosshair",
+            flex:1,position:"relative",
+            background: isActive ? `linear-gradient(180deg, ${backboard?"#a855f7":OR}22, rgba(0,0,0,0.5))` : "rgba(255,255,255,0.03)",
+            border: isActive ? `2px solid ${backboard?"#a855f7":OR}` : "2px dashed rgba(255,255,255,0.12)",
+            borderRadius:10,
+            touchAction:"none",
+            cursor: isActive ? "crosshair" : "default",
+            transition:"border-color 0.15s",
           }}
         >
-          {/* Timing bar */}
-          <div style={{position:"absolute",top:6,left:10,right:10,height:4,background:"rgba(255,255,255,0.1)",borderRadius:2,overflow:"hidden"}}>
-            <div style={{width:`${swipeProgress*100}%`,height:"100%",background:swipeProgress>0.4?GR:swipeProgress>0.2?YE:RE,transition:"background 0.2s"}}/>
+          {/* Timing bar across the top */}
+          {isActive && (
+            <div style={{position:"absolute",top:6,left:8,right:8,height:4,background:"rgba(255,255,255,0.1)",borderRadius:2,overflow:"hidden"}}>
+              <div style={{width:`${windowProgress*100}%`,height:"100%",background:windowProgress>0.4?GR:windowProgress>0.2?YE:RE,transition:"background 0.2s"}}/>
+            </div>
+          )}
+          {/* Heading */}
+          <div style={{position:"absolute",top:isActive?18:8,left:0,right:0,textAlign:"center",fontSize:10,letterSpacing:2,color:isActive?"#fff":"#555",fontWeight:700}}>
+            {isReady ? "SWIPE ZONE" : isActive ? "SWIPE 1 OR 2 MOVES" : ""}
           </div>
-          <div style={{position:"absolute",top:18,left:0,right:0,textAlign:"center",fontSize:11,letterSpacing:2,color:"#fff",fontWeight:700}}>
-            SWIPE YOUR MOVE
-          </div>
-          <div style={{position:"absolute",bottom:8,left:10,right:10,fontSize:9,color:"rgba(255,255,255,0.6)",letterSpacing:1,textAlign:"center"}}>
-            🌀 CIRCLE = 360 · ↩ RIGHT→LEFT = REVERSE · ↕ DOWN-UP = TOMAHAWK · ↑ UP = WINDMILL
-          </div>
+          {/* Moves landed badges */}
+          {isActive && moveCount > 0 && (
+            <div style={{position:"absolute",top:36,left:0,right:0,display:"flex",justifyContent:"center",gap:6}}>
+              {moves.map((m,i)=>(
+                <div key={i} style={{
+                  padding:"4px 8px",background:`${DUNK_TYPES[m].color}33`,border:`1px solid ${DUNK_TYPES[m].color}`,
+                  borderRadius:6,fontSize:11,fontWeight:900,color:"#fff",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:1,
+                }}>{DUNK_TYPES[m].emoji} {DUNK_TYPES[m].name.toUpperCase()}</div>
+              ))}
+            </div>
+          )}
+          {/* Hint text */}
+          {isActive && moveCount === 0 && (
+            <div style={{position:"absolute",bottom:8,left:8,right:8,fontSize:9,color:"rgba(255,255,255,0.55)",letterSpacing:0.5,textAlign:"center",lineHeight:1.4}}>
+              🌀 circle · ↩ right→left · ↕ down-up · ↑ up
+            </div>
+          )}
           {/* Live swipe path */}
           {pathPoints.length > 1 && (
             <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%">
@@ -5807,14 +5883,41 @@ function DunkAttempt({attemptNum, onComplete}){
             </svg>
           )}
         </div>
-      )}
+
+        {/* RIGHT TAP PAD */}
+        <button
+          onPointerDown={handleRightTap}
+          disabled={!isActive || moveCount === 0}
+          style={{
+            flex:"0 0 22%",
+            background: (isActive && moveCount > 0) ? `linear-gradient(135deg, ${OR}, #c8501a)` : "rgba(255,255,255,0.04)",
+            border: (isActive && moveCount > 0) ? `2px solid ${OR}` : "2px solid rgba(255,255,255,0.08)",
+            borderRadius:10,
+            color: (isActive && moveCount > 0) ? "#080c10" : "#444",
+            fontWeight:900,
+            cursor: (isActive && moveCount > 0) ? "pointer" : "default",
+            userSelect:"none",
+            display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:4,
+            fontFamily:"'Barlow Condensed',sans-serif",
+            transition:"opacity 0.15s, background 0.2s",
+          }}
+        >
+          <div style={{fontSize:28}}>🏀</div>
+          <div style={{fontSize:14,letterSpacing:2}}>TAP</div>
+          <div style={{fontSize:8,letterSpacing:1,opacity:0.7,textAlign:"center",padding:"0 4px",lineHeight:1.2}}>
+            {isActive ? (moveCount > 0 ? "FINISH IT" : "swipe first") : "DUNK"}
+          </div>
+        </button>
+      </div>
     </div>
   );
 }
 
 // Prompt screen — banner, contestant list, two choices. Declining still routes
 // to the contest because the user gets the invite either way.
-function SlamDunkPromptScreen({onAccept, onDecline}){
+function SlamDunkPromptScreen({player, nbaTeam, onAccept, onDecline}){
+  const playerName = (player?.name || "You").toUpperCase();
+  const playerTeam = nbaTeam || "Your team";
   return(
     <div style={{padding:"4px 0 20px"}}>
       <img src="/dunk.gif" alt="Sprite Rising Stars Slam Dunk" style={{display:"block",width:"100%",maxWidth:380,margin:"0 auto 14px",borderRadius:8}}/>
@@ -5828,7 +5931,7 @@ function SlamDunkPromptScreen({onAccept, onDecline}){
         Sprite wants you on the All-Star Saturday card. The four contestants:
         <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
           {[
-            {name:"YOU",          team:"the future of the league", you:true},
+            {name: playerName,    team: playerTeam, you:true},
             {name:"Josh Smith",   team:"Atlanta Hawks"},
             {name:"JR Smith",     team:"New Orleans Hornets"},
             {name:"Chris \"Birdman\" Andersen", team:"New Orleans Hornets"},
@@ -5853,30 +5956,46 @@ function SlamDunkPromptScreen({onAccept, onDecline}){
   );
 }
 
-// Full contest game — manages stage progression (round1 → results → finals →
-// final-results) and bubbles a result string up to the route's onDone.
-function SlamDunkContestGame({onDone}){
-  // stage: round1 → round1Done → finals → finalsDone
-  const [stage, setStage] = useState("round1");
+// Full contest game — manages stage progression (intro → round1 → results →
+// finals → final-results) and bubbles a result string up to the route's onDone.
+// Player + nbaTeam props are used to label the player on standings/scoreboards.
+function SlamDunkContestGame({player, nbaTeam, onDone}){
+  // stage: intro → round1 → round1Done → finals → finalsDone
+  const [stage, setStage] = useState("intro");
   const [round1Score, setRound1Score] = useState(0);
   const [round1Attempts, setRound1Attempts] = useState(0);
   const [finalsScores, setFinalsScores] = useState([]); // [dunk1Score, dunk2Score]
   const [finalsAttempts, setFinalsAttempts] = useState(0);
   const [currentDunkKey, setCurrentDunkKey] = useState(0); // forces DunkAttempt remount
+  const [playthrough, setPlaythrough] = useState(0); // increments on REPLAY
 
-  // Scripted opponent scores. Josh Smith (the real winner in 2005) is the
-  // toughest challenger; JR and Birdman finish behind to make sure the player
-  // advances if they put up a solid round.
+  const playerName = (player?.name || "You").toUpperCase();
+  const playerTeam = nbaTeam || "Your team";
+
+  // Reset state for a fresh playthrough — used by the REPLAY button.
+  const replay = () => {
+    setStage("intro");
+    setRound1Score(0);
+    setRound1Attempts(0);
+    setFinalsScores([]);
+    setFinalsAttempts(0);
+    setCurrentDunkKey(k=>k+1);
+    setPlaythrough(p=>p+1);
+  };
+
+  // Scripted opponent scores. Re-roll on each playthrough so a REPLAY isn't
+  // against the exact same numbers. Josh Smith (the real 2005 winner) is the
+  // toughest; JR and Birdman finish behind to make sure the player advances
+  // if they put up a solid round.
   const round1Opponents = useMemo(()=>({
     josh: 42 + Math.floor(Math.random()*4),    // 42-45
     jr:   36 + Math.floor(Math.random()*4),    // 36-39
     bird: 33 + Math.floor(Math.random()*4),    // 33-36
-  }),[]);
+  }),[playthrough]);
   const finalsTotal = useMemo(()=> {
-    // Josh in finals: 42-46 + 43-47 → 85-93 combined. Player needs a strong
-    // dunk OR a backboard bonus to beat him.
+    // Josh in finals: 42-46 + 43-47 → 85-93 combined.
     return [42 + Math.floor(Math.random()*5), 43 + Math.floor(Math.random()*5)];
-  },[]);
+  },[playthrough]);
 
   // Handle one attempt — track best score across the 3 allowed attempts.
   // If they MISS, count it but allow retry (max 3). If they LAND a dunk, also
@@ -5922,10 +6041,78 @@ function SlamDunkContestGame({onDone}){
     }
   };
 
+  // Intro stage — show the dunk gesture reference so the player knows what
+  // each swipe produces before they have to draw it under pressure.
+  if(stage === "intro"){
+    const guideMoves = [
+      {id:"360",      gesture:"trace a circle"},
+      {id:"tomahawk", gesture:"swipe DOWN then UP"},
+      {id:"reverse",  gesture:"swipe RIGHT → LEFT"},
+      {id:"windmill", gesture:"swipe straight UP"},
+    ];
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>HOW TO DUNK</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>SWIPE GUIDE</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:4,lineHeight:1.4}}>
+            Tap LEFT to gather → swipe 1 or 2 moves → tap RIGHT to finish.
+          </div>
+        </div>
+
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+          {guideMoves.map(g=>{
+            const dt = DUNK_TYPES[g.id];
+            return(
+              <div key={g.id} style={{
+                background:`linear-gradient(135deg, ${dt.color}1a, rgba(255,255,255,0.02))`,
+                border:`1px solid ${dt.color}44`,
+                borderRadius:8,padding:"10px 8px",
+                display:"flex",alignItems:"center",gap:8,
+              }}>
+                {/* SVG gesture preview */}
+                <div style={{flexShrink:0,width:44,height:40,background:"rgba(0,0,0,0.3)",borderRadius:6,display:"flex",alignItems:"center",justifyContent:"center"}}>
+                  <svg width="44" height="40" viewBox="0 0 44 40">
+                    <path d={DUNK_GESTURE_PATHS[g.id]} fill="none" stroke={dt.color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" markerEnd={`url(#arr-${g.id})`}/>
+                    <defs>
+                      <marker id={`arr-${g.id}`} viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                        <path d="M 0 0 L 10 5 L 0 10 z" fill={dt.color}/>
+                      </marker>
+                    </defs>
+                  </svg>
+                </div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:11,fontWeight:900,color:dt.color,letterSpacing:1}}>{dt.emoji} {dt.name.toUpperCase()}</div>
+                  <div style={{fontSize:9,color:"#aaa",marginTop:1,lineHeight:1.3}}>{g.gesture}</div>
+                  <div style={{fontSize:9,color:"#666",marginTop:1,letterSpacing:0.5}}>BASE {dt.base} PTS</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Tips card */}
+        <div style={{background:"rgba(255,215,0,0.05)",border:`1px solid ${YE}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14,lineHeight:1.5}}>
+          <div style={{fontSize:10,fontWeight:900,color:YE,letterSpacing:1.5,marginBottom:5}}>💡 ADVANCED</div>
+          <div><b>2-move combo</b> → +6 bonus</div>
+          <div><b>Double-tap LEFT</b> → off-the-backboard mode (+6, shorter window)</div>
+          <div><b>Tap RIGHT early</b> while time remains → timing bonus</div>
+        </div>
+
+        <button onClick={()=>{
+          setStage("round1");
+          setCurrentDunkKey(k=>k+1);
+        }} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          🏀 BEGIN ROUND 1 →
+        </button>
+      </div>
+    );
+  }
+
   // Round 1 standings — top 2 advance
   if(stage === "round1Done"){
     const board = [
-      {name:"YOU", score:round1Score, you:true},
+      {name:playerName, score:round1Score, you:true},
       {name:"Josh Smith", score:round1Opponents.josh},
       {name:"JR Smith", score:round1Opponents.jr},
       {name:"Birdman", score:round1Opponents.bird},
@@ -5962,17 +6149,25 @@ function SlamDunkContestGame({onDone}){
             </div>
           ))}
         </div>
-        <button onClick={()=>{
-          if(advancing){
-            setStage("finals");
-            setFinalsAttempts(0);
-            setCurrentDunkKey(k=>k+1);
-          } else {
-            onDone && onDone({result:"eliminated", round1Score, finalsTotal:0});
-          }
-        }} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
-          {advancing ? "🏆 ONTO THE FINALS →" : "← FINISH IT UP"}
-        </button>
+        {/* Show advance button + replay option if eliminated */}
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={()=>{
+            if(advancing){
+              setStage("finals");
+              setFinalsAttempts(0);
+              setCurrentDunkKey(k=>k+1);
+            } else {
+              onDone && onDone({result:"eliminated", round1Score, finalsTotal:0});
+            }
+          }} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            {advancing ? "🏆 ONTO THE FINALS →" : "← FINISH IT UP"}
+          </button>
+          {!advancing && (
+            <button onClick={replay} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+              🔄 REPLAY CONTEST
+            </button>
+          )}
+        </div>
       </div>
     );
   }
@@ -5991,7 +6186,7 @@ function SlamDunkContestGame({onDone}){
         {/* Head-to-head */}
         <div style={{display:"flex",gap:8,marginBottom:14}}>
           <div style={{flex:1,padding:"12px 10px",background:won?`${GO}22`:"rgba(255,255,255,0.04)",border:`1.5px solid ${won?GO:"rgba(255,255,255,0.1)"}`,borderRadius:8,textAlign:"center"}}>
-            <div style={{fontSize:9,letterSpacing:1.5,color:won?GO:"#aaa",fontWeight:700,marginBottom:6}}>YOU</div>
+            <div style={{fontSize:9,letterSpacing:1.5,color:won?GO:"#aaa",fontWeight:700,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{playerName}</div>
             <div style={{fontSize:11,color:"#888",marginBottom:2}}>{finalsScores[0]||0} + {finalsScores[1]||0}</div>
             <div style={{fontSize:30,fontWeight:900,color:won?GO:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>{playerTotal}</div>
           </div>
@@ -6002,12 +6197,17 @@ function SlamDunkContestGame({onDone}){
             <div style={{fontSize:30,fontWeight:900,color:!won?GO:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>{joshTotal}</div>
           </div>
         </div>
-        <button onClick={()=> onDone && onDone({
-          result: won ? "won" : "finalsLost",
-          round1Score, finalsTotal:playerTotal,
-        })} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
-          {won ? "🏆 COLLECT THE TROPHY →" : "← HEAD HOME"}
-        </button>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={()=> onDone && onDone({
+            result: won ? "won" : "finalsLost",
+            round1Score, finalsTotal:playerTotal,
+          })} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            {won ? "🏆 COLLECT THE TROPHY →" : "← HEAD HOME"}
+          </button>
+          <button onClick={replay} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+            🔄 REPLAY CONTEST
+          </button>
+        </div>
       </div>
     );
   }
@@ -7026,13 +7226,25 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
           const restaurants=pp.restaurants||[];
           const minCost=Math.min(...RESTAURANT_CHAINS.map(c=>c.stake),ownChainCost(1));
           const canAfford=(money||0)>=minCost;
+          // Pick the right icon: prefer your latest OWN restaurant (your brand),
+          // else the latest invested chain's logo, else the generic burger.
+          // Order in the array is insertion-order (purchases append to the end),
+          // so "latest own" = last own entry, "latest" = last entry.
+          const lastOwn = [...restaurants].reverse().find(r=>r.type==="own");
+          const lastEntry = restaurants[restaurants.length-1];
+          let icon = "🍔";
+          if(lastOwn){
+            icon = lastOwn.logoEmoji || "🍔";
+          } else if(lastEntry?.type === "invested"){
+            icon = RESTAURANT_CHAIN_BY_ID[lastEntry.chainId]?.icon || "🍔";
+          }
           if(restaurants.length>0){
             // Already owns one or more — show count + total annual income
             const totalAnnual=restaurants.reduce((s,r)=>s+(r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations)),0);
             return(
               <button onClick={()=>go("nbaRestaurant")} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(0,220,100,0.06)",border:`1.5px solid ${GR}55`,borderRadius:10,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
                 <div style={{display:"flex",alignItems:"center",gap:12}}>
-                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>🍔</div>
+                  <div style={{fontSize:30,width:42,textAlign:"center",flexShrink:0}}>{icon}</div>
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:9,color:GR,letterSpacing:1.5,fontWeight:700,marginBottom:2}}>✓ {restaurants.length} VENTURE{restaurants.length===1?"":"S"}</div>
                     <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
@@ -7045,7 +7257,8 @@ function NbaSpendScreen({money, setMoney, player, setPlayer, nbaSeasons, go, toa
               </button>
             );
           }
-          // Not yet owned — entry card with min-cost teaser
+          // Not yet owned — entry card with min-cost teaser. Default burger
+          // emoji since the player hasn't chosen anything yet.
           return(
             <button onClick={()=>{if(canAfford) go("nbaRestaurant"); else toast&&toast(`Restaurants start at ${fmtMoney(minCost)}`,"#888");}} disabled={!canAfford} style={{display:"block",width:"100%",textAlign:"left",padding:"12px 14px",background:"rgba(255,255,255,0.04)",border:`1px solid ${canAfford?OR+"55":"rgba(255,255,255,0.08)"}`,borderRadius:10,color:"#fff",cursor:canAfford?"pointer":"not-allowed",opacity:canAfford?1:0.55,fontFamily:"'Barlow Condensed',sans-serif"}}>
               <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:6}}>
@@ -13047,6 +13260,7 @@ export default function App(){
     slamDunkPrompt:(
       <MenuFrame sub="All-Star Saturday Night" title="DUNK CONTEST">
         <SlamDunkPromptScreen
+          player={player} nbaTeam={nbaTeam}
           onAccept={()=>go("slamDunkContest")}
           onDecline={()=>{
             // Player passed. No career-score boost; just back to the league.
@@ -13059,7 +13273,7 @@ export default function App(){
     ),
     slamDunkContest:(
       <MenuFrame sub="Sprite Rising Stars" title="SLAM DUNK">
-        <SlamDunkContestGame onDone={(outcome)=>{
+        <SlamDunkContestGame player={player} nbaTeam={nbaTeam} onDone={(outcome)=>{
           // outcome: {result:"won"|"finalsLost"|"eliminated", round1Score, finalsTotal}
           // Persist result for career-score calc + toast a flavor line.
           setPlayer(p=>({
