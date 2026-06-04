@@ -5018,30 +5018,38 @@ function ArtestPromptScreen({onAccept}){
 }
 
 // Punch-Out style fight. Ron oscillates left/right between phases:
-//   idle (0.55-0.95s random) → winding (0.7s) → attacking (0.25s dodge window)
+//   idle (0.35-0.75s random) → winding (0.65s) → attacking (0.25s dodge window)
 //     ↓ dodged                                ↓ not dodged
 //   stunned (0.7s — bonus damage window)     you take ~20 dmg
 //
-// Phases tightened further on the second pass — Ron throws a punch roughly
-// every 1.5s now. Reading the winding telegraph is mandatory; reaction time
-// alone won't save you on the 250ms dodge window.
+// Ron's cycle tightened further on the third pass — he throws a punch about
+// every ~1.25s now (was ~1.5s, originally ~2s). Constant pressure forces
+// stamina management.
+//
+// Stamina system: every PUNCH costs 22 stamina (max 100). Stamina regens at
+// 14/sec when you're not punching. Hitting 0 means you physically can't throw
+// — the button stays disabled until you regen to 22. Stops mashing dead in
+// the water; rhythm is now: throw a 2-3 punch burst, breathe, throw again.
 //
 // Player taps PUNCH any time:
 //   · idle: 5 dmg (combo+1) — 8 dmg if combo ≥ 4
 //   · winding: 2 dmg (glancing, combo unchanged)
 //   · attacking: 2 dmg AND you eat a 10 dmg counter — combo resets
 //   · stunned: 15 dmg counter punch (combo+1)
-// Each punch animates a fist flying up from below so you can SEE the punch
-// land — feedback matters when timing is tight.
+// Each punch animates a fist flying up from below so you can SEE the punch.
 //
 // After either HP hits 0, an overlay covers the arena with "SUSPENDED 5 GAMES"
-// (no win/lose announcement) + REMATCH + WE'RE DONE HERE. Rematches keep the
-// best result across attempts; the outer onDone receives "won"/"lost" once.
+// + REMATCH + WE'RE DONE HERE. Rematches keep the best result.
 function ArtestFightGame({onDone}){
   // gameId increments on rematch — useEffects keyed on it restart the loop.
   const [gameId, setGameId] = useState(0);
   const [artestHp, setArtestHp] = useState(100);
   const [playerHp, setPlayerHp] = useState(100);
+  // Stamina: 0-100, drains per punch, regenerates over time.
+  const [stamina, setStamina] = useState(100);
+  const staminaRef = useRef(100);
+  const STAMINA_COST = 22;
+  const STAMINA_REGEN_PER_SEC = 14;
   const [phase, setPhase] = useState("idle"); // idle | winding | attacking | stunned | done
   const [combo, setCombo] = useState(0);
   const [hitFlash, setHitFlash] = useState(null);
@@ -5093,7 +5101,7 @@ function ArtestFightGame({onDone}){
       const cur = phaseRef.current;
       if(cur === "idle"){
         // Random pause 0.55-0.95s before winding up (was 0.9-1.5s)
-        const wait = 550 + Math.random()*400;
+        const wait = 350 + Math.random()*400;
         timerRef.current = setTimeout(()=>{
           if(finishedRef.current) return;
           setPhase("winding");
@@ -5104,7 +5112,7 @@ function ArtestFightGame({onDone}){
           if(finishedRef.current) return;
           setPhase("attacking");
           advance();
-        }, 700);
+        }, 650);
       } else if(cur === "attacking"){
         // 250ms dodge window (was 300)
         timerRef.current = setTimeout(()=>{
@@ -5128,7 +5136,7 @@ function ArtestFightGame({onDone}){
           if(finishedRef.current) return;
           setPhase("idle");
           advance();
-        }, 700);
+        }, 650);
       }
     };
 
@@ -5157,6 +5165,14 @@ function ArtestFightGame({onDone}){
 
   const handlePunch = () => {
     if(finishedRef.current) return;
+    // Stamina gate — can't throw if you don't have enough gas. Stops mashing.
+    if(staminaRef.current < STAMINA_COST){
+      pushFloat("GASSED!", "#888", 30, 70);
+      return;
+    }
+    // Spend stamina immediately, push the visual + drive the damage logic
+    staminaRef.current = Math.max(0, staminaRef.current - STAMINA_COST);
+    setStamina(staminaRef.current);
     pushFist();
     const cur = phaseRef.current;
     let dmg = 0;
@@ -5215,7 +5231,7 @@ function ArtestFightGame({onDone}){
       const idleLoop = () => {
         if(finishedRef.current) return;
         if(phaseRef.current === "idle"){
-          const wait = 550 + Math.random()*400;
+          const wait = 350 + Math.random()*400;
           timerRef.current = setTimeout(()=>{
             if(finishedRef.current) return;
             setPhase("winding");
@@ -5243,7 +5259,7 @@ function ArtestFightGame({onDone}){
                   idleLoop();
                 }
               }, 250);
-            }, 700);
+            }, 650);
           }, wait);
         }
       };
@@ -5251,9 +5267,30 @@ function ArtestFightGame({onDone}){
         if(finishedRef.current) return;
         setPhase("idle");
         idleLoop();
-      }, 700);
+      }, 650);
     }
   };
+
+  // Stamina regen — fills back at STAMINA_REGEN_PER_SEC, paused when fight
+  // is over. Keyed on gameId so rematches restart cleanly.
+  useEffect(()=>{
+    let raf, last = performance.now();
+    const tick = (now) => {
+      if(finishedRef.current){
+        return; // don't reschedule
+      }
+      const dt = (now - last) / 1000;
+      last = now;
+      if(staminaRef.current < 100){
+        staminaRef.current = Math.min(100, staminaRef.current + STAMINA_REGEN_PER_SEC * dt);
+        setStamina(staminaRef.current);
+      }
+      raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => { if(raf) cancelAnimationFrame(raf); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[gameId]);
 
   const handleRematch = () => {
     setArtestHp(100);
@@ -5264,6 +5301,8 @@ function ArtestFightGame({onDone}){
     setHitFlash(null);
     setFloatText([]);
     setFists([]);
+    staminaRef.current = 100;
+    setStamina(100);
     setGameId(g => g + 1);
   };
 
@@ -5296,12 +5335,27 @@ function ArtestFightGame({onDone}){
           <div style={{width:`${artestHp}%`,height:"100%",background:`linear-gradient(90deg, ${RE}, ${OR})`,transition:"width 0.2s"}}/>
         </div>
       </div>
-      <div style={{marginBottom:10}}>
+      <div style={{marginBottom:6}}>
         <div style={{display:"flex",justifyContent:"space-between",fontSize:10,letterSpacing:1.5,color:"#aaa",marginBottom:3}}>
           <span>YOU</span><span>{playerHp}/100</span>
         </div>
         <div style={{height:10,background:"rgba(255,255,255,0.08)",borderRadius:5,overflow:"hidden",border:hitFlash==="player"?`2px solid ${RE}`:"none"}}>
           <div style={{width:`${playerHp}%`,height:"100%",background:`linear-gradient(90deg, ${GR}, ${BL})`,transition:"width 0.2s"}}/>
+        </div>
+      </div>
+      {/* Stamina bar — drains 22 per punch, regens 14/sec. When below
+          STAMINA_COST, you literally cannot throw; the bar flashes red and
+          the PUNCH button greys out. Forces rhythm over mashing. */}
+      <div style={{marginBottom:10}}>
+        <div style={{display:"flex",justifyContent:"space-between",fontSize:9,letterSpacing:1.5,color:"#888",marginBottom:3}}>
+          <span>STAMINA</span><span>{Math.round(stamina)}/100</span>
+        </div>
+        <div style={{height:6,background:"rgba(255,255,255,0.08)",borderRadius:3,overflow:"hidden"}}>
+          <div style={{
+            width:`${stamina}%`,height:"100%",
+            background: stamina>=STAMINA_COST ? `linear-gradient(90deg, ${YE}, ${OR})` : RE,
+            transition:"width 0.15s, background 0.2s",
+          }}/>
         </div>
       </div>
 
@@ -5397,8 +5451,18 @@ function ArtestFightGame({onDone}){
         <button onPointerDown={handleDodge} style={{padding:"16px 0",background:phase==="attacking"?BL:"rgba(74,168,255,0.15)",border:phase==="attacking"?`2px solid ${BL}`:"1px solid rgba(74,168,255,0.3)",borderRadius:10,color:"#fff",fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",cursor:"pointer",userSelect:"none"}}>
           🛡 DODGE
         </button>
-        <button onPointerDown={handlePunch} style={{padding:"16px 0",background:phase==="stunned"?YE:OR,border:"none",borderRadius:10,color:"#080c10",fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",cursor:"pointer",userSelect:"none"}}>
-          👊 PUNCH
+        <button onPointerDown={handlePunch} style={{
+          padding:"16px 0",
+          background: stamina < STAMINA_COST ? "#444" : (phase==="stunned" ? YE : OR),
+          border:"none",borderRadius:10,
+          color: stamina < STAMINA_COST ? "#888" : "#080c10",
+          fontWeight:900,letterSpacing:2,fontSize:14,fontFamily:"'Barlow Condensed',sans-serif",
+          cursor: stamina < STAMINA_COST ? "not-allowed" : "pointer",
+          opacity: stamina < STAMINA_COST ? 0.55 : 1,
+          userSelect:"none",
+          transition:"background 0.15s, opacity 0.15s",
+        }}>
+          {stamina < STAMINA_COST ? "😮‍💨 GASSED" : "👊 PUNCH"}
         </button>
       </div>
 
@@ -5508,36 +5572,60 @@ function OffseasonScreen({
     }
 
     // (4) Age-based skill decay — tiered curve. Bryan Johnson Pills push the
-    // start threshold from 30 to 32 (two extra peak years). 30-32 tier was
-    // beefed up so peak OVR genuinely lands at age 30 most of the time.
-    //   30-32: 80% chance, 2 skills, 2-4 points each (was 60% / 1-2 / 1-3)
-    //   33-34: 90% chance, 2 skills, 2-4 points each
-    //   35-37: 100% chance, 2-3 skills, 2-5 points each
-    //   38+:   100% chance, 3-4 skills, 3-6 points each
+    // start threshold from 30 to 32 (two extra peak years). Tiers retuned so
+    // a 90-OVR player at 30 lands in the high 70s by 37 — aging takes from
+    // your best skills first (weighted random pick by current value) since
+    // explosive athleticism and shooting touch fade before mechanics.
+    //   30-32: 100% chance, 2-3 skills, 3-5 points each
+    //   33-34: 100% chance, 3 skills, 3-6 points each
+    //   35-37: 100% chance, 3-4 skills, 4-7 points each
+    //   38+:   100% chance, 4-5 skills, 5-9 points each
     const ageAfterSeason=calcAge(allYears,nbaSeasons)+1;
     const onPills=playerOwns(player,"bryan_johnson_pills");
     const decayThreshold=onPills?32:30;
     if(ageAfterSeason>=decayThreshold){
       let decayChance, numToDecay, dropMin, dropMax;
       if(ageAfterSeason>=38){
-        decayChance=1.0; numToDecay=3+Math.floor(Math.random()*2); dropMin=3; dropMax=6;
+        decayChance=1.0; numToDecay=4+Math.floor(Math.random()*2); dropMin=5; dropMax=9;
       } else if(ageAfterSeason>=35){
-        decayChance=1.0; numToDecay=2+Math.floor(Math.random()*2); dropMin=2; dropMax=5;
+        decayChance=1.0; numToDecay=3+Math.floor(Math.random()*2); dropMin=4; dropMax=7;
       } else if(ageAfterSeason>=33){
-        decayChance=0.90; numToDecay=2; dropMin=2; dropMax=4;
+        decayChance=1.0; numToDecay=3; dropMin=3; dropMax=6;
       } else {
         // 30-32 (or 32 only if pills are owned)
-        decayChance=0.80; numToDecay=2; dropMin=2; dropMax=4;
+        decayChance=1.0; numToDecay=2+Math.floor(Math.random()*2); dropMin=3; dropMax=5;
       }
       if(Math.random()<decayChance){
         const skills={...(player.skills||{})};
         const keys=Object.keys(skills);
         if(keys.length>0){
-          const shuffled=[...keys].sort(()=>Math.random()-0.5);
+          // Weighted random selection — bias toward HIGH skills because that's
+          // what real aging targets first. A skill at 90 has 7× the chance of
+          // being picked vs a skill at 30. Without this bias, decay often
+          // chipped at already-low skills the player didn't care about, so
+          // OVR didn't move even when 2-3 "drops" happened. Weight = max(1, v-20).
+          const pickWeighted=()=>{
+            const remaining=keys.filter(k=>!decayedKeys.includes(k));
+            if(remaining.length===0) return null;
+            const totalW=remaining.reduce((s,k)=>s+Math.max(1,(skills[k]||50)-20),0);
+            let r=Math.random()*totalW;
+            for(const k of remaining){
+              r-=Math.max(1,(skills[k]||50)-20);
+              if(r<=0) return k;
+            }
+            return remaining[remaining.length-1];
+          };
           const decayedSkills=[];
-          for(let i=0;i<numToDecay && i<shuffled.length;i++){
-            const k=shuffled[i];
-            const drop=dropMin+Math.floor(Math.random()*(dropMax-dropMin+1));
+          const decayedKeys=[];
+          for(let i=0;i<numToDecay;i++){
+            const k=pickWeighted();
+            if(!k) break;
+            decayedKeys.push(k);
+            // Drop magnitude scales gently with current skill value — losing
+            // 5 off a 90 hurts more than losing 5 off a 50, mirroring how a
+            // 5pt decline at the top means more than the same at the floor.
+            const baseDrop=dropMin+Math.floor(Math.random()*(dropMax-dropMin+1));
+            const drop=baseDrop;
             const newVal=Math.max(30,(skills[k]||50)-drop);
             if(newVal<skills[k]){
               decayedSkills.push({skill:k, drop:skills[k]-newVal, from:skills[k], to:newVal});
@@ -7686,7 +7774,7 @@ function AlbumStatusPanel({album, currentYear, setMoney, setPlayer, onBackToList
 // Compact card sitting on the Agent screen between the player contract and
 // the trade/extension request panel. Shows current brand + bonus + signature
 // shoe (if any), plus a "BROWSE OFFERS" link that opens the picker.
-function ShoeContractCard({signedShoeBrand, shoeSignature, shoeSignatures, shoeContract, ovr, currentYear, onBrowse, onDesignSignature}){
+function ShoeContractCard({signedShoeBrand, shoeSignature, shoeSignatures, shoeContract, ovr, currentYear, player, onBrowse, onDesignSignature}){
   const hasDeal=!!signedShoeBrand;
   const currentColor=signedShoeBrand?.color||"#888";
   const remainingYears=shoeContract?shoeDealRemainingYears(shoeContract,currentYear):0;
@@ -7730,9 +7818,12 @@ function ShoeContractCard({signedShoeBrand, shoeSignature, shoeSignatures, shoeC
             </div>
           </div>
 
-          {/* Signature shoe preview if they have one */}
-          {shoeSignature&&(
-            <ShoeSignaturePreview shoeSignature={shoeSignature}/>
+          {/* Full signature collection — shows EVERY release, not just the
+              latest. Each card displays the brand and lifetime sales (locked
+              at the time of release). Pulls player so legacy sigs without a
+              stored sales number can be estimated. */}
+          {(sigList.length > 0) && (
+            <ShoeCollection player={player}/>
           )}
 
           {/* Eligible to design a signature shoe RIGHT NOW (grew into the OVR
@@ -7764,6 +7855,110 @@ function ShoeContractCard({signedShoeBrand, shoeSignature, shoeSignatures, shoeC
 // Renders a signature shoe preview row — used by ShoeContractCard. The icon
 // reflects the silhouette via a per-design emoji set so a high-top doesn't
 // render as a low-top runner shoe.
+// Sales-at-release calculation. Multiplies a brand-prestige base by an
+// OVR-driven popularity curve and an accolades boost (rings + MVPs travel),
+// then adds ±25% variance so two equal players can still have different-
+// selling shoes. Computed and CACHED on the signature object at design time
+// so the number is "as of release" — it doesn't change later if the player
+// keeps growing. Older sigs without a stored value get a recompute fallback.
+function calcShoeSales(player, brand, ovrOverride){
+  const ovr = (typeof ovrOverride==="number")
+    ? ovrOverride
+    : calcOVR(player?.skills||{}, player?.intangibles||[], player?.position, player?.height);
+  // Brand prestige floor — Nike moves more units than AND1 at the same OVR.
+  // Use sigOVR (the brand's signature-tier threshold) as the proxy: a brand
+  // that only signs the elite has the marketing engine to move units.
+  const base = brand ? brand.sigOVR * 9000 : 400000;
+  // OVR popularity curve — sub-70 OVR moves almost nothing; 90+ is moving
+  // millions. Quadratic-ish so the top end scales hard.
+  const ovrMult = Math.max(0.15, Math.pow(Math.max(0, ovr - 60) / 30, 1.6));
+  // Hardware boost — each ring is a marketing campaign. MVPs even bigger.
+  const rings = (player?.championships||[]).length;
+  const awards = player?.awards||[];
+  const mvps = awards.filter(a=>a.type==="mvp").length;
+  const fmvps = awards.filter(a=>a.type==="fmvp").length;
+  const dpoys = awards.filter(a=>a.type==="dpoy").length;
+  const allStars = awards.filter(a=>a.type==="as").length;
+  const accoladeMult = 1
+    + (rings    * 0.30)
+    + (mvps     * 0.40)
+    + (fmvps    * 0.20)
+    + (dpoys    * 0.10)
+    + (allStars * 0.05);
+  // Variance — 0.75x to 1.25x. Some shoes flop, some are sleeper hits.
+  const variance = 0.75 + Math.random() * 0.5;
+  return Math.round(base * ovrMult * accoladeMult * variance);
+}
+
+// Compact human-readable unit count: "1.4M", "650K", "2.3B".
+function fmtUnits(n){
+  if(n==null) return "—";
+  if(n >= 1_000_000_000) return (n/1_000_000_000).toFixed(1).replace(/\.0$/,"") + "B";
+  if(n >= 1_000_000)     return (n/1_000_000).toFixed(1).replace(/\.0$/,"")     + "M";
+  if(n >= 10_000)        return Math.round(n/1000) + "K";
+  if(n >= 1_000)         return (n/1000).toFixed(1).replace(/\.0$/,"") + "K";
+  return String(n);
+}
+
+// Compact card for one signature shoe — used inside the collection grid on
+// the agent screen and on past-career detail pages. Falls back to live-recomputed
+// sales for legacy signatures that didn't store a sales number at design time.
+function ShoeCollectionCard({signature, player}){
+  const brand = signature.brandId ? PRO_SHOE_BRAND_BY_ID[signature.brandId] : null;
+  const brandColor = brand?.color || GO;
+  const brandName = signature.brandName || brand?.name || "Brand";
+  // Resolve sales: prefer the snapshot stored at release. If absent (older
+  // saves), recompute using the player's CURRENT state — labeled as "est." so
+  // it's clear the number isn't time-stamped to the actual release.
+  const cached = typeof signature.sales === "number";
+  const sales = cached ? signature.sales : calcShoeSales(player, brand);
+  return(
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"9px 11px",background:"rgba(255,255,255,0.04)",border:`1px solid ${brandColor}44`,borderRadius:8}}>
+      <div style={{width:50,height:36,borderRadius:6,background:`linear-gradient(135deg, ${signature.color||OR}22, rgba(0,0,0,0.5))`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,padding:"2px 4px"}}>
+        <ShoeIcon design={signature.design} color={signature.color||OR} accent={signature.accent||"#FFFFFF"} size={44}/>
+      </div>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:13,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{signature.name}</div>
+        <div style={{fontSize:9,letterSpacing:1,marginTop:2,display:"flex",alignItems:"center",gap:6}}>
+          <span style={{color:brandColor,fontWeight:700}}>{brandName.toUpperCase()}</span>
+          {signature.year && <span style={{color:"#666"}}>· {signature.year}</span>}
+        </div>
+      </div>
+      <div style={{textAlign:"right",flexShrink:0}}>
+        <div style={{fontSize:14,fontWeight:900,color:GO,fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1}}>{fmtUnits(sales)}</div>
+        <div style={{fontSize:8,color:"#666",letterSpacing:1.2,marginTop:2}}>{cached?"SOLD":"EST. SOLD"}</div>
+      </div>
+    </div>
+  );
+}
+
+// Full collection panel — header + all signatures. Used in two places:
+// the agent screen (live career) and the past-career detail page (archive).
+function ShoeCollection({player, title="Signature Series"}){
+  const sigs = Array.isArray(player?.shoeSignatures)
+    ? player.shoeSignatures
+    : (player?.shoeSignature ? [player.shoeSignature] : []);
+  if(sigs.length === 0) return null;
+  // Total lifetime sales across all releases.
+  const total = sigs.reduce((s, sig) => {
+    const brand = sig.brandId ? PRO_SHOE_BRAND_BY_ID[sig.brandId] : null;
+    return s + (typeof sig.sales === "number" ? sig.sales : calcShoeSales(player, brand));
+  }, 0);
+  return(
+    <div style={{background:"rgba(255,215,0,0.04)",border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginTop:8}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:8}}>
+        <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase"}}>★ {title}</div>
+        <div style={{fontSize:10,color:"#aaa"}}>{sigs.length} release{sigs.length===1?"":"s"} · <span style={{color:GO,fontWeight:700}}>{fmtUnits(total)}</span> lifetime</div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:5}}>
+        {sigs.map((sig,i)=>(
+          <ShoeCollectionCard key={i} signature={sig} player={player}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ShoeSignaturePreview({shoeSignature}){
   return(
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"8px 10px",marginTop:8,background:"rgba(255,215,0,0.06)",border:`1px solid ${GO}44`,borderRadius:8}}>
@@ -7997,11 +8192,18 @@ function ShoeDesignerScreen({player, setPlayer, signedShoeBrand, nbaSeasons, go,
 
   const finalize=()=>{
     if(!ready) return;
+    // Pre-compute sales snapshot using the player's CURRENT popularity. This
+    // locks in the figure at release so future growth/decline doesn't rewrite
+    // history — your rookie sig sold what it sold, regardless of how big you
+    // became later.
+    const brand = pending?.brandId ? PRO_SHOE_BRAND_BY_ID[pending.brandId] : (signedShoeBrand?.id ? PRO_SHOE_BRAND_BY_ID[signedShoeBrand.id] : null);
+    const releaseSales = calcShoeSales(player, brand);
     const newSig={
       name:name.trim(), design, color, accent,
       brandId:pending?.brandId,
       brandName:pending?.brandName,
       year:currentYear,
+      sales:releaseSales,
     };
     setPlayer(p=>{
       const prev=Array.isArray(p?.shoeSignatures)
@@ -8420,6 +8622,7 @@ function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam
         shoeContract={player?.shoeContract}
         ovr={ovr}
         currentYear={currentYear}
+        player={player}
         onBrowse={()=>setShowShoePicker(true)}
         onDesignSignature={()=>{
           // Standalone signature flow — no signing, just stash pending context
@@ -9050,6 +9253,11 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
       hofJerseyTeam:hofEval.inducted?jerseyTeam:null,
       // Purchases (so the past-career detail screen can show business empire)
       purchases:player.purchases,
+      // Shoe signature collection — the full series (newest first). Each
+      // signature has its sales number baked in from the moment of release,
+      // so the archive preserves the "as-of" figures rather than recomputing.
+      shoeSignatures:player.shoeSignatures || (player.shoeSignature ? [player.shoeSignature] : []),
+      shoeSignature:player.shoeSignature, // legacy single-field for back-compat readers
       // Final team
       finalTeam:nbaTeam,
       // Career Score — pre-computed at archive time so PastCareers can sort by
@@ -9468,6 +9676,17 @@ function PastCareerStatsScreen({entry, go}){
           </div>
         )}
       </div>
+
+      {/* Signature shoe collection — every release with brand + sales. Pulled
+          off the snapshot's shoeSignatures (array) with back-compat for the
+          legacy single shoeSignature field. */}
+      {(()=>{
+        const sigs = Array.isArray(entry.shoeSignatures)
+          ? entry.shoeSignatures
+          : (entry.shoeSignature ? [entry.shoeSignature] : []);
+        if(sigs.length === 0) return null;
+        return <ShoeCollection player={entry} title="Signature Series"/>;
+      })()}
 
       {/* Off-Court Legacy — restaurants opened, albums released, foundation
           founded. Only renders sections that have content. The data lives on
