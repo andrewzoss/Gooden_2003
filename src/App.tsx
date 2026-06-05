@@ -5721,15 +5721,17 @@ function NachoPromptScreen({onDone}){
 // winner), Dirk Nowitzki, Daniel "Booby" Gibson, Richard Hamilton, Steve Nash.
 // Player rounds out the field as the 6th contestant. Format: 1 round + finals.
 
-// Rack metadata. Each rack sits at a different spot around the arc; from the
-// player's POV, the basket is at a different angle so the upward release swipe
-// must be aimed at that angle. 0° = straight up, positive = right, negative = left.
+// Rack metadata. Each rack sits at a different spot around the arc on the
+// court visual. The `angle` is the precise direction from that rack to the
+// hoop (measured from vertical, positive = right, negative = left), computed
+// from the rack's pixel position on the court diagram below. xPercent and yPx
+// drive the dot placement so the diagram and the swipe arrow stay in sync.
 const THREE_POINT_RACKS = [
-  {idx:0, name:"LEFT CORNER",    angle:  30,  ballAnimX: 40},
-  {idx:1, name:"LEFT WING",      angle:  15,  ballAnimX: 25},
-  {idx:2, name:"TOP OF THE KEY", angle:   0,  ballAnimX:  0},
-  {idx:3, name:"RIGHT WING",     angle: -15,  ballAnimX:-25},
-  {idx:4, name:"RIGHT CORNER",   angle: -30,  ballAnimX:-40},
+  {idx:0, name:"LEFT CORNER",    angle:  70, xPercent: 13, yPx: 80},
+  {idx:1, name:"LEFT WING",      angle:  43, xPercent: 30, yPx:105},
+  {idx:2, name:"TOP OF THE KEY", angle:   0, xPercent: 50, yPx:135},
+  {idx:3, name:"RIGHT WING",     angle: -43, xPercent: 70, yPx:105},
+  {idx:4, name:"RIGHT CORNER",   angle: -70, xPercent: 87, yPx: 80},
 ];
 
 // Score one shot. Quality combines angle accuracy + release timing, weighted
@@ -5783,7 +5785,8 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
   // the start point. Anything less and it doesn't count as a real wind-up.
   const WIND_UP_THRESHOLD = 70;
   // Timing window length — scales with skill so better shooters get more grace.
-  const windowMs = 800 + (threePointSkill / 100) * 800;
+  // Tightened a touch from earlier — encourages crisper, more deliberate shots.
+  const windowMs = 600 + (threePointSkill / 100) * 600;
   const requiredAngle = rack.angle;
 
   useEffect(()=>{
@@ -5905,29 +5908,36 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     }, 1200);
   };
 
-  // Required-angle arrow rotation. CSS rotation is clockwise, so negate the
-  // angle (positive angle = right = clockwise tilt).
-  const arrowRotation = -requiredAngle;
+  // Required-angle arrow rotation. CSS rotation is clockwise (positive = tip
+  // moves right), and our angle convention is also positive = right of vertical,
+  // so the rotation directly equals the required angle. Previous version had
+  // this negated which sent the arrow the wrong way.
+  const arrowRotation = requiredAngle;
 
   return(
     <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
-      {/* Court arc with basket and rack indicators above the shot area */}
-      <div style={{position:"relative",height:130,marginBottom:10,background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 35%, #c97a3a 55%, #d68a4a 100%)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(255,255,255,0.08)"}}>
-        {/* Backboard + rim */}
-        <div style={{position:"absolute",left:"50%",top:14,transform:"translateX(-50%)",width:96,height:42,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
-        <div style={{position:"absolute",left:"50%",top:50,transform:"translateX(-50%)",width:32,height:6,background:"#ff6600",borderRadius:3,border:"1.5px solid #fff"}}/>
-        {/* 3pt arc */}
-        <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 300 130" preserveAspectRatio="none">
-          <path d="M 20 125 Q 150 50 280 125" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" fill="none" strokeDasharray="3,3"/>
+      {/* Court arc with basket and rack indicators above the shot area.
+          Layout: basket at top center, racks fan out around it on a 3pt arc.
+          Corner racks sit near the baseline (close to basket vertically, far
+          laterally); top of the key is straight back from the basket. */}
+      <div style={{position:"relative",height:150,marginBottom:10,background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 35%, #c97a3a 55%, #d68a4a 100%)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(255,255,255,0.08)"}}>
+        {/* Backboard */}
+        <div style={{position:"absolute",left:"50%",top:8,transform:"translateX(-50%)",width:96,height:34,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
+        {/* Rim — centered at y≈41 in the 300x150 viewbox */}
+        <div style={{position:"absolute",left:"50%",top:38,transform:"translateX(-50%)",width:32,height:6,background:"#ff6600",borderRadius:3,border:"1.5px solid #fff"}}/>
+        {/* 3pt arc — passes through all rack positions. Quadratic Bezier with a
+            deep control point produces an arc that bottoms out near the
+            top-of-the-key rack. */}
+        <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 300 150" preserveAspectRatio="none">
+          <path d="M 39 80 Q 150 185 261 80" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" fill="none" strokeDasharray="3,3"/>
         </svg>
-        {/* Rack position dots */}
+        {/* Rack position dots — placed via the precomputed xPercent/yPx so
+            the swipe arrow's angle truly matches "from rack → basket". */}
         {THREE_POINT_RACKS.map((r,i)=>{
-          const xPercent = 10 + (i * 20);
-          const y = 60 + Math.abs(i - 2) * 18;
           const isCurrent = i === rack.idx;
           return(
             <div key={i} style={{
-              position:"absolute",left:`${xPercent}%`,top:y,transform:"translate(-50%,-50%)",
+              position:"absolute",left:`${r.xPercent}%`,top:r.yPx,transform:"translate(-50%,-50%)",
               width:isCurrent?20:14,height:isCurrent?20:14,borderRadius:"50%",
               background: isCurrent ? OR : "rgba(255,255,255,0.25)",
               border: isCurrent ? "2px solid #fff" : "1px solid rgba(255,255,255,0.4)",
@@ -5936,12 +5946,13 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             }}/>
           );
         })}
-        {/* Ball flying animation when shot fires */}
+        {/* Ball flying animation when shot fires — starts at the current rack
+            position, arcs toward the rim. */}
         {ballFlying && (
           <div style={{
             position:"absolute",
-            left:`${10 + (rack.idx * 20)}%`,
-            top: 60 + Math.abs(rack.idx - 2) * 18,
+            left:`${rack.xPercent}%`,
+            top: rack.yPx,
             transform:"translate(-50%,-50%)",
             fontSize:18,
             animation: `shotArc${result?.made?"Made":"Missed"} 1s ease-out forwards`,
@@ -6067,13 +6078,13 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
       <style>{`
         @keyframes shotArcMade {
           0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          50%  { transform: translate(-50%, -200%) scale(0.7); opacity: 1; }
-          100% { transform: translate(-50%, -250%) scale(0.5); opacity: 0; }
+          50%  { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 0.6}vw / 100 * 3), -50%) scale(0.7); opacity: 1; }
+          100% { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 1.4}vw / 100 * 3), calc(-50% + ${(41 - rack.yPx) * 0.7}px)) scale(0.5); opacity: 0; }
         }
         @keyframes shotArcMissed {
           0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          40%  { transform: translate(-50%, -180%) scale(0.7); opacity: 1; }
-          100% { transform: translate(-50%, -100%) scale(0.5); opacity: 0; }
+          50%  { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 0.4}vw / 100 * 3), calc(-50% - 30px)) scale(0.7); opacity: 1; }
+          100% { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 0.6}vw / 100 * 3), calc(-50% + 20px)) scale(0.5); opacity: 0; }
         }
       `}</style>
     </div>
