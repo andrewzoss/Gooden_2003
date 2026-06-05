@@ -614,6 +614,7 @@ const RESTAURANT_FOOD_TYPES = [
   {id:"tacos",   name:"Tacos",   icon:"🌮", emojis:["🌮","🌯","🌶️","🥑","🧀","🌽","🍅","🌿"]},
   {id:"bowls",   name:"Bowls",   icon:"🥗", emojis:["🥗","🥑","🍚","🥒","🥕","🌽","🍅","🌶️"]},
   {id:"sushi",   name:"Sushi",   icon:"🍣", emojis:["🍣","🍙","🥢","🐟","🌶️","🥒","🥑","🍵"]},
+  {id:"bbq",     name:"BBQ",     icon:"🍖", emojis:["🍖","🥩","🍗","🔥","🌽","🥓","🍺","🌶️"]},
 ];
 const RESTAURANT_FOOD_TYPE_BY_ID = Object.fromEntries(RESTAURANT_FOOD_TYPES.map(f=>[f.id,f]));
 
@@ -4419,7 +4420,7 @@ function calcCareerScore(player, nbaSeasons){
   if(fired.includes("nacho_libre_2006") && player.nachoLibreAccepted){
     s += 50;
   }
-  // Barnes / Stak locker-room moment — flavor entry, single outcome.
+  // Barnes / Stack locker-room moment — flavor entry, single outcome.
   if(fired.includes("matt_barnes_2007") && player.hitTheBarnesJoint){
     s += 30;
   }
@@ -5534,7 +5535,7 @@ function WeedPromptScreen({player, onDone}){
     <div style={{padding:"4px 0 20px",position:"relative"}}>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>LOCKER ROOM · AFTER PRACTICE</div>
-        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>BARNES & STAK<br/>WANT TO TALK</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>BARNES & STACK<br/>WANT TO TALK</div>
       </div>
 
       <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
@@ -5549,7 +5550,7 @@ function WeedPromptScreen({player, onDone}){
           <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:10,fontSize:13,color:"#ddd",lineHeight:1.5}}>
             Matt Barnes and Stephen Jackson approach you. Matt Barnes lights up a joint and offers you a hit.
           </div>
-          {/* Stak's warning — speech-bubble framing */}
+          {/* Stack's warning — speech-bubble framing */}
           <div style={{
             background:"rgba(255,255,255,0.04)",borderLeft:`3px solid ${YE}`,
             padding:"10px 12px",marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.5,fontStyle:"italic",
@@ -10425,6 +10426,9 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
       // Awards + championships
       awards:player.awards||[],
       championships:player.championships||[],
+      // Slam Dunk Contest — captured as a legacy accolade so the past-career
+      // detail screen can render the champion chip even after retirement.
+      dunkContestResult:player.dunkContestResult||null,
       // HOF
       hof:hofEval.inducted,
       hofReason:hofEval.reason,
@@ -10777,7 +10781,7 @@ function PastCareerStatsScreen({entry, go}){
       })()}
 
       {/* Accolades chips */}
-      {(awards.length>0||championships.length>0||entry.hof)&&(
+      {(awards.length>0||championships.length>0||entry.hof||entry.dunkContestResult==="won")&&(
         <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -10803,6 +10807,13 @@ function PastCareerStatsScreen({entry, go}){
                 </div>
               );
             })}
+            {/* Slam Dunk Contest champion — pulled from the snapshot field */}
+            {entry.dunkContestResult==="won"&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${OR}22`,border:`1px solid ${OR}66`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🏀</span>
+                <span style={{fontSize:10,color:OR,fontWeight:900,letterSpacing:1}}>DUNK CHAMPION</span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -11324,7 +11335,7 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
       {/* Accolades section — listed once at the top so the player can see
           career totals at a glance. Per-season chips appear on the NBA table
           rows below. */}
-      {(((player?.awards)||[]).length>0||((player?.championships)||[]).length>0)&&(
+      {(((player?.awards)||[]).length>0||((player?.championships)||[]).length>0||player?.dunkContestResult==="won")&&(
         <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -11344,6 +11355,13 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
                 </div>
               );
             })}
+            {/* Slam Dunk Contest champion — single chip, separate from awards */}
+            {player?.dunkContestResult==="won"&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${OR}22`,border:`1px solid ${OR}66`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🏀</span>
+                <span style={{fontSize:10,color:OR,fontWeight:900,letterSpacing:1}}>DUNK CHAMPION</span>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -11462,6 +11480,36 @@ function buildMike(opts={}){
 // ─── MAIN APP ─────────────────────────────────────────────────────────────────
 export default function App(){
   const [screen,setScreen]=useState("loadscreen");
+  // Disable double-tap-to-zoom (and the small click delay that goes with it)
+  // across the whole app. `touch-action: manipulation` still allows scrolling
+  // and pinch-zoom for accessibility, but kills the double-tap zoom gesture
+  // that fires when a user rapidly taps a button twice. Applied once on mount
+  // to <html> + <body> so it covers every screen.
+  useEffect(()=>{
+    const html=document.documentElement;
+    const body=document.body;
+    const prevHtml=html.style.touchAction;
+    const prevBody=body.style.touchAction;
+    html.style.touchAction="manipulation";
+    body.style.touchAction="manipulation";
+    return ()=>{
+      html.style.touchAction=prevHtml;
+      body.style.touchAction=prevBody;
+    };
+  },[]);
+  // Whenever the current screen changes, scroll the window back to the top
+  // so the new view always opens at its header rather than wherever the user
+  // happened to be scrolled to on the previous view. Behaviour:"instant" so
+  // the jump feels like a page change, not an animated scroll.
+  useEffect(()=>{
+    try{
+      window.scrollTo({top:0, left:0, behavior:"instant"});
+    }catch(e){
+      // Older browsers that don't accept the options object — fall back to
+      // the legacy two-arg form which is universally supported.
+      window.scrollTo(0,0);
+    }
+  },[screen]);
   const [player,setPlayer]=useState({name:"",position:"SG",height:76,weight:210,hometown:"",skills:defaultSkills("SG"),intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
   const [starTier,setStarTier]=useState(null);
   const [school,setSchool]=useState(null);
@@ -11872,7 +11920,7 @@ export default function App(){
         {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
       ]);
       setScreen("weedPrompt");
-      toast("Test — Barnes & Stak prompt", GR);
+      toast("Test — Barnes & Stack prompt", GR);
     }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
@@ -12586,7 +12634,7 @@ export default function App(){
         </button>
 
         <button onClick={()=>jumpToTesting("barnesJoint")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>💨 BARNES & STAK (2007)</div>
+          <div style={{fontSize:14,fontWeight:900}}>💨 BARNES & STACK (2007)</div>
           <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Locker-room offer · ends the same either way</div>
         </button>
 
@@ -13645,7 +13693,7 @@ export default function App(){
       </MenuFrame>
     ),
     weedPrompt:(
-      <MenuFrame sub="Locker Room · Postgame" title="A MOMENT WITH BARNES & STAK">
+      <MenuFrame sub="Locker Room · Postgame" title="A MOMENT WITH BARNES & STACK">
         <WeedPromptScreen player={player} onDone={()=>{
           // Single outcome. Flag it for the career-score read.
           setPlayer(p=>({...p, hitTheBarnesJoint:true}));
