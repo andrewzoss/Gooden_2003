@@ -4414,6 +4414,15 @@ function calcCareerScore(player, nbaSeasons){
   if(fired.includes("damon_jones_soup_2018") && player.soupedDamon){
     s += 75;
   }
+  // Nacho Libre cameo — even though you got cut, you took the chance + got Jack
+  // Black in your phone forever. Small but real legacy entry.
+  if(fired.includes("nacho_libre_2006") && player.nachoLibreAccepted){
+    s += 50;
+  }
+  // Barnes / Stak locker-room moment — flavor entry, single outcome.
+  if(fired.includes("matt_barnes_2007") && player.hitTheBarnesJoint){
+    s += 30;
+  }
 
   return s;
 }
@@ -4988,6 +4997,8 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
 // event is tracked on player.midseasonEvents so it only fires once per career.
 const ARTEST_EVENT_ID = "artest_fight_2004";
 const SLAM_DUNK_EVENT_ID = "slam_dunk_contest_2005";
+const NACHO_EVENT_ID = "nacho_libre_2006";
+const WEED_EVENT_ID = "matt_barnes_2007";
 const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
@@ -5497,6 +5508,201 @@ function ArtestFightGame({onDone}){
           100% { transform: translateY(-200px) rotate(-20deg); opacity: 0; }
         }
       `}</style>
+    </div>
+  );
+}
+
+// ─── MIDSEASON EVENT: MATT BARNES + STEPHEN JACKSON (2007) ─────────────────────
+// Player runs into Matt Barnes and Stephen Jackson. Barnes offers a hit; Jackson
+// warns the player off. Player can decline, but Barnes pushes and the player
+// ends up taking it anyway. Always lands on the same outcome.
+function WeedPromptScreen({player, onDone}){
+  // stage: "choice" → user picking, "denied" → Barnes's pushback shown,
+  // "hit" → green response overlay.
+  const [stage, setStage] = useState("choice");
+  const playerName = (player?.name || "homie").toUpperCase();
+
+  const handleYes = () => {
+    setStage("hit");
+    setTimeout(()=> onDone && onDone(), 2400);
+  };
+  const handleNo = () => {
+    setStage("denied");
+  };
+
+  return(
+    <div style={{padding:"4px 0 20px",position:"relative"}}>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>LOCKER ROOM · AFTER PRACTICE</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>BARNES & STAK<br/>WANT TO TALK</div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
+        <div style={{padding:4,background:`linear-gradient(135deg, ${GR}, ${OR})`,borderRadius:10,boxShadow:"0 4px 20px rgba(0,220,100,0.3)"}}>
+          <img src="/stephenmatt.webp" alt="Matt Barnes and Stephen Jackson" style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}/>
+        </div>
+      </div>
+
+      {/* Scene + Stephen Jackson's line */}
+      {(stage === "choice" || stage === "denied") && (
+        <>
+          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:10,fontSize:13,color:"#ddd",lineHeight:1.5}}>
+            Matt Barnes and Stephen Jackson approach you. Matt Barnes lights up a joint and offers you a hit.
+          </div>
+          {/* Stak's warning — speech-bubble framing */}
+          <div style={{
+            background:"rgba(255,255,255,0.04)",borderLeft:`3px solid ${YE}`,
+            padding:"10px 12px",marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.5,fontStyle:"italic",
+          }}>
+            Stephen Jackson: <span style={{color:"#fff",fontWeight:700,fontStyle:"normal"}}>"You don't want no part of this {playerName}"</span>
+          </div>
+          <div style={{fontSize:13,fontWeight:700,color:"#fff",textAlign:"center",marginBottom:14,letterSpacing:1}}>
+            Do you take it?
+          </div>
+        </>
+      )}
+
+      {/* Barnes's pushback after declining */}
+      {stage === "denied" && (
+        <div style={{
+          background:"rgba(255,255,255,0.04)",borderLeft:`3px solid ${GR}`,
+          padding:"10px 12px",marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.5,fontStyle:"italic",
+        }}>
+          Matt Barnes: <span style={{color:"#fff",fontWeight:700,fontStyle:"normal"}}>"It's fine, just do it"</span>
+        </div>
+      )}
+
+      {/* Buttons */}
+      {(stage === "choice" || stage === "denied") && (
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={handleYes} style={{...btnS,padding:"14px 20px",fontSize:13,background:GR,color:"#080c10"}}>
+            I'll take a hit
+          </button>
+          {stage === "choice" && (
+            <button onClick={handleNo} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+              No, I don't want to risk suspension
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Final outcome */}
+      {stage === "hit" && (
+        <div style={{
+          padding:"22px 16px",
+          background:`linear-gradient(135deg, ${GR}33, rgba(0,0,0,0.5))`,
+          border:`2px solid ${GR}`,boxShadow:`0 0 32px ${GR}55`,
+          borderRadius:12,textAlign:"center",
+          animation:"weedReveal 0.5s cubic-bezier(0.34,1.56,0.64,1) both",
+        }}>
+          <div style={{fontSize:42,marginBottom:8}}>💨</div>
+          <div style={{
+            fontSize:22,fontWeight:900,color:GR,letterSpacing:2,lineHeight:1.2,
+            fontFamily:"'Barlow Condensed',sans-serif",
+            textShadow:`0 0 16px ${GR}88`,
+          }}>
+            NICE, YOU'RE COOL AND IT'S FINE
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        @keyframes weedReveal {
+          0%   { opacity: 0; transform: scale(0.85); }
+          60%  { opacity: 1; transform: scale(1.04); }
+          100% { opacity: 1; transform: scale(1); }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// ─── MIDSEASON EVENT: NACHO LIBRE CAMEO (2006) ──────────────────────────────────
+// Jack Black is shooting Nacho Libre and you've been offered a bit part. Decline
+// → nothing happens. Accept → you get to "read" the line "Hey Nacho", then the
+// movie cuts your part but Jack stays in touch and gets added to your contacts.
+function NachoPromptScreen({onDone}){
+  // stage: choice → reading (the line) → cut (the message + add to contacts)
+  const [stage, setStage] = useState("choice");
+
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>🎬 OFFSEASON OPPORTUNITY · 2006</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>HOLLYWOOD CALLING</div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
+        <div style={{padding:4,background:`linear-gradient(135deg, ${OR}, #c8501a)`,borderRadius:10,boxShadow:"0 4px 20px rgba(232,135,58,0.4)"}}>
+          <img src="/nacho.png" alt="Nacho Libre" style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}/>
+        </div>
+      </div>
+
+      {stage === "choice" && (
+        <>
+          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.5}}>
+            Your agent calls — <span style={{color:"#fff",fontWeight:700}}>Jack Black</span> wants you for a bit part in his new movie <i>Nacho Libre</i>. It's a small speaking role. Filming starts in two weeks down in Mexico.
+            <div style={{marginTop:8,fontSize:11,color:"#888",fontStyle:"italic"}}>Could be fun. Could be a thing.</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <button onClick={()=>setStage("reading")} style={{...btnS,padding:"14px 20px",fontSize:14,background:OR,color:"#080c10"}}>
+              🎬 YES, I'M IN
+            </button>
+            <button onClick={()=>onDone({accepted:false})} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+              No thanks — basketball only
+            </button>
+          </div>
+        </>
+      )}
+
+      {stage === "reading" && (
+        <>
+          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:10,fontSize:11,color:"#aaa",lineHeight:1.5,textAlign:"center"}}>
+            You arrive on set. They hand you the script. One line. Big moment. Time to act.
+          </div>
+          {/* The line itself, in script format */}
+          <div style={{
+            background:`linear-gradient(135deg, ${OR}22, rgba(0,0,0,0.4))`,
+            border:`2px solid ${OR}`,
+            borderRadius:10,padding:"20px 16px",marginBottom:14,textAlign:"center",
+          }}>
+            <div style={{fontSize:9,letterSpacing:2,color:OR,fontWeight:700,marginBottom:6}}>SCENE 47 · INT. CANTINA — DAY</div>
+            <div style={{fontSize:10,color:"#888",letterSpacing:1,marginBottom:10}}>YOUR CHARACTER (waving)</div>
+            <div style={{fontSize:32,fontWeight:900,color:"#fff",fontFamily:"'Barlow Condensed',sans-serif",letterSpacing:2}}>
+              "Hey Nacho"
+            </div>
+          </div>
+          <button onClick={()=>setStage("cut")} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            🎭 DELIVER THE LINE →
+          </button>
+        </>
+      )}
+
+      {stage === "cut" && (
+        <>
+          <div style={{
+            padding:"16px 14px",background:"rgba(255,255,255,0.04)",
+            border:`1px solid rgba(255,255,255,0.08)`,
+            borderRadius:10,marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.6,
+          }}>
+            Your part got cut but Jack Black was really cool about it and says you can call him anytime.
+          </div>
+          <div style={{
+            display:"flex",alignItems:"center",gap:10,
+            padding:"12px 12px",background:`${OR}11`,border:`1px solid ${OR}66`,borderRadius:10,marginBottom:14,
+          }}>
+            <img src="/jackblack.avif" alt="Jack Black" style={{width:48,height:48,borderRadius:"50%",objectFit:"cover",border:`2px solid ${OR}`,flexShrink:0,background:"#000"}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:9,letterSpacing:1.5,color:OR,fontWeight:700,marginBottom:2}}>★ NEW CONTACT</div>
+              <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Jack Black</div>
+              <div style={{fontSize:10,color:"#aaa",marginTop:1}}>Actor · Tenacious D · Call him anytime</div>
+            </div>
+          </div>
+          <button onClick={()=>onDone({accepted:true})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            ← BACK TO THE LEAGUE
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -6764,6 +6970,20 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
               go("slamDunkPrompt");
               return;
             }
+            // 2006-07 season — Nacho Libre bit part. Optional accept/decline;
+            // accepting unlocks Jack Black as a phone contact.
+            if(gp===0 && currentYear===2006 && !firedEvents.includes(NACHO_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), NACHO_EVENT_ID]}));
+              go("nachoPrompt");
+              return;
+            }
+            // 2007-08 season — Matt Barnes / Stephen Jackson locker-room moment.
+            // Always ends the same way; the choice is theater.
+            if(gp===0 && currentYear===2007 && !firedEvents.includes(WEED_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), WEED_EVENT_ID]}));
+              go("weedPrompt");
+              return;
+            }
             // 2018-19 season — Damon Jones soup incident. Player has to be in
             // their year-15 season for this to fire (currentYear 2018 means
             // nbaSeasons.length === 14). The choice is rigged but the punchline
@@ -7689,6 +7909,51 @@ const CALL_CONTACTS = [
       },
     ],
   },
+  {
+    // Jack Black — added to the player's contacts after the Nacho Libre 2006
+    // midseason event. The player got cut from the movie but Jack stayed cool
+    // about it and told them to keep in touch. Gated behind player.jackBlackUnlocked.
+    id:"jack_black",
+    name:"Jack Black",
+    role:"Actor · Tenacious D",
+    portrait:"/jackblack.avif",
+    accentColor:"#f97316",
+    available:(player)=>!!player?.jackBlackUnlocked,
+    topics:[
+      {
+        prompt:"What's good Jack?",
+        responses:[
+          "DUDE. What's up man, glad you called. I was just sitting here noodling on the acoustic, trying to find a riff for this Tenacious D track. You wanna hear it? Eh, you don't wanna hear it.",
+          "My MAN! Listen, I'm in catering right now and they've got these little cucumber sandwiches and I am DESTROYING them. Tell me about your life.",
+          "Hey buddy! Funny you called — I was JUST talking about you. Kyle's like, 'whatever happened to that ballplayer?' and I'm like, 'he's in the LEAGUE, Kyle. He's in the LEAGUE.' Anyway. What's good?",
+        ],
+      },
+      {
+        prompt:"Sorry I got cut from Nacho",
+        responses:[
+          "Bro. BRO. Don't even mention it. That cut was a war crime. You delivered that 'Hey Nacho' with such RAW conviction — it was too powerful for the cut of the film. Hollywood couldn't handle it.",
+          "Hey listen — getting cut is part of the game. I got cut from like four movies before School of Rock and now look at me. You'll bounce back. You're already bouncing back. You're in the NBA, dude.",
+          "Real talk: that scene was magic. The PRODUCERS got scared. They saw the chemistry and they were like 'no, this is too much for one film.' That's the real story.",
+        ],
+      },
+      {
+        prompt:"Any new projects?",
+        responses:[
+          "I'm doing a couple things. Got an animated movie about a panda who does kung fu — sounds insane, I know, but I think there's something there. Also Tenacious D, always Tenacious D. Always.",
+          "I'm reading this script about a guy who teaches kids rock and roll — wait, I already did that one. School of Rock. Forget it.",
+          "Kyle and I are working on a new D album. It's gonna be HEAVY. We're talking riffs. We're talking RIFFS, dude.",
+        ],
+      },
+      {
+        prompt:"Got any advice?",
+        responses:[
+          "ROCK. THE. STAGE. Whatever your stage is — court, screen, garage with two amps and a cousin — you rock it like you OWN it. Because you do.",
+          "Listen. The world wants you to be small. The world wants you to be CHILL. Don't be chill. Be the OPPOSITE of chill. Be LARGE.",
+          "Eat. EAT. People skip meals trying to look a certain way and then they're in the third quarter of life and they're starving. Eat the sandwich, dude.",
+        ],
+      },
+    ],
+  },
 ];
 
 // Helper to pick a random response from a topic
@@ -7697,9 +7962,11 @@ function pickResponse(topic){
 }
 
 // Picker screen — list of contacts the player can call. Only shows contacts
-// that pass their `available()` check at the current moment.
+// that pass their `available()` check at the current moment. Player passed in
+// so contacts can gate on player state (e.g. Jack Black appears only after
+// the Nacho Libre cameo unlock).
 function CallPickerScreen({player, go}){
-  const available=CALL_CONTACTS.filter(c=>c.available());
+  const available=CALL_CONTACTS.filter(c=>c.available(player));
   const [picked,setPicked]=useState(null); // null | contact id
   return(
     <div>
@@ -11562,6 +11829,51 @@ export default function App(){
       setScreen("slamDunkPrompt");
       toast("Test — Dunk Contest prompt","#00aa44");
     }
+    else if(preset==="nachoLibre"){
+      // NACHO LIBRE — 2006-07 season. 2 NBA seasons logged → currentYear = 2006.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:82,midRange:84,finishing:85,handles:82,playmaking:76,perimDefense:76,postDefense:70,rebounding:73};
+      mike.intangibles=["confident","clutch"];
+      mike.contract={
+        type:"rookie", signedYear:NBA_START_YEAR, years:4,
+        salaries:[2500000,2700000,2916000,3149280],
+        totalValue:11265280, signingBonus:1000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(7000000); setSkillPoints(20);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+      ]);
+      setScreen("nachoPrompt");
+      toast("Test — Nacho Libre prompt","#c8501a");
+    }
+    else if(preset==="barnesJoint"){
+      // MATT BARNES / STEPHEN JACKSON — 2007-08 season. 3 NBA seasons logged.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:84,midRange:85,finishing:86,handles:83,playmaking:78,perimDefense:78,postDefense:72,rebounding:74};
+      mike.intangibles=["confident","clutch"];
+      mike.contract={
+        type:"rookie", signedYear:NBA_START_YEAR, years:4,
+        salaries:[2500000,2700000,2916000,3149280],
+        totalValue:11265280, signingBonus:1000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID, WEED_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(10000000); setSkillPoints(20);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+      ]);
+      setScreen("weedPrompt");
+      toast("Test — Barnes & Stak prompt", GR);
+    }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
       // currentYear = 2018. Long-tenured vet with money + accolades to match.
@@ -12266,6 +12578,16 @@ export default function App(){
         <button onClick={()=>jumpToTesting("dunkContest")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, #00aa44 0%, #007733 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:14,fontWeight:900}}>🏀 DUNK CONTEST (2005)</div>
           <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Sprite Rising Stars · vs Josh Smith, JR Smith, Birdman</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("nachoLibre")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, #c8501a 0%, #6b2810 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🎬 NACHO LIBRE (2006)</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Hey Nacho · Unlocks Jack Black contact</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("barnesJoint")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>💨 BARNES & STAK (2007)</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Locker-room offer · ends the same either way</div>
         </button>
 
         <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -13300,6 +13622,31 @@ export default function App(){
           // so we just mark it as souped.
           setPlayer(p=>({...p, soupedDamon:true}));
           toast&&toast("🍲 SOUPED — Damon Jones never lived it down", OR);
+          go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    nachoPrompt:(
+      <MenuFrame sub="Hollywood Calling" title="NACHO LIBRE">
+        <NachoPromptScreen onDone={({accepted})=>{
+          if(accepted){
+            // Player went through the bit — got cut, but Jack Black is now in
+            // the contacts. Flag both on the player so the call picker shows him.
+            setPlayer(p=>({...p, jackBlackUnlocked:true, nachoLibreAccepted:true}));
+            toast&&toast("📱 Jack Black added to contacts", OR);
+          } else {
+            // Declined — nothing happens, as advertised.
+            toast&&toast("You passed on Hollywood.","#888");
+          }
+          go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    weedPrompt:(
+      <MenuFrame sub="Locker Room · Postgame" title="A MOMENT WITH BARNES & STAK">
+        <WeedPromptScreen player={player} onDone={()=>{
+          // Single outcome. Flag it for the career-score read.
+          setPlayer(p=>({...p, hitTheBarnesJoint:true}));
           go("leagueHub");
         }}/>
       </MenuFrame>
