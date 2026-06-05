@@ -4411,6 +4411,13 @@ function calcCareerScore(player, nbaSeasons){
     else if(player.dunkContestResult === "eliminated")  s += 30;
     // "declined" → 0, no bonus
   }
+  // NBA 3-Point Shootout: champion is also a marquee accolade, slightly less
+  // legacy weight than a dunk title but still real.
+  if(fired.includes("three_point_contest_2008")){
+    if(player.threePointContestResult === "won")        s += 200;
+    else if(player.threePointContestResult === "finalsLost")  s += 80;
+    else if(player.threePointContestResult === "eliminated")  s += 25;
+  }
   // The Soup Incident — souping Damon Jones is iconic franchise lore.
   if(fired.includes("damon_jones_soup_2018") && player.soupedDamon){
     s += 75;
@@ -5000,6 +5007,7 @@ const ARTEST_EVENT_ID = "artest_fight_2004";
 const SLAM_DUNK_EVENT_ID = "slam_dunk_contest_2005";
 const NACHO_EVENT_ID = "nacho_libre_2006";
 const WEED_EVENT_ID = "matt_barnes_2007";
+const THREE_POINT_EVENT_ID = "three_point_contest_2008";
 const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
@@ -5704,6 +5712,694 @@ function NachoPromptScreen({onDone}){
           </button>
         </>
       )}
+    </div>
+  );
+}
+
+// ─── MIDSEASON EVENT: NBA THREE-POINT CONTEST (2008) ────────────────────────────
+// Real 2008 All-Star Weekend field: Jason Kapono (defending champ, eventual
+// winner), Dirk Nowitzki, Daniel "Booby" Gibson, Richard Hamilton, Steve Nash.
+// Player rounds out the field as the 6th contestant. Format: 1 round + finals.
+
+// Rack metadata. Each rack sits at a different spot around the arc; from the
+// player's POV, the basket is at a different angle so the upward release swipe
+// must be aimed at that angle. 0° = straight up, positive = right, negative = left.
+const THREE_POINT_RACKS = [
+  {idx:0, name:"LEFT CORNER",    angle:  30,  ballAnimX: 40},
+  {idx:1, name:"LEFT WING",      angle:  15,  ballAnimX: 25},
+  {idx:2, name:"TOP OF THE KEY", angle:   0,  ballAnimX:  0},
+  {idx:3, name:"RIGHT WING",     angle: -15,  ballAnimX:-25},
+  {idx:4, name:"RIGHT CORNER",   angle: -30,  ballAnimX:-40},
+];
+
+// Score one shot. Quality combines angle accuracy + release timing, weighted
+// by the player's 3pt skill. Returns {made, quality}.
+function calcThreePointShot(swipeAngle, requiredAngle, timing, skill){
+  // Angle tolerance widens with skill — at 90+ the swipe doesn't have to be
+  // pixel-perfect, at 50 only crisp swipes count.
+  const angleTol = 12 + (skill / 100) * 25; // skill 50 → 24°, skill 90 → 34°
+  const angleDiff = Math.abs(swipeAngle - requiredAngle);
+  const angleScore = Math.max(0, 1 - angleDiff / angleTol);
+  // Timing: 0 = released right at start, 1 = released at end of window.
+  // Sweet spot is mid-window (0.35-0.65).
+  let timingScore;
+  if(timing >= 0.30 && timing <= 0.65){
+    timingScore = 1.0;
+  } else if(timing < 0.30){
+    timingScore = Math.max(0, 1 - (0.30 - timing) * 2.5);
+  } else {
+    timingScore = Math.max(0, 1 - (timing - 0.65) * 2.8);
+  }
+  // Skill scaling — high skill players hit harder even on mediocre quality.
+  const skillBonus = 0.55 + (skill / 100) * 0.45; // 50→0.78, 80→0.91, 100→1.0
+  const quality = (angleScore + timingScore) / 2;
+  const makeChance = 0.15 + 0.80 * quality * skillBonus;
+  const made = Math.random() < makeChance;
+  return {made, quality, makeChance};
+}
+
+// One shot mechanic: tap to start, swipe DOWN to wind up, then swipe UP at the
+// right angle within the timing window. onComplete called with the result.
+function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComplete}){
+  // phase: ready → winding → release → result
+  const [phase, setPhase] = useState("ready");
+  const [windProgress, setWindProgress] = useState(0); // 0-1 during wind-up
+  const [releaseProgress, setReleaseProgress] = useState(1); // 1→0 during release window
+  const [pathPoints, setPathPoints] = useState([]);
+  const [result, setResult] = useState(null);
+  const [ballFlying, setBallFlying] = useState(false);
+
+  const isSwipingRef = useRef(false);
+  const swipeStartRef = useRef(null);
+  const swipePointsRef = useRef([]);
+  const releaseStartRef = useRef(0);
+  const releaseTimerRef = useRef(null);
+  const finishedRef = useRef(false);
+
+  useEffect(()=>{
+    return ()=> {
+      if(releaseTimerRef.current) cancelAnimationFrame(releaseTimerRef.current);
+    };
+  },[]);
+
+  // Required release angle for this rack
+  const requiredAngle = rack.angle;
+
+  // Open the release timing window after a successful wind-up
+  const openReleaseWindow = () => {
+    setPhase("release");
+    // Window length depends on skill — better shooters get more time
+    const windowMs = 800 + (threePointSkill / 100) * 800; // skill 50→1200ms, skill 90→1520ms
+    releaseStartRef.current = performance.now();
+    setReleaseProgress(1);
+    const tick = () => {
+      if(finishedRef.current) return;
+      const elapsed = performance.now() - releaseStartRef.current;
+      const p = Math.max(0, 1 - elapsed/windowMs);
+      setReleaseProgress(p);
+      if(p <= 0){
+        // Timed out without swiping up → miss (no release)
+        finalize({made:false, missed:true, quality:0});
+        return;
+      }
+      releaseTimerRef.current = requestAnimationFrame(tick);
+    };
+    releaseTimerRef.current = requestAnimationFrame(tick);
+  };
+
+  // Pointer handlers — different behavior depending on phase
+  const handlePointerDown = (e) => {
+    if(phase === "result") return;
+    if(phase === "ready" || phase === "release"){
+      isSwipingRef.current = true;
+      const rect = e.currentTarget.getBoundingClientRect();
+      const p = {x:e.clientX-rect.left, y:e.clientY-rect.top};
+      swipeStartRef.current = p;
+      swipePointsRef.current = [p];
+      setPathPoints([p]);
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+    }
+  };
+  const handlePointerMove = (e) => {
+    if(!isSwipingRef.current) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const p = {x:e.clientX-rect.left, y:e.clientY-rect.top};
+    swipePointsRef.current.push(p);
+    setPathPoints([...swipePointsRef.current]);
+  };
+  const handlePointerUp = () => {
+    if(!isSwipingRef.current) return;
+    isSwipingRef.current = false;
+    const pts = swipePointsRef.current;
+    if(pts.length < 2){
+      setPathPoints([]);
+      return;
+    }
+    const start = pts[0];
+    const end = pts[pts.length-1];
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    const dist = Math.hypot(dx, dy);
+
+    if(phase === "ready"){
+      // Need a downward swipe ≥ 40px and mostly vertical
+      if(dy > 30 && dist > 40 && Math.abs(dx) < dy * 1.5){
+        // Valid wind-up
+        setWindProgress(1);
+        setPathPoints([]);
+        // Brief pause for visual feedback, then open release window
+        setTimeout(()=> {
+          if(!finishedRef.current) openReleaseWindow();
+        }, 200);
+      } else {
+        // Bad wind-up — clear path, try again
+        setPathPoints([]);
+      }
+    } else if(phase === "release"){
+      // Need an upward swipe — measure angle from vertical
+      if(dy < -25 && dist > 35){
+        // Valid release. Compute angle: atan2(dx, -dy) where 0 = straight up
+        const angleRad = Math.atan2(dx, -dy);
+        const angleDeg = angleRad * 180 / Math.PI;
+        // Capture timing — releaseProgress at the moment of release
+        // We compute the "release timing" as 1 - releaseProgress (0 = perfect, 1 = end)
+        const timing = 1 - releaseProgress;
+        if(releaseTimerRef.current) cancelAnimationFrame(releaseTimerRef.current);
+        const shotResult = calcThreePointShot(angleDeg, requiredAngle, timing, threePointSkill);
+        finalize({
+          made: shotResult.made,
+          missed: false,
+          quality: shotResult.quality,
+          angle: angleDeg,
+          timing,
+        });
+      } else {
+        // Bad upward swipe — doesn't count as release attempt, keep trying
+        setPathPoints([]);
+      }
+    }
+  };
+
+  const finalize = (r) => {
+    if(finishedRef.current) return;
+    finishedRef.current = true;
+    if(releaseTimerRef.current) cancelAnimationFrame(releaseTimerRef.current);
+    setResult(r);
+    setPhase("result");
+    setBallFlying(true);
+    // Brief animation, then bubble up
+    setTimeout(()=> {
+      onComplete && onComplete({
+        made: r.made,
+        isMoneyball,
+        points: r.made ? (isMoneyball ? 2 : 1) : 0,
+      });
+    }, 1200);
+  };
+
+  // Required-angle arrow visualization (an SVG arrow rotated to point in the
+  // required direction — straight up means 0°, slight right/left = small tilt)
+  const arrowRotation = -requiredAngle; // negate because CSS rotation is clockwise
+
+  return(
+    <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
+      {/* Court arc with basket and rack indicators above the shot area */}
+      <div style={{position:"relative",height:130,marginBottom:10,background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 35%, #c97a3a 55%, #d68a4a 100%)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(255,255,255,0.08)"}}>
+        {/* Backboard + rim */}
+        <div style={{position:"absolute",left:"50%",top:14,transform:"translateX(-50%)",width:96,height:42,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
+        <div style={{position:"absolute",left:"50%",top:50,transform:"translateX(-50%)",width:32,height:6,background:"#ff6600",borderRadius:3,border:"1.5px solid #fff"}}/>
+        {/* 3pt arc — SVG curve */}
+        <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 300 130" preserveAspectRatio="none">
+          <path d="M 20 125 Q 150 50 280 125" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" fill="none" strokeDasharray="3,3"/>
+        </svg>
+        {/* Rack position dots */}
+        {THREE_POINT_RACKS.map((r,i)=>{
+          // Position dots along the arc
+          const xPercent = 10 + (i * 20);
+          const y = 60 + Math.abs(i - 2) * 18; // top-of-key sits highest
+          const isCurrent = i === rack.idx;
+          return(
+            <div key={i} style={{
+              position:"absolute",left:`${xPercent}%`,top:y,transform:"translate(-50%,-50%)",
+              width:isCurrent?20:14,height:isCurrent?20:14,borderRadius:"50%",
+              background: isCurrent ? OR : "rgba(255,255,255,0.25)",
+              border: isCurrent ? "2px solid #fff" : "1px solid rgba(255,255,255,0.4)",
+              boxShadow: isCurrent ? `0 0 12px ${OR}` : "none",
+              transition:"all 0.2s",
+            }}/>
+          );
+        })}
+        {/* Ball flying animation when shot fires */}
+        {ballFlying && (
+          <div style={{
+            position:"absolute",
+            left:`${10 + (rack.idx * 20)}%`,
+            top: 60 + Math.abs(rack.idx - 2) * 18,
+            transform:"translate(-50%,-50%)",
+            fontSize:18,
+            animation: `shotArc${result?.made?"Made":"Missed"} 1s ease-out forwards`,
+            pointerEvents:"none",
+            zIndex:5,
+          }}>{isMoneyball ? "🟡" : "🏀"}</div>
+        )}
+      </div>
+
+      {/* Status strip — rack name + ball indicator */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,fontSize:10,letterSpacing:1.5,color:"#aaa",fontWeight:700}}>
+        <span>RACK {rack.idx+1}/5 · {rack.name}</span>
+        <span style={{color: isMoneyball ? YE : OR, fontSize:11, fontWeight:900}}>
+          {isMoneyball ? "🟡 MONEYBALL · 2 PTS" : `🏀 BALL ${ballIndex+1}/3 · 1 PT`}
+        </span>
+      </div>
+
+      {/* Result overlay */}
+      {phase === "result" && result && (
+        <div style={{
+          padding:"14px 16px",
+          background: result.made
+            ? `linear-gradient(135deg, ${GR}33, rgba(0,0,0,0.4))`
+            : `linear-gradient(135deg, ${RE}22, rgba(0,0,0,0.4))`,
+          border: result.made ? `2px solid ${GR}` : `1px solid ${RE}66`,
+          borderRadius:10,textAlign:"center",
+          animation:"fadeIn 0.25s ease-out",
+        }}>
+          <div style={{fontSize:30,marginBottom:4}}>{result.made ? "✓" : "✗"}</div>
+          <div style={{fontSize:14,fontWeight:900,color:result.made?GR:RE,letterSpacing:2,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            {result.missed ? "TIMED OUT" : result.made ? (isMoneyball ? "MONEYBALL — +2!" : "SWISH — +1") : "MISS"}
+          </div>
+        </div>
+      )}
+
+      {/* Shot area — swipe down for wind-up, swipe up for release */}
+      {phase !== "result" && (
+        <div
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={handlePointerUp}
+          style={{
+            position:"relative",height:160,
+            background: phase === "ready"
+              ? "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.4))"
+              : `linear-gradient(180deg, ${OR}22, rgba(0,0,0,0.5))`,
+            border: phase === "ready" ? "2px dashed rgba(255,255,255,0.18)" : `2px solid ${OR}`,
+            borderRadius:10,touchAction:"none",cursor:"crosshair",
+            transition:"border-color 0.2s",
+          }}
+        >
+          {/* Timing bar (only in release phase) */}
+          {phase === "release" && (
+            <div style={{position:"absolute",top:6,left:8,right:8,height:5,background:"rgba(255,255,255,0.1)",borderRadius:3,overflow:"hidden"}}>
+              <div style={{
+                width:`${releaseProgress*100}%`,height:"100%",
+                background: releaseProgress>0.65 ? RE : (releaseProgress>0.35 && releaseProgress<0.65 ? GR : (releaseProgress>0.20 ? YE : RE)),
+                transition:"background 0.15s",
+              }}/>
+            </div>
+          )}
+
+          {/* Heading */}
+          <div style={{position:"absolute",top:phase==="release"?20:12,left:0,right:0,textAlign:"center",fontSize:12,letterSpacing:2,color:"#fff",fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif"}}>
+            {phase === "ready" ? "↓ SWIPE DOWN TO WIND UP" : "↑ SWIPE UP TO RELEASE"}
+          </div>
+
+          {/* Required-angle indicator (visible during release phase) */}
+          {phase === "release" && (
+            <div style={{
+              position:"absolute",left:"50%",top:"50%",
+              transform:`translate(-50%, -50%) rotate(${arrowRotation}deg)`,
+              pointerEvents:"none",opacity:0.4,
+            }}>
+              <svg width="64" height="64" viewBox="0 0 64 64">
+                <defs>
+                  <marker id={`tparr-${rack.idx}-${ballIndex}`} viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                    <path d="M 0 0 L 10 5 L 0 10 z" fill={OR}/>
+                  </marker>
+                </defs>
+                <line x1="32" y1="56" x2="32" y2="12" stroke={OR} strokeWidth="3" markerEnd={`url(#tparr-${rack.idx}-${ballIndex})`}/>
+              </svg>
+            </div>
+          )}
+
+          {/* Wind-up icon (visible during ready phase) */}
+          {phase === "ready" && (
+            <div style={{position:"absolute",left:"50%",top:"55%",transform:"translate(-50%,-50%)",pointerEvents:"none",fontSize:38,opacity:0.4}}>
+              ↓
+            </div>
+          )}
+
+          {/* Live swipe path */}
+          {pathPoints.length > 1 && (
+            <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%">
+              <polyline
+                points={pathPoints.map(p=>`${p.x},${p.y}`).join(" ")}
+                fill="none"
+                stroke={OR}
+                strokeWidth="4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+          )}
+
+          {/* Helper text */}
+          {phase === "ready" && (
+            <div style={{position:"absolute",bottom:8,left:0,right:0,textAlign:"center",fontSize:9,color:"rgba(255,255,255,0.5)",letterSpacing:1}}>
+              Wind up first, then release at the right angle for this rack
+            </div>
+          )}
+          {phase === "release" && (
+            <div style={{position:"absolute",bottom:8,left:0,right:0,textAlign:"center",fontSize:9,color:"rgba(255,255,255,0.5)",letterSpacing:1}}>
+              Match the arrow direction · timing matters
+            </div>
+          )}
+        </div>
+      )}
+
+      <style>{`
+        @keyframes shotArcMade {
+          0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+          50%  { transform: translate(-50%, -200%) scale(0.7); opacity: 1; }
+          100% { transform: translate(-50%, -250%) scale(0.5); opacity: 0; }
+        }
+        @keyframes shotArcMissed {
+          0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+          40%  { transform: translate(-50%, -180%) scale(0.7); opacity: 1; }
+          100% { transform: translate(-50%, -100%) scale(0.5); opacity: 0; }
+        }
+      `}</style>
+    </div>
+  );
+}
+
+// Prompt screen — banner, contestants list, two choices.
+function ThreePointPromptScreen({player, nbaTeam, onAccept, onDecline}){
+  const playerName = (player?.name || "You").toUpperCase();
+  const playerTeam = nbaTeam || "Your team";
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      <img src="/3pt.gif" alt="NBA Three-Point Shootout" style={{display:"block",width:"100%",maxWidth:380,margin:"0 auto 14px",borderRadius:8}}/>
+
+      <div style={{textAlign:"center",marginBottom:14}}>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>⭐ ALL-STAR WEEKEND</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>YOU'VE BEEN INVITED<br/>TO THE 3-POINT SHOOTOUT</div>
+      </div>
+
+      <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.5}}>
+        The All-Star Saturday Night three-point field:
+        <div style={{marginTop:10,display:"flex",flexDirection:"column",gap:6}}>
+          {[
+            {name: playerName,    team: playerTeam, you:true},
+            {name:"Jason Kapono", team:"Toronto Raptors"},
+            {name:"Dirk Nowitzki",team:"Dallas Mavericks"},
+            {name:"Daniel \"Booby\" Gibson", team:"Cleveland Cavaliers"},
+            {name:"Richard Hamilton", team:"Detroit Pistons"},
+            {name:"Steve Nash",   team:"Phoenix Suns"},
+          ].map((p,i)=>(
+            <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"6px 10px",background:p.you?`${OR}22`:"rgba(255,255,255,0.03)",borderRadius:6,border:p.you?`1px solid ${OR}55`:"1px solid rgba(255,255,255,0.06)"}}>
+              <span style={{fontSize:12,fontWeight:p.you?900:700,color:p.you?OR:"#fff"}}>{p.name}</span>
+              <span style={{fontSize:10,color:"#888"}}>{p.team}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        <button onClick={onAccept} style={{...btnS,padding:"14px 20px",fontSize:14,background:GR,color:"#080c10"}}>
+          🎯 LIGHT IT UP
+        </button>
+        <button onClick={onDecline} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+          Skip — focus on the season
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// Full contest game — manages the round flow, racks, ball counter, totals.
+function ThreePointContestGame({player, nbaTeam, onDone}){
+  // stage: intro → round1 → round1Done → finals → finalsDone
+  const [stage, setStage] = useState("intro");
+  // Round state: which rack, which ball in rack, accumulated score
+  const [rackIdx, setRackIdx] = useState(0);
+  const [ballIdx, setBallIdx] = useState(0);
+  const [score, setScore] = useState(0);
+  // Track per-rack scores for the result display
+  const [rackScores, setRackScores] = useState([]); // array of rack point totals
+  const [currentRackScore, setCurrentRackScore] = useState(0);
+  // Final tallies for round 1 and finals
+  const [round1Score, setRound1Score] = useState(0);
+  const [finalsScore, setFinalsScore] = useState(0);
+  // Forces ThreePointShot to remount between balls
+  const [shotKey, setShotKey] = useState(0);
+  const [playthrough, setPlaythrough] = useState(0);
+
+  const playerName = (player?.name || "You").toUpperCase();
+  const threePointSkill = player?.skills?.threePoint || 65;
+
+  // Scripted opponent scores. Re-roll on REPLAY.
+  // Round 1: Kapono is the heavy favorite (real-world he had 20 in round 1).
+  // Player needs to beat the second-best opponent (Gibson typically) to advance.
+  const round1Opponents = useMemo(()=>({
+    kapono:    19 + Math.floor(Math.random()*3),  // 19-21
+    gibson:    14 + Math.floor(Math.random()*3),  // 14-16
+    nowitzki:  11 + Math.floor(Math.random()*4),  // 11-14
+    nash:      11 + Math.floor(Math.random()*4),  // 11-14
+    hamilton:   9 + Math.floor(Math.random()*4),  //  9-12
+  }),[playthrough]);
+  // Finals — Kapono closes the door (real winner with 25). Player needs a
+  // strong round to beat him.
+  const finalsKapono = useMemo(()=> 18 + Math.floor(Math.random()*4),[playthrough]); // 18-21
+
+  // Reset state for a fresh playthrough
+  const replay = () => {
+    setStage("intro");
+    setRackIdx(0);
+    setBallIdx(0);
+    setScore(0);
+    setRackScores([]);
+    setCurrentRackScore(0);
+    setRound1Score(0);
+    setFinalsScore(0);
+    setShotKey(k=>k+1);
+    setPlaythrough(p=>p+1);
+  };
+
+  // Start a fresh round (called when entering round1 or finals)
+  const startRound = () => {
+    setRackIdx(0);
+    setBallIdx(0);
+    setScore(0);
+    setRackScores([]);
+    setCurrentRackScore(0);
+    setShotKey(k=>k+1);
+  };
+
+  // Handle one shot completion. Advance ball / rack / round.
+  const handleShot = (result) => {
+    const newScore = score + result.points;
+    setScore(newScore);
+    const newRackScore = currentRackScore + result.points;
+    setCurrentRackScore(newRackScore);
+
+    // Move to next ball
+    if(ballIdx < 2){
+      setBallIdx(ballIdx + 1);
+      setShotKey(k=>k+1);
+    } else {
+      // Last ball of rack — record rack score and move on
+      const nextRackScores = [...rackScores, newRackScore];
+      setRackScores(nextRackScores);
+      setCurrentRackScore(0);
+      if(rackIdx < 4){
+        setRackIdx(rackIdx + 1);
+        setBallIdx(0);
+        setShotKey(k=>k+1);
+      } else {
+        // Round complete
+        if(stage === "round1"){
+          setRound1Score(newScore);
+          setTimeout(()=> setStage("round1Done"), 500);
+        } else if(stage === "finals"){
+          setFinalsScore(newScore);
+          setTimeout(()=> setStage("finalsDone"), 500);
+        }
+      }
+    }
+  };
+
+  // Intro — show how-to-play guide
+  if(stage === "intro"){
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>HOW TO SHOOT</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>WIND UP · RELEASE</div>
+          <div style={{fontSize:11,color:"#aaa",marginTop:4,lineHeight:1.4}}>
+            Swipe DOWN to wind up. Then swipe UP at the right angle to release the ball.
+          </div>
+        </div>
+
+        <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:900,color:OR,letterSpacing:1.5,marginBottom:8}}>THE FORMAT</div>
+          <div style={{fontSize:12,color:"#ddd",lineHeight:1.6}}>
+            • 5 racks · 3 balls per rack<br/>
+            • The 3rd ball in each rack is the <span style={{color:YE,fontWeight:900}}>🟡 MONEYBALL</span> — worth <b>2 points</b><br/>
+            • Each rack changes the release angle (corners → wings → top of the key)<br/>
+            • An on-screen arrow shows the required angle for each shot<br/>
+            • Higher 3PT skill = wider tolerance and longer timing window
+          </div>
+        </div>
+
+        <div style={{background:"rgba(255,215,0,0.05)",border:`1px solid ${YE}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14,lineHeight:1.5}}>
+          <div style={{fontSize:10,fontWeight:900,color:YE,letterSpacing:1.5,marginBottom:5}}>💡 SCORING</div>
+          <div>Round 1 → beat 4 of 5 opponents to advance<br/>
+          Finals → head-to-head vs Jason Kapono</div>
+        </div>
+
+        <div style={{background:`${OR}11`,border:`1px solid ${OR}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:900,color:OR,letterSpacing:1.5,marginBottom:5}}>YOUR 3PT SKILL</div>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <div style={{flex:1,height:8,background:"rgba(255,255,255,0.1)",borderRadius:4,overflow:"hidden"}}>
+              <div style={{width:`${threePointSkill}%`,height:"100%",background:`linear-gradient(90deg, ${OR}, ${GR})`}}/>
+            </div>
+            <div style={{fontSize:14,fontWeight:900,color:OR,fontFamily:"'Barlow Condensed',sans-serif",minWidth:36,textAlign:"right"}}>{threePointSkill}</div>
+          </div>
+        </div>
+
+        <button onClick={()=>{
+          setStage("round1");
+          startRound();
+        }} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          🎯 BEGIN ROUND 1 →
+        </button>
+      </div>
+    );
+  }
+
+  // Round 1 done — show standings, decide if player advances
+  if(stage === "round1Done"){
+    const board = [
+      {name: playerName, score: round1Score, you:true},
+      {name:"Jason Kapono", score: round1Opponents.kapono},
+      {name:"Booby Gibson", score: round1Opponents.gibson},
+      {name:"Dirk Nowitzki", score: round1Opponents.nowitzki},
+      {name:"Steve Nash", score: round1Opponents.nash},
+      {name:"Richard Hamilton", score: round1Opponents.hamilton},
+    ].sort((a,b)=> b.score - a.score);
+    const playerRank = board.findIndex(p=>p.you);
+    // Player advances if they're top 2 (Kapono is essentially locked for finals).
+    const advancing = playerRank < 2;
+
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>ROUND 1 — RESULTS</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>TOP 2 ADVANCE</div>
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:6,marginBottom:14}}>
+          {board.map((p,i)=>(
+            <div key={p.name} style={{
+              display:"flex",justifyContent:"space-between",alignItems:"center",
+              padding:"10px 12px",
+              background:p.you?`${OR}22`:"rgba(255,255,255,0.04)",
+              border:`1.5px solid ${i<2?GR+"66":i>=2?RE+"33":"rgba(255,255,255,0.08)"}`,
+              borderRadius:8,
+            }}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{width:24,fontSize:13,fontWeight:900,color:i<2?GR:RE}}>
+                  {i===0?"🥇":i===1?"🥈":i===2?"🥉":(i+1)}
+                </div>
+                <div style={{fontSize:13,fontWeight:p.you?900:700,color:p.you?OR:"#fff"}}>{p.name}</div>
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                <div style={{fontSize:18,fontWeight:900,color:i<2?GR:"#888",fontFamily:"'Barlow Condensed',sans-serif"}}>{p.score}</div>
+                <div style={{fontSize:9,color:i<2?GR:RE,letterSpacing:1.5,fontWeight:700,width:60,textAlign:"right"}}>
+                  {i<2?"ADVANCES":"ELIMINATED"}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={()=>{
+            if(advancing){
+              setStage("finals");
+              startRound();
+            } else {
+              onDone && onDone({result:"eliminated", round1Score, finalsScore:0});
+            }
+          }} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            {advancing ? "🏆 ONTO THE FINALS →" : "← FINISH IT UP"}
+          </button>
+          {!advancing && (
+            <button onClick={replay} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+              🔄 REPLAY CONTEST
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
+
+  // Finals done — head-to-head vs Kapono
+  if(stage === "finalsDone"){
+    const won = finalsScore > finalsKapono;
+    const tied = finalsScore === finalsKapono;
+    return(
+      <div style={{padding:"4px 0 14px"}}>
+        <div style={{textAlign:"center",marginBottom:14}}>
+          <div style={{fontSize:10,letterSpacing:3,color:won?GO:"#888",marginBottom:4}}>FINAL RESULT</div>
+          <div style={{fontSize:24,fontWeight:900,color:won?GO:"#fff",lineHeight:1}}>
+            {won ? "🏆 CHAMPION" : tied ? "RUNNER-UP" : "RUNNER-UP"}
+          </div>
+        </div>
+
+        <div style={{display:"flex",gap:8,marginBottom:14}}>
+          <div style={{flex:1,padding:"12px 10px",background:won?`${GO}22`:"rgba(255,255,255,0.04)",border:`1.5px solid ${won?GO:"rgba(255,255,255,0.1)"}`,borderRadius:8,textAlign:"center"}}>
+            <div style={{fontSize:9,letterSpacing:1.5,color:won?GO:"#aaa",fontWeight:700,marginBottom:6,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{playerName}</div>
+            <div style={{fontSize:30,fontWeight:900,color:won?GO:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>{finalsScore}</div>
+          </div>
+          <div style={{display:"flex",alignItems:"center",fontSize:14,color:"#888",fontWeight:900}}>VS</div>
+          <div style={{flex:1,padding:"12px 10px",background:!won?`${GO}22`:"rgba(255,255,255,0.04)",border:`1.5px solid ${!won?GO:"rgba(255,255,255,0.1)"}`,borderRadius:8,textAlign:"center"}}>
+            <div style={{fontSize:9,letterSpacing:1.5,color:!won?GO:"#aaa",fontWeight:700,marginBottom:6}}>JASON KAPONO</div>
+            <div style={{fontSize:30,fontWeight:900,color:!won?GO:"#fff",fontFamily:"'Barlow Condensed',sans-serif"}}>{finalsKapono}</div>
+          </div>
+        </div>
+
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={()=> onDone && onDone({
+            result: won ? "won" : "finalsLost",
+            round1Score, finalsScore,
+          })} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            {won ? "🏆 COLLECT THE TROPHY →" : "← HEAD HOME"}
+          </button>
+          <button onClick={replay} style={{...ghostS,padding:"12px 20px",fontSize:12}}>
+            🔄 REPLAY CONTEST
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Active shooting — round1 or finals
+  const isFinals = stage === "finals";
+  const rack = THREE_POINT_RACKS[rackIdx];
+  const isMoneyball = ballIdx === 2;
+
+  return(
+    <div style={{padding:"4px 0 14px"}}>
+      <div style={{textAlign:"center",marginBottom:10}}>
+        <div style={{fontSize:10,letterSpacing:3,color:isFinals?GO:OR,marginBottom:4}}>
+          {isFinals ? "🏆 FINALS · vs JASON KAPONO" : "ROUND 1 · YOUR TURN"}
+        </div>
+        <div style={{fontSize:11,color:"#888"}}>
+          {isFinals && `Kapono shot ${finalsKapono} · `}Score: <span style={{color:OR,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",fontSize:14}}>{score}</span>
+        </div>
+      </div>
+
+      {/* Per-rack ball indicator */}
+      <div style={{display:"flex",justifyContent:"center",gap:4,marginBottom:10}}>
+        {THREE_POINT_RACKS.map((r,i)=>(
+          <div key={i} style={{flex:1,padding:"4px 2px",background:i===rackIdx?`${OR}22`:"rgba(255,255,255,0.03)",border:`1px solid ${i===rackIdx?OR+"88":"rgba(255,255,255,0.08)"}`,borderRadius:5,textAlign:"center"}}>
+            <div style={{fontSize:8,color:"#888",letterSpacing:0.5,fontWeight:700}}>R{i+1}</div>
+            <div style={{fontSize:11,fontWeight:900,color: i < rackIdx ? GR : i === rackIdx ? OR : "#444", fontFamily:"'Barlow Condensed',sans-serif"}}>
+              {i < rackIdx ? (rackScores[i] || 0) : i === rackIdx ? currentRackScore : "—"}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <ThreePointShot
+        key={shotKey}
+        rack={rack}
+        ballIndex={ballIdx}
+        isMoneyball={isMoneyball}
+        threePointSkill={threePointSkill}
+        onComplete={handleShot}
+      />
     </div>
   );
 }
@@ -6983,6 +7679,13 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             if(gp===0 && currentYear===2007 && !firedEvents.includes(WEED_EVENT_ID)){
               setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), WEED_EVENT_ID]}));
               go("weedPrompt");
+              return;
+            }
+            // 2008-09 season All-Star Weekend — Three-Point Shootout invite.
+            // Field of 6 with Kapono as the defending champ to beat.
+            if(gp===0 && currentYear===2008 && !firedEvents.includes(THREE_POINT_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), THREE_POINT_EVENT_ID]}));
+              go("threePointPrompt");
               return;
             }
             // 2018-19 season — Damon Jones soup incident. Player has to be in
@@ -10429,6 +11132,8 @@ function RetireScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGamesPl
       // Slam Dunk Contest — captured as a legacy accolade so the past-career
       // detail screen can render the champion chip even after retirement.
       dunkContestResult:player.dunkContestResult||null,
+      // 3-Point Shootout — same treatment as the dunk contest.
+      threePointContestResult:player.threePointContestResult||null,
       // HOF
       hof:hofEval.inducted,
       hofReason:hofEval.reason,
@@ -10781,7 +11486,7 @@ function PastCareerStatsScreen({entry, go}){
       })()}
 
       {/* Accolades chips */}
-      {(awards.length>0||championships.length>0||entry.hof||entry.dunkContestResult==="won")&&(
+      {(awards.length>0||championships.length>0||entry.hof||entry.dunkContestResult==="won"||entry.threePointContestResult==="won")&&(
         <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -10812,6 +11517,13 @@ function PastCareerStatsScreen({entry, go}){
               <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${OR}22`,border:`1px solid ${OR}66`,borderRadius:6}}>
                 <span style={{fontSize:14}}>🏀</span>
                 <span style={{fontSize:10,color:OR,fontWeight:900,letterSpacing:1}}>DUNK CHAMPION</span>
+              </div>
+            )}
+            {/* 3-Point Shootout champion */}
+            {entry.threePointContestResult==="won"&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${YE}22`,border:`1px solid ${YE}66`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🎯</span>
+                <span style={{fontSize:10,color:YE,fontWeight:900,letterSpacing:1}}>3PT CHAMPION</span>
               </div>
             )}
           </div>
@@ -11335,7 +12047,7 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
       {/* Accolades section — listed once at the top so the player can see
           career totals at a glance. Per-season chips appear on the NBA table
           rows below. */}
-      {(((player?.awards)||[]).length>0||((player?.championships)||[]).length>0||player?.dunkContestResult==="won")&&(
+      {(((player?.awards)||[]).length>0||((player?.championships)||[]).length>0||player?.dunkContestResult==="won"||player?.threePointContestResult==="won")&&(
         <div style={{background:`linear-gradient(135deg, ${GO}11 0%, rgba(0,0,0,0.3) 100%)`,border:`1px solid ${GO}44`,borderRadius:10,padding:12,marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:2,color:GO,fontWeight:700,textTransform:"uppercase",marginBottom:8}}>🏆 Accolades</div>
           <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
@@ -11360,6 +12072,13 @@ function NbaStatsScreen({player, allYears, nbaSeasons, nbaSeasonTotals, nbaGames
               <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${OR}22`,border:`1px solid ${OR}66`,borderRadius:6}}>
                 <span style={{fontSize:14}}>🏀</span>
                 <span style={{fontSize:10,color:OR,fontWeight:900,letterSpacing:1}}>DUNK CHAMPION</span>
+              </div>
+            )}
+            {/* 3-Point Shootout champion */}
+            {player?.threePointContestResult==="won"&&(
+              <div style={{display:"flex",alignItems:"center",gap:6,padding:"5px 9px",background:`${YE}22`,border:`1px solid ${YE}66`,borderRadius:6}}>
+                <span style={{fontSize:14}}>🎯</span>
+                <span style={{fontSize:10,color:YE,fontWeight:900,letterSpacing:1}}>3PT CHAMPION</span>
               </div>
             )}
           </div>
@@ -11921,6 +12640,31 @@ export default function App(){
       ]);
       setScreen("weedPrompt");
       toast("Test — Barnes & Stack prompt", GR);
+    }
+    else if(preset==="threePointContest"){
+      // 3-POINT CONTEST — 2008-09 season All-Star weekend. 4 NBA seasons logged.
+      // Player gets elite 3pt skill so the test isn't doomed.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:88,midRange:86,finishing:86,handles:84,playmaking:80,perimDefense:79,postDefense:73,rebounding:75};
+      mike.intangibles=["confident","clutch","highIQ"];
+      mike.contract={
+        type:"extension", signedYear:NBA_START_YEAR+3, years:5,
+        salaries:[14000000,15120000,16329600,17636000,19046880],
+        totalValue:82132480, signingBonus:4000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID, WEED_EVENT_ID, THREE_POINT_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(25000000); setSkillPoints(15);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
+      ]);
+      setScreen("threePointPrompt");
+      toast("Test — 3-Point Contest prompt", YE);
     }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
@@ -12636,6 +13380,11 @@ export default function App(){
         <button onClick={()=>jumpToTesting("barnesJoint")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:14,fontWeight:900}}>💨 BARNES & STACK (2007)</div>
           <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Locker-room offer · ends the same either way</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("threePointContest")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${YE} 0%, #b08800 100%)`,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🎯 3-POINT CONTEST (2008)</div>
+          <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>NBA Shootout · vs Kapono, Nowitzki, Gibson, Hamilton, Nash</div>
         </button>
 
         <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -13659,6 +14408,39 @@ export default function App(){
             toast&&toast(`Runner-up — ${outcome.finalsTotal} pts`, YE);
           } else {
             toast&&toast(`Eliminated in Round 1 (${outcome.round1Score})`, "#888");
+          }
+          if(testingMode) exitTesting(); else go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    threePointPrompt:(
+      <MenuFrame sub="All-Star Saturday Night" title="3-POINT SHOOTOUT">
+        <ThreePointPromptScreen
+          player={player} nbaTeam={nbaTeam}
+          onAccept={()=>go("threePointContest")}
+          onDecline={()=>{
+            setPlayer(p=>({...p, threePointContestResult:"declined"}));
+            toast&&toast("You skipped the 3-point contest.","#888");
+            if(testingMode) exitTesting(); else go("leagueHub");
+          }}
+        />
+      </MenuFrame>
+    ),
+    threePointContest:(
+      <MenuFrame sub="NBA Three-Point Shootout" title="3PT CONTEST">
+        <ThreePointContestGame player={player} nbaTeam={nbaTeam} onDone={(outcome)=>{
+          // outcome: {result:"won"|"finalsLost"|"eliminated", round1Score, finalsScore}
+          setPlayer(p=>({
+            ...p,
+            threePointContestResult: outcome.result,
+            threePointContestScore: outcome.finalsScore || outcome.round1Score || 0,
+          }));
+          if(outcome.result === "won"){
+            toast&&toast(`🎯 3PT CHAMPION! ${outcome.finalsScore} pts`, GO);
+          } else if(outcome.result === "finalsLost"){
+            toast&&toast(`Runner-up — ${outcome.finalsScore} pts`, YE);
+          } else {
+            toast&&toast(`Eliminated in Round 1 (${outcome.round1Score})`,"#888");
           }
           if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
