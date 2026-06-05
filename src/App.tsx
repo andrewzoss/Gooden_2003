@@ -5634,7 +5634,7 @@ function NachoPromptScreen({onDone}){
 
       <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
         <div style={{padding:4,background:`linear-gradient(135deg, ${OR}, #c8501a)`,borderRadius:10,boxShadow:"0 4px 20px rgba(232,135,58,0.4)"}}>
-          <img src="/nacho.png" alt="Nacho Libre" style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}/>
+          <img src="/nacho.jpg" alt="Nacho Libre" style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}/>
         </div>
       </div>
 
@@ -13575,7 +13575,9 @@ export default function App(){
             artestFightWon: result === "won",
           }));
           toast&&toast("📋 SUSPENDED 5 GAMES",RE);
-          go("leagueHub");
+          // In testing mode → kick back to the title screen so the user can
+          // try the next preset. Otherwise resume normal career flow.
+          if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
       </MenuFrame>
     ),
@@ -13588,7 +13590,7 @@ export default function App(){
             // Player passed. No career-score boost; just back to the league.
             setPlayer(p=>({...p, dunkContestResult:"declined"}));
             toast&&toast("You skipped the dunk contest.","#888");
-            go("leagueHub");
+            if(testingMode) exitTesting(); else go("leagueHub");
           }}
         />
       </MenuFrame>
@@ -13610,7 +13612,7 @@ export default function App(){
           } else {
             toast&&toast(`Eliminated in Round 1 (${outcome.round1Score})`, "#888");
           }
-          go("leagueHub");
+          if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
       </MenuFrame>
     ),
@@ -13622,7 +13624,7 @@ export default function App(){
           // so we just mark it as souped.
           setPlayer(p=>({...p, soupedDamon:true}));
           toast&&toast("🍲 SOUPED — Damon Jones never lived it down", OR);
-          go("leagueHub");
+          if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
       </MenuFrame>
     ),
@@ -13638,7 +13640,7 @@ export default function App(){
             // Declined — nothing happens, as advertised.
             toast&&toast("You passed on Hollywood.","#888");
           }
-          go("leagueHub");
+          if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
       </MenuFrame>
     ),
@@ -13647,7 +13649,7 @@ export default function App(){
         <WeedPromptScreen player={player} onDone={()=>{
           // Single outcome. Flag it for the career-score read.
           setPlayer(p=>({...p, hitTheBarnesJoint:true}));
-          go("leagueHub");
+          if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
       </MenuFrame>
     ),
