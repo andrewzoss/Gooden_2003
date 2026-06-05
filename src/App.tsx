@@ -5721,79 +5721,107 @@ function NachoPromptScreen({onDone}){
 // winner), Dirk Nowitzki, Daniel "Booby" Gibson, Richard Hamilton, Steve Nash.
 // Player rounds out the field as the 6th contestant. Format: 1 round + finals.
 
-// Rack metadata. Each rack sits at a different spot around the arc on the
-// court visual. The `angle` is the precise direction from that rack to the
-// hoop (measured from vertical, positive = right, negative = left), computed
-// from the rack's pixel position on the court diagram below. xPercent and yPx
-// drive the dot placement so the diagram and the swipe arrow stay in sync.
+// Rack metadata — each rack sits at a precise spot on the court. Stored as
+// fractions of the container so positions scale with width. The hoop lives at
+// the top center (HOOP_FRAC); the "green line" you trace runs from each rack
+// up to the hoop.
+const HOOP_X_FRAC = 0.50;
+const HOOP_Y_FRAC = 0.11;
+
 const THREE_POINT_RACKS = [
-  {idx:0, name:"LEFT CORNER",    angle:  70, xPercent: 13, yPx: 80},
-  {idx:1, name:"LEFT WING",      angle:  43, xPercent: 30, yPx:105},
-  {idx:2, name:"TOP OF THE KEY", angle:   0, xPercent: 50, yPx:135},
-  {idx:3, name:"RIGHT WING",     angle: -43, xPercent: 70, yPx:105},
-  {idx:4, name:"RIGHT CORNER",   angle: -70, xPercent: 87, yPx: 80},
+  {idx:0, name:"LEFT CORNER",    xP: 0.12, yP: 0.30},
+  {idx:1, name:"LEFT WING",      xP: 0.30, yP: 0.60},
+  {idx:2, name:"TOP OF THE KEY", xP: 0.50, yP: 0.84},
+  {idx:3, name:"RIGHT WING",     xP: 0.70, yP: 0.60},
+  {idx:4, name:"RIGHT CORNER",   xP: 0.88, yP: 0.30},
 ];
 
-// Score one shot. Quality combines angle accuracy + release timing, weighted
-// by the player's 3pt skill. Returns {made, quality}.
-function calcThreePointShot(swipeAngle, requiredAngle, timing, skill){
-  // Angle tolerance widens with skill — at 90+ the swipe doesn't have to be
-  // pixel-perfect, at 50 only crisp swipes count.
-  const angleTol = 12 + (skill / 100) * 25; // skill 50 → 24°, skill 90 → 34°
-  const angleDiff = Math.abs(swipeAngle - requiredAngle);
-  const angleScore = Math.max(0, 1 - angleDiff / angleTol);
-  // Timing: 0 = released right at start, 1 = released at end of window.
-  // Sweet spot is mid-window (0.35-0.65).
-  let timingScore;
-  if(timing >= 0.30 && timing <= 0.65){
-    timingScore = 1.0;
-  } else if(timing < 0.30){
-    timingScore = Math.max(0, 1 - (0.30 - timing) * 2.5);
-  } else {
-    timingScore = Math.max(0, 1 - (timing - 0.65) * 2.8);
+// Deterministic shot evaluator. The swipe must:
+//   (1) stay close to the rack→hoop line (small perpendicular distance avg)
+//   (2) actually wind up backward past the rack at some point
+//   (3) reach far enough forward toward the hoop
+// All three are pure path math — no RNG. The only skill-driven number is the
+// corridor width tolerance.
+function evaluateThreePointShot(path, rackPx, hoopPx, skill){
+  if(!path || path.length < 8) return {made:false, reason:"too-short"};
+  const ldx = hoopPx.x - rackPx.x;
+  const ldy = hoopPx.y - rackPx.y;
+  const lineLen = Math.hypot(ldx, ldy);
+  if(lineLen === 0) return {made:false, reason:"bad-line"};
+  const ux = ldx / lineLen;   // unit vector rack→hoop
+  const uy = ldy / lineLen;
+
+  let minT = Infinity, maxT = -Infinity;
+  let sumPerpDist = 0;
+  let totalPathLen = 0;
+  let prev = path[0];
+  for(let i=0;i<path.length;i++){
+    const p = path[i];
+    // Vector from rack to point
+    const dx = p.x - rackPx.x;
+    const dy = p.y - rackPx.y;
+    // Projection on line direction (negative = behind rack, positive = toward hoop)
+    const t = dx * ux + dy * uy;
+    // Perpendicular distance from line (always positive)
+    const perp = Math.abs(-dx * uy + dy * ux);
+    if(t < minT) minT = t;
+    if(t > maxT) maxT = t;
+    sumPerpDist += perp;
+    if(i > 0){
+      totalPathLen += Math.hypot(p.x - prev.x, p.y - prev.y);
+    }
+    prev = p;
   }
-  // Skill scaling — high skill players hit harder even on mediocre quality.
-  const skillBonus = 0.55 + (skill / 100) * 0.45; // 50→0.78, 80→0.91, 100→1.0
-  const quality = (angleScore + timingScore) / 2;
-  const makeChance = 0.15 + 0.80 * quality * skillBonus;
-  const made = Math.random() < makeChance;
-  return {made, quality, makeChance};
+
+  // Short flick = probably an accidental tap, don't even register as a miss
+  if(totalPathLen < 60) return {made:false, reason:"too-short", recoverable:true};
+
+  const avgPerpDist = sumPerpDist / path.length;
+  // Tolerance corridor — wider for better shooters. Tuned so a clean traced
+  // line easily clears it, but a sloppy diagonal swipe won't.
+  const corridorWidth = 32 + (skill / 100) * 22; // skill 50→43, 90→52, 100→54
+  // Need to actually wind up backward past the rack
+  const minBack = -22;
+  // And follow through to within reasonable range of the hoop
+  const minForward = lineLen * 0.55;
+
+  if(avgPerpDist > corridorWidth)  return {made:false, reason:"off-line", avgPerpDist, corridorWidth};
+  if(minT > minBack)               return {made:false, reason:"no-wind-up", minT};
+  if(maxT < minForward)            return {made:false, reason:"short", maxT, target:minForward};
+
+  // Made — accuracy 0-1 based on how tight the trace was
+  return {made:true, accuracy: Math.max(0, 1 - avgPerpDist / corridorWidth)};
 }
 
-// One shot — a SINGLE continuous swipe. Press down, drag down to wind up, hold
-// briefly until the time is right, then drag up at the required angle and lift.
-// The finger never leaves the screen between wind-up and release.
+// One shot — the entire court IS the swipe surface. You trace the green line
+// from the rack up to the hoop (back-then-forth in one continuous motion).
 function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComplete}){
-  // phase: ready (waiting to start) → woundUp (finger in wind-up zone, timing
-  // window is ticking) → result. The transition between ready and woundUp
-  // happens DURING a single pointer interaction — finger crosses the wind-up
-  // threshold and the meter starts.
+  // phase: ready (waiting) → tracking (finger down) → result
   const [phase, setPhase] = useState("ready");
-  const [windowProgress, setWindowProgress] = useState(1);
   const [pathPoints, setPathPoints] = useState([]);
   const [result, setResult] = useState(null);
   const [ballFlying, setBallFlying] = useState(false);
 
   const swipePointsRef = useRef([]);
-  const lowestPointIdxRef = useRef(0);
-  const woundUpAtRef = useRef(null); // performance.now() when we entered wind-up zone
   const isTrackingRef = useRef(false);
-  const animationRef = useRef(null);
   const finishedRef = useRef(false);
+  const timeoutTimerRef = useRef(null);
 
-  // Wind-up requires the finger to pull at least this many pixels DOWN from
-  // the start point. Anything less and it doesn't count as a real wind-up.
-  const WIND_UP_THRESHOLD = 70;
-  // Timing window length — scales with skill so better shooters get more grace.
-  // Tightened a touch from earlier — encourages crisper, more deliberate shots.
-  const windowMs = 600 + (threePointSkill / 100) * 600;
-  const requiredAngle = rack.angle;
+  // Generous time limit — 4 seconds is plenty for any swipe, but stops the
+  // shot from hanging forever if the finger slips off.
+  const SHOT_TIMEOUT_MS = 4000;
 
   useEffect(()=>{
     return ()=> {
-      if(animationRef.current) cancelAnimationFrame(animationRef.current);
+      if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
     };
   },[]);
+
+  // Convert a frac-based position to actual pixels using a bounding rect
+  const fracToPx = (rect, xFrac, yFrac) => ({
+    x: xFrac * rect.width,
+    y: yFrac * rect.height,
+  });
 
   const handlePointerDown = (e) => {
     if(phase === "result" || finishedRef.current) return;
@@ -5802,11 +5830,15 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
     swipePointsRef.current = [p];
     setPathPoints([p]);
-    lowestPointIdxRef.current = 0;
-    woundUpAtRef.current = null;
-    setPhase("ready");
-    setWindowProgress(1);
+    setPhase("tracking");
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
+    timeoutTimerRef.current = setTimeout(()=>{
+      if(isTrackingRef.current && !finishedRef.current){
+        isTrackingRef.current = false;
+        finalize({made:false, reason:"timeout"});
+      }
+    }, SHOT_TIMEOUT_MS);
   };
 
   const handlePointerMove = (e) => {
@@ -5815,87 +5847,29 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
     swipePointsRef.current.push(p);
     setPathPoints([...swipePointsRef.current]);
-
-    // Track the deepest point reached so far — that's the "bottom" of the
-    // wind-up. The release angle gets measured from there to the lift point.
-    const lowest = swipePointsRef.current[lowestPointIdxRef.current];
-    if(p.y > lowest.y){
-      lowestPointIdxRef.current = swipePointsRef.current.length - 1;
-    }
-
-    // First time we cross the wind-up threshold, kick off the timing window.
-    const start = swipePointsRef.current[0];
-    if(woundUpAtRef.current == null && (p.y - start.y) > WIND_UP_THRESHOLD){
-      woundUpAtRef.current = performance.now();
-      setPhase("woundUp");
-      // Drain the timing bar via rAF
-      const tick = () => {
-        if(finishedRef.current || !isTrackingRef.current) return;
-        const elapsed = performance.now() - woundUpAtRef.current;
-        const prog = Math.max(0, 1 - elapsed / windowMs);
-        setWindowProgress(prog);
-        if(prog <= 0){
-          // Held too long — auto-miss while finger is still down.
-          isTrackingRef.current = false;
-          finalize({made:false, missed:true, reason:"timeout"});
-          return;
-        }
-        animationRef.current = requestAnimationFrame(tick);
-      };
-      animationRef.current = requestAnimationFrame(tick);
-    }
   };
 
-  const handlePointerUp = () => {
+  const handlePointerUp = (e) => {
     if(!isTrackingRef.current || finishedRef.current) return;
     isTrackingRef.current = false;
-    if(animationRef.current) cancelAnimationFrame(animationRef.current);
-
-    // No wind-up at all → invalid swipe, let them retry without penalty.
-    if(woundUpAtRef.current == null){
+    if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
+    const rect = e.currentTarget.getBoundingClientRect();
+    const rackPx = fracToPx(rect, rack.xP, rack.yP);
+    const hoopPx = fracToPx(rect, HOOP_X_FRAC, HOOP_Y_FRAC);
+    const shotResult = evaluateThreePointShot(swipePointsRef.current, rackPx, hoopPx, threePointSkill);
+    // If they barely touched the screen, treat as accidental tap and reset
+    if(shotResult.recoverable){
       setPathPoints([]);
       setPhase("ready");
       return;
     }
-
-    // Measure the upward portion: from the deepest point to where the finger
-    // lifted. That's the "release" vector — its angle vs required + its timing
-    // are what determine the shot quality.
-    const pts = swipePointsRef.current;
-    const lowest = pts[lowestPointIdxRef.current];
-    const end = pts[pts.length - 1];
-    const dx = end.x - lowest.x;
-    const dy = end.y - lowest.y;
-
-    // If finger lifted without going meaningfully up from the bottom, no shot.
-    if(dy >= -25 || Math.hypot(dx, dy) < 30){
-      finalize({made:false, missed:true, reason:"no-release"});
-      return;
-    }
-
-    // Angle from vertical: 0° = straight up, positive = right, negative = left.
-    // atan2(dx, -dy) handles signs correctly since y grows downward in screen space.
-    const angleRad = Math.atan2(dx, -dy);
-    const angleDeg = angleRad * 180 / Math.PI;
-    // Timing — how far into the window the user was when they lifted off.
-    // 0 = released at the moment they entered the zone, 1 = released right at
-    // the end. Sweet spot is mid-window (see calcThreePointShot).
-    const timing = 1 - windowProgress;
-
-    const shotResult = calcThreePointShot(angleDeg, requiredAngle, timing, threePointSkill);
-    finalize({
-      made: shotResult.made,
-      missed: false,
-      quality: shotResult.quality,
-      angle: angleDeg,
-      timing,
-    });
+    finalize(shotResult);
   };
 
   const finalize = (r) => {
     if(finishedRef.current) return;
     finishedRef.current = true;
-    if(animationRef.current) cancelAnimationFrame(animationRef.current);
+    if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
     setResult(r);
     setPhase("result");
     setBallFlying(true);
@@ -5908,61 +5882,25 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     }, 1200);
   };
 
-  // Required-angle arrow rotation. CSS rotation is clockwise (positive = tip
-  // moves right), and our angle convention is also positive = right of vertical,
-  // so the rotation directly equals the required angle. Previous version had
-  // this negated which sent the arrow the wrong way.
-  const arrowRotation = requiredAngle;
+  // Reason → user-friendly message
+  const reasonLabel = (reason) => {
+    if(reason === "off-line") return "OFF THE LINE";
+    if(reason === "no-wind-up") return "NO WIND-UP";
+    if(reason === "short") return "SHORT SHOT";
+    if(reason === "timeout") return "TIMED OUT";
+    return "MISS";
+  };
+
+  // Compute the wind-up extension end point — extends past the rack in the
+  // direction AWAY from the hoop, so the user has a visible "wind-up runway".
+  // Using percent coords for SVG/CSS consistency.
+  const windUpRatio = 0.20; // 20% of the line length extends behind the rack
+  const windUpEndXP = rack.xP - (HOOP_X_FRAC - rack.xP) * windUpRatio;
+  const windUpEndYP = rack.yP - (HOOP_Y_FRAC - rack.yP) * windUpRatio;
 
   return(
     <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
-      {/* Court arc with basket and rack indicators above the shot area.
-          Layout: basket at top center, racks fan out around it on a 3pt arc.
-          Corner racks sit near the baseline (close to basket vertically, far
-          laterally); top of the key is straight back from the basket. */}
-      <div style={{position:"relative",height:150,marginBottom:10,background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 35%, #c97a3a 55%, #d68a4a 100%)",borderRadius:10,overflow:"hidden",border:"1px solid rgba(255,255,255,0.08)"}}>
-        {/* Backboard */}
-        <div style={{position:"absolute",left:"50%",top:8,transform:"translateX(-50%)",width:96,height:34,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
-        {/* Rim — centered at y≈41 in the 300x150 viewbox */}
-        <div style={{position:"absolute",left:"50%",top:38,transform:"translateX(-50%)",width:32,height:6,background:"#ff6600",borderRadius:3,border:"1.5px solid #fff"}}/>
-        {/* 3pt arc — passes through all rack positions. Quadratic Bezier with a
-            deep control point produces an arc that bottoms out near the
-            top-of-the-key rack. */}
-        <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 300 150" preserveAspectRatio="none">
-          <path d="M 39 80 Q 150 185 261 80" stroke="rgba(255,255,255,0.4)" strokeWidth="1.5" fill="none" strokeDasharray="3,3"/>
-        </svg>
-        {/* Rack position dots — placed via the precomputed xPercent/yPx so
-            the swipe arrow's angle truly matches "from rack → basket". */}
-        {THREE_POINT_RACKS.map((r,i)=>{
-          const isCurrent = i === rack.idx;
-          return(
-            <div key={i} style={{
-              position:"absolute",left:`${r.xPercent}%`,top:r.yPx,transform:"translate(-50%,-50%)",
-              width:isCurrent?20:14,height:isCurrent?20:14,borderRadius:"50%",
-              background: isCurrent ? OR : "rgba(255,255,255,0.25)",
-              border: isCurrent ? "2px solid #fff" : "1px solid rgba(255,255,255,0.4)",
-              boxShadow: isCurrent ? `0 0 12px ${OR}` : "none",
-              transition:"all 0.2s",
-            }}/>
-          );
-        })}
-        {/* Ball flying animation when shot fires — starts at the current rack
-            position, arcs toward the rim. */}
-        {ballFlying && (
-          <div style={{
-            position:"absolute",
-            left:`${rack.xPercent}%`,
-            top: rack.yPx,
-            transform:"translate(-50%,-50%)",
-            fontSize:18,
-            animation: `shotArc${result?.made?"Made":"Missed"} 1s ease-out forwards`,
-            pointerEvents:"none",
-            zIndex:5,
-          }}>{isMoneyball ? "🟡" : "🏀"}</div>
-        )}
-      </div>
-
-      {/* Status strip — rack name + ball indicator */}
+      {/* Status strip — rack name + ball type */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,fontSize:10,letterSpacing:1.5,color:"#aaa",fontWeight:700}}>
         <span>RACK {rack.idx+1}/5 · {rack.name}</span>
         <span style={{color: isMoneyball ? YE : OR, fontSize:11, fontWeight:900}}>
@@ -5970,7 +5908,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         </span>
       </div>
 
-      {/* Result overlay */}
+      {/* Result overlay shown after shot */}
       {phase === "result" && result && (
         <div style={{
           padding:"14px 16px",
@@ -5983,14 +5921,15 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         }}>
           <div style={{fontSize:30,marginBottom:4}}>{result.made ? "✓" : "✗"}</div>
           <div style={{fontSize:14,fontWeight:900,color:result.made?GR:RE,letterSpacing:2,fontFamily:"'Barlow Condensed',sans-serif"}}>
-            {result.missed
-              ? (result.reason === "timeout" ? "TOO LATE" : result.reason === "no-release" ? "NO RELEASE" : "MISSED")
-              : result.made ? (isMoneyball ? "MONEYBALL — +2!" : "SWISH — +1") : "MISS"}
+            {result.made
+              ? (isMoneyball ? "MONEYBALL — +2!" : "SWISH — +1")
+              : reasonLabel(result.reason)}
           </div>
         </div>
       )}
 
-      {/* Shot area — ONE continuous swipe: down to wind up, then up to release */}
+      {/* THE COURT — and also the swipe surface. Hoop at top, rack at the
+          current spot, green line you have to trace. */}
       {phase !== "result" && (
         <div
           onPointerDown={handlePointerDown}
@@ -5998,93 +5937,112 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
           onPointerUp={handlePointerUp}
           onPointerCancel={handlePointerUp}
           style={{
-            position:"relative",height:180,
-            background: phase === "woundUp"
-              ? `linear-gradient(180deg, ${OR}22, rgba(0,0,0,0.5))`
-              : "linear-gradient(180deg, rgba(255,255,255,0.04), rgba(0,0,0,0.4))",
-            border: phase === "woundUp" ? `2px solid ${OR}` : "2px dashed rgba(255,255,255,0.18)",
+            position:"relative",height:340,
+            background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 30%, #c97a3a 70%, #d68a4a 100%)",
+            border:`2px solid ${OR}`,
             borderRadius:10,touchAction:"none",cursor:"crosshair",
-            transition:"border-color 0.2s, background 0.2s",
+            overflow:"hidden",
           }}
         >
-          {/* Timing bar — only visible once wound up, drains while finger stays down */}
-          {phase === "woundUp" && (
-            <div style={{position:"absolute",top:6,left:8,right:8,height:5,background:"rgba(255,255,255,0.1)",borderRadius:3,overflow:"hidden",zIndex:3}}>
-              <div style={{
-                width:`${windowProgress*100}%`,height:"100%",
-                background: windowProgress>0.65 ? RE : (windowProgress>=0.35 && windowProgress<=0.65 ? GR : (windowProgress>0.20 ? YE : RE)),
-                transition:"background 0.15s",
+          {/* SVG overlay carries the 3pt arc + green trace lines. viewBox 100×100
+              with non-uniform aspect lets us position purely in percent. */}
+          <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+            {/* 3pt arc — decorative, dashed white */}
+            <path d="M 12 30 Q 50 100 88 30" stroke="rgba(255,255,255,0.35)" strokeWidth="0.4" fill="none" strokeDasharray="1.5,1"/>
+            {/* Wind-up extension — dashed lighter green, BEHIND the rack */}
+            <line
+              x1={windUpEndXP * 100} y1={windUpEndYP * 100}
+              x2={rack.xP * 100}     y2={rack.yP * 100}
+              stroke="rgba(0,220,100,0.5)" strokeWidth="0.6"
+              strokeDasharray="1.2,0.8" strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+            />
+            {/* Forward shot line — solid bright green from rack to hoop */}
+            <line
+              x1={rack.xP * 100}        y1={rack.yP * 100}
+              x2={HOOP_X_FRAC * 100}    y2={HOOP_Y_FRAC * 100}
+              stroke={GR} strokeWidth="1.2"
+              strokeLinecap="round"
+              vectorEffect="non-scaling-stroke"
+              style={{filter:`drop-shadow(0 0 4px ${GR})`}}
+            />
+          </svg>
+
+          {/* Hoop — drawn as overlay divs so it doesn't get distorted by the
+              non-uniform SVG aspect */}
+          <div style={{position:"absolute",left:`${HOOP_X_FRAC*100}%`,top:`${HOOP_Y_FRAC*100}%`,transform:"translate(-50%,-50%)",pointerEvents:"none"}}>
+            <div style={{position:"relative"}}>
+              {/* Backboard */}
+              <div style={{position:"absolute",left:"50%",top:-22,transform:"translateX(-50%)",width:88,height:32,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
+              {/* Rim */}
+              <div style={{position:"absolute",left:"50%",top:6,transform:"translateX(-50%)",width:36,height:7,background:"#ff6600",borderRadius:4,border:"1.5px solid #fff"}}/>
+            </div>
+          </div>
+
+          {/* Rack dots — all 5 visible for context, current one highlighted */}
+          {THREE_POINT_RACKS.map((r,i)=>{
+            const isCurrent = i === rack.idx;
+            return(
+              <div key={i} style={{
+                position:"absolute",left:`${r.xP*100}%`,top:`${r.yP*100}%`,
+                transform:"translate(-50%,-50%)",pointerEvents:"none",
+                width: isCurrent ? 26 : 10,
+                height: isCurrent ? 26 : 10,
+                borderRadius:"50%",
+                background: isCurrent ? OR : "rgba(255,255,255,0.18)",
+                border: isCurrent ? "2.5px solid #fff" : "1px solid rgba(255,255,255,0.4)",
+                boxShadow: isCurrent ? `0 0 16px ${OR}, 0 0 6px ${OR}` : "none",
+                transition:"all 0.2s",
+                zIndex: isCurrent ? 2 : 1,
               }}/>
-            </div>
-          )}
+            );
+          })}
 
-          {/* Required-angle arrow — visible at the TOP of the area at all times,
-              rotated to show the direction the user should release toward */}
-          <div style={{
-            position:"absolute",left:"50%",top:32,
-            transform:`translateX(-50%) rotate(${arrowRotation}deg)`,
-            pointerEvents:"none",
-            opacity: phase === "woundUp" ? 0.85 : 0.4,
-            transition:"opacity 0.2s",
-          }}>
-            <svg width="64" height="64" viewBox="0 0 64 64">
-              <defs>
-                <marker id={`tparr-${rack.idx}-${ballIndex}`} viewBox="0 0 10 10" refX="7" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                  <path d="M 0 0 L 10 5 L 0 10 z" fill={phase === "woundUp" ? OR : "#aaa"}/>
-                </marker>
-              </defs>
-              <line x1="32" y1="56" x2="32" y2="12" stroke={phase === "woundUp" ? OR : "#aaa"} strokeWidth="3" markerEnd={`url(#tparr-${rack.idx}-${ballIndex})`}/>
-            </svg>
-          </div>
-
-          {/* Instruction text — changes based on phase */}
-          <div style={{position:"absolute",left:0,right:0,top:phase==="woundUp"?100:104,textAlign:"center",fontSize:12,letterSpacing:2,color:"#fff",fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",pointerEvents:"none"}}>
-            {phase === "ready" && "TAP & DRAG DOWN"}
-            {phase === "woundUp" && (
-              <>
-                <div style={{color:GR}}>✓ WOUND UP</div>
-                <div style={{fontSize:10,letterSpacing:1.5,color:"#fff",opacity:0.85,marginTop:2}}>RELEASE UP TOWARD THE BASKET</div>
-              </>
-            )}
-          </div>
-
-          {/* Hint at bottom of area for ready phase */}
-          {phase === "ready" && (
-            <div style={{position:"absolute",bottom:14,left:0,right:0,textAlign:"center",pointerEvents:"none"}}>
-              <div style={{fontSize:24,opacity:0.4}}>↓</div>
-              <div style={{fontSize:9,color:"rgba(255,255,255,0.5)",letterSpacing:1,marginTop:2}}>
-                pull down to wind up, then flick up at the angle above
-              </div>
-            </div>
-          )}
-
-          {/* Live swipe path */}
+          {/* Live swipe path traced as you swipe */}
           {pathPoints.length > 1 && (
-            <svg style={{position:"absolute",inset:0,pointerEvents:"none",zIndex:2}} width="100%" height="100%">
+            <svg style={{position:"absolute",inset:0,pointerEvents:"none",zIndex:3}} width="100%" height="100%">
               <polyline
                 points={pathPoints.map(p=>`${p.x},${p.y}`).join(" ")}
-                fill="none"
-                stroke={phase === "woundUp" ? OR : "#fff"}
-                strokeWidth="4"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                opacity="0.85"
+                fill="none" stroke="#fff" strokeWidth="3.5"
+                strokeLinecap="round" strokeLinejoin="round"
+                opacity="0.9"
               />
             </svg>
+          )}
+
+          {/* Ball flying animation when shot fires */}
+          {ballFlying && (
+            <div style={{
+              position:"absolute",left:`${rack.xP*100}%`,top:`${rack.yP*100}%`,
+              transform:"translate(-50%,-50%)",fontSize:20,pointerEvents:"none",zIndex:4,
+              "--targetX": `${(HOOP_X_FRAC - rack.xP) * 100}%`,
+              "--targetY": `${(HOOP_Y_FRAC - rack.yP) * 100}%`,
+              animation: `traceFly${result?.made?"Made":"Missed"} 0.9s ease-out forwards`,
+            }}>{isMoneyball ? "🟡" : "🏀"}</div>
+          )}
+
+          {/* Instruction text — shown only on ready, hidden during swipe */}
+          {phase === "ready" && (
+            <div style={{
+              position:"absolute",left:0,right:0,bottom:10,
+              textAlign:"center",pointerEvents:"none",
+              fontSize:10,letterSpacing:1.5,color:"rgba(255,255,255,0.7)",fontWeight:700,
+            }}>
+              SWIPE BACK ALONG THE DASHED LINE,<br/>THEN FORWARD ALONG THE GREEN LINE TO THE HOOP
+            </div>
           )}
         </div>
       )}
 
       <style>{`
-        @keyframes shotArcMade {
+        @keyframes traceFlyMade {
           0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          50%  { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 0.6}vw / 100 * 3), -50%) scale(0.7); opacity: 1; }
-          100% { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 1.4}vw / 100 * 3), calc(-50% + ${(41 - rack.yPx) * 0.7}px)) scale(0.5); opacity: 0; }
+          100% { transform: translate(calc(-50% + var(--targetX)), calc(-50% + var(--targetY))) scale(0.45); opacity: 0; }
         }
-        @keyframes shotArcMissed {
+        @keyframes traceFlyMissed {
           0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          50%  { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 0.4}vw / 100 * 3), calc(-50% - 30px)) scale(0.7); opacity: 1; }
-          100% { transform: translate(calc(-50% + ${(50 - rack.xPercent) * 0.6}vw / 100 * 3), calc(-50% + 20px)) scale(0.5); opacity: 0; }
+          50%  { transform: translate(calc(-50% + var(--targetX) * 0.6), calc(-50% + var(--targetY) * 0.6 - 18px)) scale(0.7); opacity: 1; }
+          100% { transform: translate(calc(-50% + var(--targetX) * 0.4), calc(-50% + var(--targetY) * 0.4 + 25px)) scale(0.5); opacity: 0; }
         }
       `}</style>
     </div>
@@ -6233,9 +6191,9 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
       <div style={{padding:"4px 0 14px"}}>
         <div style={{textAlign:"center",marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>HOW TO SHOOT</div>
-          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>WIND UP · RELEASE</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>TRACE THE LINE</div>
           <div style={{fontSize:11,color:"#aaa",marginTop:4,lineHeight:1.4}}>
-            Swipe DOWN to wind up. Then swipe UP at the right angle to release the ball.
+            Each rack has a green line to the hoop. Swipe along it — back past the rack, then forward to the rim.
           </div>
         </div>
 
@@ -6244,16 +6202,20 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
           <div style={{fontSize:12,color:"#ddd",lineHeight:1.6}}>
             • 5 racks · 3 balls per rack<br/>
             • The 3rd ball in each rack is the <span style={{color:YE,fontWeight:900}}>🟡 MONEYBALL</span> — worth <b>2 points</b><br/>
-            • Each rack changes the release angle (corners → wings → top of the key)<br/>
-            • An on-screen arrow shows the required angle for each shot<br/>
-            • Higher 3PT skill = wider tolerance and longer timing window
+            • Each rack has its own green line to the hoop<br/>
+            • Stay on the line as you swipe — closer to the line = swish<br/>
+            • Higher 3PT skill = wider tolerance corridor
           </div>
         </div>
 
-        <div style={{background:"rgba(255,215,0,0.05)",border:`1px solid ${YE}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14,lineHeight:1.5}}>
-          <div style={{fontSize:10,fontWeight:900,color:YE,letterSpacing:1.5,marginBottom:5}}>💡 SCORING</div>
-          <div>Round 1 → beat 4 of 5 opponents to advance<br/>
-          Finals → head-to-head vs Jason Kapono</div>
+        <div style={{background:"rgba(0,220,100,0.05)",border:`1px solid ${GR}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14,lineHeight:1.5}}>
+          <div style={{fontSize:10,fontWeight:900,color:GR,letterSpacing:1.5,marginBottom:5}}>💡 THE SHOT MOTION</div>
+          <div>
+            1. Press at the rack (orange dot)<br/>
+            2. Drag <b>back</b> along the dashed line (wind-up)<br/>
+            3. Reverse and drag <b>forward</b> along the solid green line to the hoop<br/>
+            4. Lift your finger near the rim
+          </div>
         </div>
 
         <div style={{background:`${OR}11`,border:`1px solid ${OR}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14}}>
