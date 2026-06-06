@@ -5757,14 +5757,15 @@ function evaluateShot(meterFill, pull, shooterPx, hoopPx, skill){
   const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
-  let power;
+  // Initialize power explicitly so the TS compiler can't claim it's
+  // "used before assigned" — even though all branches below set it.
+  let power = 1.0;
   if(meterFill < greenMin){
     power = 0.50 + (meterFill / greenMin) * 0.50; // 0 fill → 0.5, greenMin → 1.0
-  } else if(meterFill <= greenMax){
-    power = 1.0;
-  } else {
+  } else if(meterFill > greenMax){
     power = 1.0 + (meterFill - greenMax) / (1 - greenMax) * 0.50; // greenMax → 1.0, 1.0 → 1.5
   }
+  // else: meterFill is in the green band → power stays 1.0 (perfect)
 
   // Landing position = shooter + aim × distance × power. So aim direction
   // controls the lateral component and timing controls the distance traveled.
@@ -5861,12 +5862,11 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
   const METER_DURATION_MS = 1100;   // ~1.1s to fill the entire arrow
   const MIN_PULL_DISTANCE = 22;     // pixels — pull farther than this to arm the meter
 
-  // Skill-based tolerances (mirror what evaluateMeterShot uses)
+  // Skill-based green-zone tuning for the meter (matches evaluator).
   const greenWidth = 0.20 + (threePointSkill / 100) * 0.18;
   const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
-  const aimTolerance = 14 + (threePointSkill / 100) * 18;
 
   useEffect(()=>{
     return ()=> {
@@ -5982,21 +5982,6 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
   // Shoot direction = -pull. Rotation from "up" (CSS terms): atan2(shootX, -shootY).
   // shootX = -pull.dx, shootY = -pull.dy. So angle = atan2(-pull.dx, pull.dy).
   const arrowAngleDeg = showArrow ? (Math.atan2(-pull.dx, pull.dy) * 180 / Math.PI) : 0;
-
-  // Aim-quality preview: is the current arrow direction within tolerance of
-  // the target hoop? Used to color the guide line so the user can see aim alignment.
-  let aimAligned = false;
-  if(showArrow && rectRef.current){
-    const rect = rectRef.current;
-    const shooterX = SHOOTER_POS.xP * rect.width;
-    const shooterY = SHOOTER_POS.yP * rect.height;
-    const hoopX = rack.xP * rect.width;
-    const hoopY = rack.yP * rect.height;
-    const targetAngle = Math.atan2(hoopX - shooterX, -(hoopY - shooterY)) * 180 / Math.PI;
-    let diff = Math.abs(arrowAngleDeg - targetAngle);
-    if(diff > 180) diff = 360 - diff;
-    aimAligned = diff <= aimTolerance;
-  }
 
   // Aim-quality preview during pull: is the current direction within a tight
   // tolerance of the target? Used only to color the on-court guide line.
@@ -6149,8 +6134,10 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             top:`${SHOOTER_POS.yP*100}%`,
             transform:"translate(-50%, -50%)",
             fontSize:24,pointerEvents:"none",zIndex:6,
-            "--landX": `${result.landOffsetX}px`,
-            "--landY": `${result.landOffsetY}px`,
+            // CSS custom properties — cast through `as any` because React's
+            // CSSProperties type doesn't include `--*` keys by default.
+            ["--landX" as any]: `${result.landOffsetX}px`,
+            ["--landY" as any]: `${result.landOffsetY}px`,
             animation:`ballFly${result.made?"Made":"Missed"} 1s ease-out forwards`,
           }}>{isMoneyball ? "🟡" : "🏀"}</div>
         )}
