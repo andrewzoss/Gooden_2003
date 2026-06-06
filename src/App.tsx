@@ -12,6 +12,9 @@ const ROOKIE_BASE_AGE = 18;           // age at end of high school
 // Formats a season as "2008-09" given the start year.
 const formatSeasonLabel = (startYear) =>
   `${startYear}-${String(startYear+1).slice(2)}`;
+// Regular-season length for a given starting year. 2011-12 was lockout-
+// shortened to 66 games in real life; every other modeled season is 82.
+const seasonGamesForYear = (startYear) => (startYear === 2011 ? 66 : 82);
 // Player's current age = base 18 + every full college/pro year they've played.
 const calcAge = (allYears, nbaSeasons) =>
   ROOKIE_BASE_AGE + (allYears?.length||0) + (nbaSeasons?.length||0);
@@ -4855,7 +4858,9 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   const season=getNbaSeasonData(currentYear).data[id.rosterKey]||{w:0,l:0};
   // Current season's projected record proportional to games played
   const gp=nbaGamesPlayed;
-  const projectedW=Math.round((season.w*gp)/82);
+  // 2011-12 was lockout-shortened to 66 games. All other years are 82.
+  const seasonGames=seasonGamesForYear(currentYear);
+  const projectedW=Math.round((season.w*gp)/seasonGames);
   const projectedL=gp-projectedW;
   const yearLabel=formatSeasonLabel(currentYear);
   // Player's overall rating — shown as a badge so they can see the impact of
@@ -4866,7 +4871,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   // we use the season record.
   const madePlayoffs=season.w>=41;
   // What does "Play" actually do right now?
-  const regSeasonDone=gp>=82;
+  const regSeasonDone=gp>=seasonGames;
   // Awards: shown ONCE per season, between regular season and playoffs.
   // Stored on player.awardsShownYear (the season-start year) so we know
   // whether to inject the awards ceremony next.
@@ -4875,8 +4880,8 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   const playoffsAvailable=regSeasonDone && !awardsPending && madePlayoffs && !playoffsDone;
   let playLabel="PLAY";
   let playSub="";
-  if(gp===0) playSub=`Start the ${yearLabel} season (41 games)`;
-  else if(gp<82) playSub=`Continue season — ${gp}/82 played`;
+  if(gp===0) playSub=`Start the ${yearLabel} season${seasonGames!==82?` (${seasonGames}-game lockout)`:""}`;
+  else if(gp<seasonGames) playSub=`Continue season — ${gp}/${seasonGames} played`;
   else if(awardsPending) {playLabel="AWARDS";playSub="Regular season over — see the awards";}
   else if(playoffsAvailable) {playLabel="PLAYOFFS";playSub="Season over — playoff run begins";}
   else if(playoffsDone) {playLabel="OFFSEASON";playSub="Season complete — start next year";}
@@ -4903,7 +4908,7 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
           <div style={{fontSize:15,fontWeight:900,color:"#fff",lineHeight:1.1,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{displayName}</div>
           <div style={{fontSize:13,color:"#ddd",marginTop:4}}>
             <span style={{color:GR,fontWeight:700}}>{projectedW}</span><span style={{color:"#666",margin:"0 4px"}}>–</span><span style={{color:RE,fontWeight:700}}>{projectedL}</span>
-            <span style={{color:"#888",marginLeft:8,fontSize:11}}>· {gp}/82</span>
+            <span style={{color:"#888",marginLeft:8,fontSize:11}}>· {gp}/{seasonGames}</span>
           </div>
         </div>
         {/* OVR badge */}
@@ -5018,6 +5023,7 @@ const WEED_EVENT_ID = "matt_barnes_2007";
 const THREE_POINT_EVENT_ID = "three_point_contest_2008";
 const BOWLING_EVENT_ID = "bowling_career_2009";
 const ARENAS_EVENT_ID = "arenas_gun_2010";
+const LOCKOUT_EVENT_ID = "lockout_2011";
 const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
@@ -7564,6 +7570,129 @@ function ArenasPromptScreen({onDone}){
   );
 }
 
+// ─── SEASON-OPENER EVENT: 2011-12 NBA LOCKOUT ───────────────────────────────
+// Real-world 2011 NBA lockout: CBA expired, owners locked out the players, no
+// games until the league agreed to a shortened 66-game season. Player picks
+// one of four "how I spent my lockout" workouts — each gives a different
+// stat reward. Drew League (the real summer pickup league in South Central
+// where Durant/Harden/Westbrook etc. played during the lockout) is gated
+// behind OVR 90+ because only stars played in the high-profile games.
+//
+// After the choice, the player continues into a SINGLE 66-game stretch and
+// the season ends with GP=66.
+
+// Single option card — image on left, name + buff on right. Image has the
+// usual onError → emoji fallback so the screen still renders without assets.
+function LockoutOptionCard({option, disabled, onClick}){
+  const [imgFailed, setImgFailed] = useState(false);
+  return(
+    <button
+      disabled={disabled}
+      onClick={onClick}
+      style={{
+        display:"flex",alignItems:"center",gap:12,
+        padding:"12px 12px",marginBottom:8,width:"100%",
+        background: disabled ? "rgba(255,255,255,0.02)" : `linear-gradient(135deg, ${option.color}22, rgba(0,0,0,0.4))`,
+        border: `1px solid ${disabled ? "rgba(255,255,255,0.08)" : option.color + "88"}`,
+        borderRadius:10,
+        cursor: disabled ? "not-allowed" : "pointer",
+        color:"#fff", textAlign:"left",
+        fontFamily:"'Barlow Condensed',sans-serif",
+        opacity: disabled ? 0.5 : 1,
+      }}>
+      {imgFailed ? (
+        <div style={{
+          width:68,height:68,borderRadius:8,
+          background:`linear-gradient(135deg, ${option.color}, #000)`,
+          display:"flex",alignItems:"center",justifyContent:"center",
+          fontSize:32,flexShrink:0,
+          border:`1px solid ${option.color}66`,
+        }}>{option.emoji}</div>
+      ) : (
+        <img src={option.img} alt={option.name} onError={()=>setImgFailed(true)}
+          style={{width:68,height:68,borderRadius:8,objectFit:"cover",flexShrink:0,background:"#000"}}/>
+      )}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1,letterSpacing:0.3}}>{option.name}</div>
+        <div style={{fontSize:10,color:"#aaa",marginTop:2,letterSpacing:0.3}}>{option.desc}</div>
+        <div style={{
+          fontSize:11,color: disabled ? "#666" : option.color,
+          marginTop:5,fontWeight:900,letterSpacing:0.5,
+        }}>{option.buff}</div>
+        {option.gated && (
+          <div style={{fontSize:9,marginTop:3,letterSpacing:0.8,fontWeight:700,color: disabled ? RE : GR}}>
+            {disabled ? `🔒 REQUIRES OVR 90+ (you're below)` : `✓ UNLOCKED — STAR QUALIFIED`}
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
+
+function LockoutPromptScreen({player, onChoose}){
+  const ovr = calcOVR(player.skills||{}, player.intangibles||[], player.position, player.height);
+
+  // The four lockout workout options. Three stat-skill boosts + the Drew
+  // League SP bonus (gated to OVR 90+).
+  const options = [
+    {
+      id:"moon", name:"Jamario Moon",
+      desc:"Workout in Toronto · Athleticism + lobs",
+      buff:"+2 INSIDE SCORING",
+      img:"/moon.JPG", emoji:"🌙", color:"#ce1141",
+      skill:"finishing", value:2,
+    },
+    {
+      id:"sundiata", name:"Sundiata Gaines",
+      desc:"Workout in Vegas · Court vision drills",
+      buff:"+2 PLAYMAKING",
+      img:"/sundiata.WEBP", emoji:"🎯", color:"#f9a01b",
+      skill:"playmaking", value:2,
+    },
+    {
+      id:"marbury", name:"Stephon Marbury",
+      desc:"Visit Starbury in Beijing · Chinese pro shooting drills",
+      buff:"+2 THREE-POINT SHOOTING",
+      img:"/marbury.jpg", emoji:"🐉", color:"#de2910",
+      skill:"threePoint", value:2,
+    },
+    {
+      id:"drew", name:"Drew League",
+      desc:"South Central LA · Pickup ball with NBA stars",
+      buff:"+5 SKILL POINTS",
+      img:"/drew.WEBP", emoji:"💪", color:"#8b1538",
+      gated:true, gateOVR:90, sp:5,
+    },
+  ];
+
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      <div style={{textAlign:"center",marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>🦇 NBA LOCKOUT · 2011</div>
+        <div style={{fontSize:26,fontWeight:900,color:"#fff",letterSpacing:1.5,lineHeight:1,fontFamily:"'Barlow Condensed',sans-serif"}}>LOCKED OUT</div>
+      </div>
+
+      <div style={{
+        background:`linear-gradient(135deg, ${RE}11, rgba(0,0,0,0.4))`,
+        border:`1px solid ${RE}44`,
+        borderRadius:10,padding:"14px 14px",marginBottom:14,
+        fontSize:13,color:"#ddd",lineHeight:1.55,
+      }}>
+        The CBA has expired and the <span style={{color:RE,fontWeight:700}}>vampire owners</span> are trying to drain the players for all they can. In the meantime, pick how you pass the time:
+      </div>
+
+      {options.map(opt => (
+        <LockoutOptionCard
+          key={opt.id}
+          option={opt}
+          disabled={!!opt.gated && ovr < opt.gateOVR}
+          onClick={()=>onChoose(opt)}
+        />
+      ))}
+    </div>
+  );
+}
+
 // ─── MIDSEASON EVENT: SPRITE RISING STARS SLAM DUNK (2005) ────────────────────
 // All-Star Weekend invite — fires once after the first 41-game stretch of the
 // 2005-06 season. Contestants are the player, Josh Smith, JR Smith, and Chris
@@ -8726,7 +8855,9 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
   // correct roster after a relocation (e.g. OKC's roster post-2008).
   const {slot, minutes, isStarter}=calcRotationSlot(player,id.rosterKey,seasonData,nbaSeasons);
   const gp=nbaGamesPlayed;
-  const regSeasonDone=gp>=82;
+  // 2011-12 lockout shortened the season to 66; everything else is 82.
+  const seasonGames=seasonGamesForYear(currentYear);
+  const regSeasonDone=gp>=seasonGames;
   const madePlayoffs=season.w>=41;
   const isPlayoffRun=regSeasonDone && madePlayoffs && !playoffsDone;
   const yearLabel=formatSeasonLabel(currentYear);
@@ -8752,13 +8883,21 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
   // Artest midseason event). The nbaGamesPlayed counter still advances by 41
   // so regSeasonDone triggers normally — only the stat-accumulation stretch
   // is shortened, which is what shows up in the final GP/PPG line.
+  // 2011-12 lockout year plays as a SINGLE 66-game stretch instead of two
+  // 41-game halves; we collapse everything into one super-stretch and skip
+  // the mid-season trade window / Artest-style suspensions for that year.
+  const isLockoutSeason=seasonGames===66;
   const suspGames=(gp===41 && player?.pendingSuspension)?player.pendingSuspension:0;
-  const stretchSize=isPlayoffRun?16:(41-suspGames);
+  const stretchSize=isPlayoffRun?16:(isLockoutSeason?66:(41-suspGames));
   return(
     <div>
       <div style={{textAlign:"center",marginBottom:14}}>
         <div style={{fontSize:10,letterSpacing:3,color:isPlayoffRun?YE:OR,marginBottom:4,textTransform:"uppercase"}}>
-          {isPlayoffRun?"🏆 Playoff Run":(gp===0?`${yearLabel} Season — Games 1-41`:suspGames>0?`Games 42-82 (Suspended ${suspGames})`:`Games 42-82`)}
+          {isPlayoffRun
+            ? "🏆 Playoff Run"
+            : isLockoutSeason
+              ? `${yearLabel} Season — 66 Games (Lockout)`
+              : (gp===0?`${yearLabel} Season — Games 1-41`:suspGames>0?`Games 42-82 (Suspended ${suspGames})`:`Games 42-82`)}
         </div>
         <div style={{fontSize:13,color:"#aaa"}}>
           {isStarter?"STARTER":`Bench · slot ${slot+1}`} · ~{minutes} MPG
@@ -8805,7 +8944,7 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             }
             toast&&toast(`Playoffs done! ${stats.ppg} PPG · ${stats.rpg} RPG · ${stats.apg} APG · +${spEarned} SP`,YE);
           } else {
-            setNbaGamesPlayed(g=>g+41);
+            setNbaGamesPlayed(g=>g+(isLockoutSeason?66:41));
             // Clear the suspension after it's been applied (the shortened
             // stretchSize already docked stats this run).
             if(suspGames>0) setPlayer(p=>({...p, pendingSuspension:0}));
@@ -11505,10 +11644,12 @@ function NbaAgentScreen({player, setPlayer, agent, setAgent, nbaTeam, setNbaTeam
   // Extension eligibility — only when exactly 1 year remains on the deal.
   // This is the "contract year" framing real NBA players talk about.
   const extensionEligible=contract&&remainingYears===1;
-  // "Mid-season" = between stretches (gp >= 41 but < 82). "Offseason" = at the
-  // start of a year after at least one season has been played (gp == 0 and
-  // seasonsPlayed >= 1). Both windows allow trade requests.
-  const isMidSeason=gp>=41&&gp<82;
+  // "Mid-season" = between stretches (gp past halfway but < full season).
+  // "Offseason" = at the start of a year after at least one season has been
+  // played (gp == 0 and seasonsPlayed >= 1). Both windows allow trade requests.
+  // Season length varies by year (66 in the 2011-12 lockout, 82 otherwise).
+  const seasonGames=seasonGamesForYear(currentYear);
+  const isMidSeason=gp>=Math.floor(seasonGames/2)&&gp<seasonGames;
   const isOffseason=gp===0&&seasonsPlayed>=1;
   const tradeAvailable=isMidSeason||isOffseason;
   const tradeWindowLabel=isMidSeason?"Mid-season trade deadline":isOffseason?"Offseason":gp===0?"Pre-season (no trades until mid-year)":"In-game (no trades during a stretch)";
@@ -13946,6 +14087,35 @@ export default function App(){
       setScreen("arenasPrompt");
       toast("Test — Arenas 2010 incident", "#c8102e");
     }
+    else if(preset==="lockout2011"){
+      // LOCKOUT — 2011-12 season opener. 7 NBA seasons logged. Player is
+      // 91 OVR so the Drew League option is unlocked. After picking a
+      // workout, the season will play as a single 66-game stretch.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:88,midRange:89,finishing:89,handles:87,playmaking:85,perimDefense:82,postDefense:75,rebounding:78};
+      mike.intangibles=["confident","clutch","highIQ"];
+      mike.contract={
+        type:"extension", signedYear:NBA_START_YEAR+3, years:5,
+        salaries:[14000000,15120000,16329600,17636000,19046880],
+        totalValue:82132480, signingBonus:4000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID, WEED_EVENT_ID, THREE_POINT_EVENT_ID, BOWLING_EVENT_ID, ARENAS_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(45000000); setSkillPoints(8);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
+        {year:"2008-09",team:"Sacramento Kings",teamRecord:"42-40",madePlayoffs:true,gp:79,ppg:26.4,rpg:6.2,apg:5.5,fg:50},
+        {year:"2009-10",team:"Sacramento Kings",teamRecord:"40-42",madePlayoffs:false,gp:80,ppg:27.1,rpg:6.4,apg:5.7,fg:50},
+        {year:"2010-11",team:"Sacramento Kings",teamRecord:"45-37",madePlayoffs:true,gp:81,ppg:28.0,rpg:6.5,apg:5.9,fg:51},
+      ]);
+      setScreen("lockoutPrompt");
+      toast("Test — Lockout 2011 workout choice", RE);
+    }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
       // currentYear = 2018. Long-tenured vet with money + accolades to match.
@@ -14403,7 +14573,15 @@ export default function App(){
     // awards ceremony first. Player then continues to playoffs from there.
     if(s==="nbaPlay"&&nbaTeam&&player&&!player.retired){
       const yr=NBA_START_YEAR+(nbaSeasons?.length||0);
-      const regSeasonDone=(nbaGamesPlayed||0)>=82;
+      const firedEvts=player?.midseasonEvents||[];
+      // Lockout intercept — fires BEFORE the 2011-12 season begins. The
+      // workout choice screen redirects back here once a buff is selected,
+      // and from there the player plays a single 66-game stretch.
+      if((nbaGamesPlayed||0)===0 && yr===2011 && !firedEvts.includes(LOCKOUT_EVENT_ID)){
+        setScreen("lockoutPrompt");
+        return;
+      }
+      const regSeasonDone=(nbaGamesPlayed||0)>=seasonGamesForYear(yr);
       const awardsPending=regSeasonDone && player?.awardsShownYear!==yr;
       if(awardsPending){
         setScreen("nbaAwards");
@@ -14677,6 +14855,11 @@ export default function App(){
           <button onClick={()=>jumpToTesting("arenasGun")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, #c8102e 0%, #002B5C 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
             <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🔫 ARENAS (2010)</div>
             <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Four guns in the locker</div>
+          </button>
+
+          <button onClick={()=>jumpToTesting("lockout2011")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${RE} 0%, #1a1a2e 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🦇 LOCKOUT (2011)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>4 workouts · 66 GP season</div>
           </button>
 
           <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -15797,6 +15980,36 @@ export default function App(){
             toast&&toast("📱 Gilbert Arenas added to contacts", "#c8102e");
           }
           if(testingMode) exitTesting(); else go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    lockoutPrompt:(
+      <MenuFrame sub="CBA Negotiations · 2011" title="LOCKOUT">
+        <LockoutPromptScreen player={player} onChoose={(option)=>{
+          // Apply the chosen workout's reward. Three options grant +2 to a
+          // specific skill; the Drew League grants +5 SP (gated by OVR 90+).
+          // Either way, mark the event as fired so the intercept doesn't
+          // re-trigger and stamp player.lockoutChoice for later reference
+          // (career-score / contact lines could read it).
+          if(option.skill){
+            setPlayer(p=>({
+              ...p,
+              skills:{...(p.skills||{}), [option.skill]: ((p.skills||{})[option.skill]||0)+option.value},
+              midseasonEvents:[...(p?.midseasonEvents||[]), LOCKOUT_EVENT_ID],
+              lockoutChoice:option.id,
+            }));
+            toast&&toast(`💪 ${option.buff} (${option.name})`, "#c8102e");
+          } else if(option.sp){
+            setSkillPoints(sp=>(sp||0)+option.sp);
+            setPlayer(p=>({
+              ...p,
+              midseasonEvents:[...(p?.midseasonEvents||[]), LOCKOUT_EVENT_ID],
+              lockoutChoice:option.id,
+            }));
+            toast&&toast(`🏀 +${option.sp} SP from the Drew League`, GR);
+          }
+          // Continue straight into the 66-game stretch.
+          if(testingMode) exitTesting(); else go("nbaPlay");
         }}/>
       </MenuFrame>
     ),
