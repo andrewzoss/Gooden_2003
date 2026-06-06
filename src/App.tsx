@@ -5024,6 +5024,7 @@ const THREE_POINT_EVENT_ID = "three_point_contest_2008";
 const BOWLING_EVENT_ID = "bowling_career_2009";
 const ARENAS_EVENT_ID = "arenas_gun_2010";
 const LOCKOUT_EVENT_ID = "lockout_2011";
+const INJURY_EVENT_ID = "injury_meniscus_2012";
 const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
@@ -7693,6 +7694,173 @@ function LockoutPromptScreen({player, onChoose}){
   );
 }
 
+// ─── MIDSEASON EVENT: TORN MENISCUS (2012-13) ─────────────────────────────────
+// Real mid-season injury beat. Fires after the first 41-game stretch. Player
+// chooses surgery (clean cut, season-ending) or play through (50/50 roll —
+// either gut it out cleanly or do real damage that also ends the season
+// AND chops 5 points off a random skill).
+
+// Helper — pull the user-facing label for a skill id (e.g. threePoint → "3PT Shot")
+function skillLabel(skillId){
+  const found = SKILLS.find(s => s.id === skillId);
+  return found ? found.label : skillId;
+}
+
+function InjuryPromptScreen({player, onDone}){
+  // stage: choice | surgeryResult | playThroughGood | playThroughBad
+  const [stage, setStage] = useState("choice");
+  // damagedSkill: locked in when the "play through" 50/50 lands on BAD.
+  // Picked once at roll time so the same skill is shown on the outcome
+  // card and applied by the route handler.
+  const [damagedSkill, setDamagedSkill] = useState(null);
+
+  const handlePlayThrough = () => {
+    // 50/50. Lucky → gut it out cleanly. Unlucky → tear gets worse and we
+    // pick a random skill from whatever the player actually has to deduct
+    // 5 from (so the boost they took in college/early career can come back
+    // to bite them).
+    const lucky = Math.random() < 0.5;
+    if(lucky){
+      setStage("playThroughGood");
+    } else {
+      const skillKeys = Object.keys(player.skills || {}).filter(k => (player.skills[k] || 0) > 0);
+      const fallbackKeys = SKILLS.map(s => s.id);
+      const pool = skillKeys.length > 0 ? skillKeys : fallbackKeys;
+      const pick = pool[Math.floor(Math.random() * pool.length)];
+      setDamagedSkill(pick);
+      setStage("playThroughBad");
+    }
+  };
+
+  // Shared header — title + injury icon. Repeated above every stage so the
+  // event keeps its identity through the choice → result transition.
+  const header = (
+    <div style={{textAlign:"center",marginBottom:12}}>
+      <div style={{fontSize:42,marginBottom:6}}>🩹</div>
+      <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>MID-SEASON · 2013</div>
+      <div style={{fontSize:24,fontWeight:900,color:"#fff",letterSpacing:1.5,lineHeight:1,fontFamily:"'Barlow Condensed',sans-serif"}}>INJURED</div>
+    </div>
+  );
+
+  if(stage === "surgeryResult"){
+    return(
+      <div style={{padding:"4px 0 20px"}}>
+        {header}
+        <div style={{
+          background:`linear-gradient(135deg, #88888822, rgba(0,0,0,0.4))`,
+          border:`1px solid #88888866`,
+          borderRadius:10,padding:"14px 14px",marginBottom:14,
+          fontSize:13,color:"#ddd",lineHeight:1.55,
+        }}>
+          You schedule the surgery. Doctors say 6-8 months of rehab. Your season is over — no second-half push, no playoffs.
+          <div style={{fontSize:11,color:"#888",marginTop:8,fontStyle:"italic"}}>
+            Stats lock at 41 GP. See you for the 2013-14 season.
+          </div>
+        </div>
+        <button onClick={()=>onDone({action:"surgery"})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          → TO OFFSEASON
+        </button>
+      </div>
+    );
+  }
+
+  if(stage === "playThroughGood"){
+    return(
+      <div style={{padding:"4px 0 20px"}}>
+        {header}
+        <div style={{
+          background:`linear-gradient(135deg, ${GR}22, rgba(0,0,0,0.4))`,
+          border:`1px solid ${GR}66`,
+          borderRadius:10,padding:"14px 14px",marginBottom:14,
+          fontSize:13,color:"#ddd",lineHeight:1.55,
+        }}>
+          You tape it up, take a cortisone shot, and gut it out. Somehow the knee holds.
+          <div style={{fontSize:11,color:GR,marginTop:8,fontWeight:700,letterSpacing:0.5}}>
+            ✓ NO FURTHER DAMAGE — YOU'RE BACK IN THE ROTATION
+          </div>
+        </div>
+        <button onClick={()=>onDone({action:"playThrough",result:"good"})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          ← BACK TO THE LEAGUE
+        </button>
+      </div>
+    );
+  }
+
+  if(stage === "playThroughBad"){
+    return(
+      <div style={{padding:"4px 0 20px"}}>
+        {header}
+        <div style={{
+          background:`linear-gradient(135deg, ${RE}22, rgba(0,0,0,0.4))`,
+          border:`1px solid ${RE}88`,
+          borderRadius:10,padding:"14px 14px",marginBottom:14,
+          fontSize:13,color:"#ddd",lineHeight:1.55,
+        }}>
+          Three games later the knee gives out for real. Now it's a full tear. Surgery isn't optional anymore.
+          <div style={{
+            marginTop:10,padding:"10px 12px",
+            background:`${RE}22`,border:`1px solid ${RE}88`,borderRadius:8,
+            display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
+          }}>
+            <div style={{fontSize:11,color:"#ddd",letterSpacing:0.5}}>{skillLabel(damagedSkill).toUpperCase()}</div>
+            <div style={{fontSize:18,fontWeight:900,color:RE,fontFamily:"'Barlow Condensed',sans-serif"}}>−5</div>
+          </div>
+          <div style={{fontSize:11,color:"#888",marginTop:8,fontStyle:"italic"}}>
+            Season over at 41 GP. No playoffs.
+          </div>
+        </div>
+        <button onClick={()=>onDone({action:"playThrough",result:"bad",damagedSkill})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          → TO OFFSEASON
+        </button>
+      </div>
+    );
+  }
+
+  // Default — the choice screen.
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      {header}
+      <div style={{
+        background:`linear-gradient(135deg, ${RE}11, rgba(0,0,0,0.4))`,
+        border:`1px solid ${RE}44`,
+        borderRadius:10,padding:"14px 14px",marginBottom:14,
+        fontSize:13,color:"#ddd",lineHeight:1.55,
+      }}>
+        You tear your meniscus trying to put the clamps on <span style={{color:"#fff",fontWeight:700}}>Ramon Sessions</span>.
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        <button onClick={()=>setStage("surgeryResult")} style={{
+          padding:"14px 14px",fontSize:13,fontWeight:900,
+          fontFamily:"'Barlow Condensed',sans-serif",
+          background:"linear-gradient(135deg, #4a5a78 0%, #2a3a55 100%)",
+          color:"#fff",border:"none",borderRadius:10,
+          cursor:"pointer",textAlign:"left",lineHeight:1.25,
+          letterSpacing:0.4,
+        }}>
+          <div style={{fontSize:14,letterSpacing:0.5}}>🏥 OPT FOR SURGERY</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.75)",marginTop:3,fontWeight:600,lineHeight:1.4}}>
+            Shut it down. Skip the rest of the season + playoffs.
+          </div>
+        </button>
+        <button onClick={handlePlayThrough} style={{
+          padding:"14px 14px",fontSize:13,fontWeight:900,
+          fontFamily:"'Barlow Condensed',sans-serif",
+          background:`linear-gradient(135deg, ${OR} 0%, #8a3a0c 100%)`,
+          color:"#fff",border:"none",borderRadius:10,
+          cursor:"pointer",textAlign:"left",lineHeight:1.25,
+          letterSpacing:0.4,
+        }}>
+          <div style={{fontSize:14,letterSpacing:0.5}}>💪 PLAY THROUGH IT</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.85)",marginTop:3,fontWeight:600,lineHeight:1.4}}>
+            50% — no further damage, keep playing<br/>
+            50% — knee tears worse · −5 random skill · season over
+          </div>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── MIDSEASON EVENT: SPRITE RISING STARS SLAM DUNK (2005) ────────────────────
 // All-Star Weekend invite — fires once after the first 41-game stretch of the
 // 2005-06 season. Contestants are the player, Josh Smith, JR Smith, and Chris
@@ -9001,6 +9169,15 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             if(gp===0 && currentYear===2010 && !firedEvents.includes(ARENAS_EVENT_ID)){
               setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), ARENAS_EVENT_ID]}));
               go("arenasPrompt");
+              return;
+            }
+            // 2012-13 season — torn meniscus mid-season. Fires after the first
+            // 41-game stretch (gp===0 in this closure, +41 update queued).
+            // Surgery or play-through; either way the season is at risk of
+            // ending right here at 41 GP.
+            if(gp===0 && currentYear===2012 && !firedEvents.includes(INJURY_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), INJURY_EVENT_ID]}));
+              go("injuryPrompt");
               return;
             }
             // 2018-19 season — Damon Jones soup incident. Player has to be in
@@ -14116,6 +14293,46 @@ export default function App(){
       setScreen("lockoutPrompt");
       toast("Test — Lockout 2011 workout choice", RE);
     }
+    else if(preset==="injuryMeniscus"){
+      // INJURY — mid-2012-13 season. 8 NBA seasons logged including the
+      // 2011-12 lockout year. Player has already finished the first 41-game
+      // stretch of 2012-13 — set nbaGamesPlayed=0 in the closure (matches
+      // the actual trigger condition) and nbaSeasonTotals to roughly half a
+      // season so the offseason summary has stats to commit if surgery is
+      // picked. Player at 91 OVR.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:88,midRange:90,finishing:89,handles:88,playmaking:86,perimDefense:83,postDefense:76,rebounding:79};
+      mike.intangibles=["confident","clutch","highIQ"];
+      mike.contract={
+        type:"extension", signedYear:NBA_START_YEAR+7, years:5,
+        salaries:[19000000,20520000,22161600,23934528,25849290],
+        totalValue:111465418, signingBonus:5000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID, WEED_EVENT_ID, THREE_POINT_EVENT_ID, BOWLING_EVENT_ID, ARENAS_EVENT_ID, LOCKOUT_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(60000000); setSkillPoints(12);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
+        {year:"2008-09",team:"Sacramento Kings",teamRecord:"42-40",madePlayoffs:true,gp:79,ppg:26.4,rpg:6.2,apg:5.5,fg:50},
+        {year:"2009-10",team:"Sacramento Kings",teamRecord:"40-42",madePlayoffs:false,gp:80,ppg:27.1,rpg:6.4,apg:5.7,fg:50},
+        {year:"2010-11",team:"Sacramento Kings",teamRecord:"45-37",madePlayoffs:true,gp:81,ppg:28.0,rpg:6.5,apg:5.9,fg:51},
+        {year:"2011-12",team:"Sacramento Kings",teamRecord:"32-34",madePlayoffs:false,gp:66,ppg:27.8,rpg:6.6,apg:6.0,fg:50},
+      ]);
+      // Set up mid-2012-13 state — gp=0 in closure means first stretch just
+      // finished; the trigger fires immediately. nbaSeasonTotals carries
+      // roughly half a season of stats (41 games × per-game averages).
+      // setNbaGamesPlayed stays at 0 because the trigger checks gp===0 in
+      // the closure; in real play it's 41 by the time render hits but the
+      // event fires on the prior captured value.
+      setNbaSeasonTotals({pts: 27.5*41, reb: 6.4*41, ast: 5.8*41, games: 41, fgm: Math.round(0.18*100*41*0.50), fga: Math.round(0.18*100*41)});
+      setScreen("injuryPrompt");
+      toast("Test — 2012-13 meniscus tear", RE);
+    }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
       // currentYear = 2018. Long-tenured vet with money + accolades to match.
@@ -14860,6 +15077,11 @@ export default function App(){
           <button onClick={()=>jumpToTesting("lockout2011")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${RE} 0%, #1a1a2e 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
             <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🔒 LOCKOUT (2011)</div>
             <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>4 workouts · 66 GP season</div>
+          </button>
+
+          <button onClick={()=>jumpToTesting("injuryMeniscus")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${RE} 0%, #2a3a55 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🩹 INJURY (2012)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Meniscus · surgery vs gut it out</div>
           </button>
 
           <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -16010,6 +16232,58 @@ export default function App(){
           }
           // Continue straight into the 66-game stretch.
           if(testingMode) exitTesting(); else go("nbaPlay");
+        }}/>
+      </MenuFrame>
+    ),
+    injuryPrompt:(
+      <MenuFrame sub="Mid-Season · February 2013" title="INJURED">
+        <InjuryPromptScreen player={player} onDone={({action, result, damagedSkill})=>{
+          // sealSeason = surgery OR the bad-luck play-through outcome. Either
+          // path skips the remaining 41 games + playoffs and routes to the
+          // OffseasonScreen (rendered by NbaPlayScreen when gp>=seasonGames
+          // AND playoffsDone is set). The first stretch's stats stay in
+          // nbaSeasonTotals (games=41) and are what get committed to the
+          // season log.
+          const sealsSeason = action === "surgery" || (action === "playThrough" && result === "bad");
+
+          setPlayer(p => {
+            const updated = {
+              ...p,
+              injuryAction: action,
+              injuryResult: result || null,
+            };
+            // Apply the −5 skill hit ONLY on the bad play-through outcome.
+            // Floors at 30 so the player can't be reduced to garbage by one
+            // unlucky roll, but the cost is genuinely felt.
+            if(action === "playThrough" && result === "bad" && damagedSkill){
+              const cur = (p.skills||{})[damagedSkill] || 50;
+              updated.skills = {
+                ...(p.skills||{}),
+                [damagedSkill]: Math.max(30, cur - 5),
+              };
+              updated.injuryDamagedSkill = damagedSkill;
+            }
+            return updated;
+          });
+
+          if(sealsSeason){
+            // Advance gp through the "skipped" second-half stretch + lock
+            // playoffsDone so NbaPlayScreen jumps straight to OffseasonScreen
+            // on next render. nbaSeasonTotals.games stays at 41 → that's
+            // what gets recorded as the GP for this season.
+            setNbaGamesPlayed(g => g + 41);
+            setPlayoffsDone(true);
+            const tone = action === "surgery" ? "#888" : RE;
+            const msg = action === "surgery"
+              ? "🏥 Season over — surgery scheduled"
+              : `🩹 Knee gave out — −5 ${skillLabel(damagedSkill)}`;
+            toast&&toast(msg, tone);
+            if(testingMode) exitTesting(); else go("nbaPlay");
+          } else {
+            // Lucky play-through. Back to normal — second 41-game stretch ahead.
+            toast&&toast("💪 You played through it — no further damage", GR);
+            if(testingMode) exitTesting(); else go("leagueHub");
+          }
         }}/>
       </MenuFrame>
     ),
