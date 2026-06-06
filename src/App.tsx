@@ -7651,7 +7651,7 @@ function LockoutPromptScreen({player, onChoose}){
     },
     {
       id:"marbury", name:"Stephon Marbury",
-      desc:"Visit Starbury in Beijing · Chinese pro shooting drills",
+      desc:"Visit Starbury in Beijing · Scrimmage with the Beijing Ducks",
       buff:"+2 THREE-POINT SHOOTING",
       img:"/marbury.jpg", emoji:"🐉", color:"#de2910",
       skill:"threePoint", value:2,
@@ -7668,7 +7668,7 @@ function LockoutPromptScreen({player, onChoose}){
   return(
     <div style={{padding:"4px 0 20px"}}>
       <div style={{textAlign:"center",marginBottom:12}}>
-        <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>🦇 NBA LOCKOUT · 2011</div>
+        <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>NBA LOCKOUT · 2011</div>
         <div style={{fontSize:26,fontWeight:900,color:"#fff",letterSpacing:1.5,lineHeight:1,fontFamily:"'Barlow Condensed',sans-serif"}}>LOCKED OUT</div>
       </div>
 
@@ -7678,7 +7678,7 @@ function LockoutPromptScreen({player, onChoose}){
         borderRadius:10,padding:"14px 14px",marginBottom:14,
         fontSize:13,color:"#ddd",lineHeight:1.55,
       }}>
-        The CBA has expired and the <span style={{color:RE,fontWeight:700}}>vampire owners</span> are trying to drain the players for all they can. In the meantime, pick how you pass the time:
+        The CBA has expired and the vampire owners are trying to drain the players for all they can. In the meantime, pick how you pass the time:
       </div>
 
       {options.map(opt => (
@@ -14858,7 +14858,7 @@ export default function App(){
           </button>
 
           <button onClick={()=>jumpToTesting("lockout2011")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${RE} 0%, #1a1a2e 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🦇 LOCKOUT (2011)</div>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🔒 LOCKOUT (2011)</div>
             <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>4 workouts · 66 GP season</div>
           </button>
 
