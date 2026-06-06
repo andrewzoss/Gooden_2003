@@ -5721,127 +5721,214 @@ function NachoPromptScreen({onDone}){
 // winner), Dirk Nowitzki, Daniel "Booby" Gibson, Richard Hamilton, Steve Nash.
 // Player rounds out the field as the 6th contestant. Format: 1 round + finals.
 
-// Rack metadata — each rack sits at a precise spot on the court. Stored as
-// fractions of the container so positions scale with width. The hoop lives at
-// the top center (HOOP_FRAC); the "green line" you trace runs from each rack
-// up to the hoop.
-const HOOP_X_FRAC = 0.50;
-const HOOP_Y_FRAC = 0.11;
+// Single shooter position at the bottom of the court. The 5 "racks" are now
+// HOOP positions scattered above — each ball cycles through one hoop target
+// at a time. You pull back from the shooter; an arrow appears pointing in the
+// OPPOSITE direction (where the shot will go); its chevron meter auto-fills
+// over time. Release when the meter hits green AND the arrow's aimed at the hoop.
+const SHOOTER_POS = {xP: 0.50, yP: 0.83};
 
 const THREE_POINT_RACKS = [
-  {idx:0, name:"LEFT CORNER",    xP: 0.12, yP: 0.30},
-  {idx:1, name:"LEFT WING",      xP: 0.30, yP: 0.60},
-  {idx:2, name:"TOP OF THE KEY", xP: 0.50, yP: 0.84},
-  {idx:3, name:"RIGHT WING",     xP: 0.70, yP: 0.60},
-  {idx:4, name:"RIGHT CORNER",   xP: 0.88, yP: 0.30},
+  {idx:0, name:"LEFT CORNER",    xP: 0.10, yP: 0.50},
+  {idx:1, name:"LEFT WING",      xP: 0.28, yP: 0.28},
+  {idx:2, name:"TOP OF THE KEY", xP: 0.50, yP: 0.14},
+  {idx:3, name:"RIGHT WING",     xP: 0.72, yP: 0.28},
+  {idx:4, name:"RIGHT CORNER",   xP: 0.90, yP: 0.50},
 ];
 
-// Deterministic shot evaluator. The mechanic: press at the rack, pull backward
-// (away from the hoop along the line), and release when the meter hits the
-// green zone. Meter fills with the BACKWARD projection of the finger position
-// — so a true backward pull along the line fills fastest. Off-direction drift
-// fills the meter slowly because only the backward component counts.
-function evaluateMeterShot(meterFill, skill){
-  // Green zone center sits at 60% of the meter. Width widens with skill.
-  const greenWidth = 0.18 + (skill / 100) * 0.16; // skill 50→0.26, 90→0.32, 100→0.34
-  const greenCenter = 0.60;
+// Both AIM (arrow direction vs target hoop) AND TIMING (release in green zone)
+// have to pass for a made shot. Skill widens both tolerances.
+function evaluateMeterShot(meterFill, aimAngleDiff, skill){
+  const greenWidth = 0.20 + (skill / 100) * 0.18; // skill 50→0.29, 90→0.36, 100→0.38
+  const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
-  if(meterFill < 0.10){
-    // Hardly pulled back at all — treat as an accidental tap rather than a miss
-    return {made:false, reason:"abandon", fill:meterFill, recoverable:true};
-  }
-  if(meterFill >= greenMin && meterFill <= greenMax){
-    return {made:true, fill:meterFill};
-  }
-  if(meterFill < greenMin){
-    return {made:false, reason:"weak", fill:meterFill};
-  }
-  return {made:false, reason:"overshot", fill:meterFill};
+  const aimTolerance = 14 + (skill / 100) * 18; // skill 50→23°, 90→30.2°, 100→32°
+
+  if(meterFill < 0.08) return {made:false, reason:"abandon", recoverable:true};
+  const inGreen = meterFill >= greenMin && meterFill <= greenMax;
+  const aimGood = aimAngleDiff <= aimTolerance;
+  if(inGreen && aimGood) return {made:true};
+  if(!aimGood && inGreen) return {made:false, reason:"off-aim"};
+  if(aimGood && !inGreen) return {made:false, reason: meterFill < greenMin ? "too-quick" : "too-late"};
+  return {made:false, reason:"miss"};
 }
 
-// One shot — press, pull back, release at green. The entire court is the swipe
-// surface. The visible line points you in the direction you need to pull.
+// Chevron arrow visual — tall narrow shape with stacked chevrons that light
+// up as the meter fills. Color zones: teal at base (under-filled), green in
+// the sweet spot, red at the tip (overshot). Drawn pointing straight up; the
+// parent rotates it to point at the shoot direction.
+function ChevronArrow({meterFill, greenMin, greenMax}){
+  const W = 38;
+  const H = 130;
+  const numChevrons = 11;
+  return(
+    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} style={{display:"block",overflow:"visible"}}>
+      {/* Background wedge outline behind the chevrons */}
+      <path
+        d={`M ${W/2} 6 L ${W-4} ${H-2} L 4 ${H-2} Z`}
+        fill="rgba(0,0,0,0.45)"
+        stroke="rgba(255,255,255,0.35)"
+        strokeWidth="1"
+      />
+      {/* Stacked chevrons from base (i=0) to tip (i=last) */}
+      {Array.from({length:numChevrons}).map((_,i)=>{
+        const t = i / (numChevrons - 1);   // 0 at base, 1 at tip
+        const isFilled = meterFill >= t * 0.95;
+        const inGreen = t >= greenMin && t <= greenMax;
+        const inRed = t > greenMax;
+        const baseColor = inRed ? "#ef4444" : (inGreen ? GR : "#3aa8b8");
+        const yBottom = H - 12;
+        const yTop = 18;
+        const y = yBottom - t * (yBottom - yTop);
+        const wRatio = 1 - t * 0.55; // narrower toward the tip
+        const halfW = (W * 0.42) * wRatio;
+        const cx = W / 2;
+        const chevronH = 7;
+        return(
+          <path
+            key={i}
+            d={`M ${cx - halfW} ${y} L ${cx} ${y - chevronH} L ${cx + halfW} ${y}`}
+            stroke={isFilled ? baseColor : "rgba(255,255,255,0.18)"}
+            strokeWidth="3"
+            fill="none"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            opacity={isFilled ? 1 : 0.5}
+            style={{filter: isFilled && inGreen ? `drop-shadow(0 0 6px ${GR})` : (isFilled && inRed ? "drop-shadow(0 0 4px #ef4444)" : "none")}}
+          />
+        );
+      })}
+      {/* Red tip triangle — only lights when meter approaches 100% */}
+      <path
+        d={`M ${W/2} 4 L ${W/2 + 7} 16 L ${W/2 - 7} 16 Z`}
+        fill={meterFill >= 0.92 ? "#ef4444" : "rgba(255,255,255,0.15)"}
+        opacity={meterFill >= 0.92 ? 1 : 0.5}
+        style={{filter: meterFill >= 0.92 ? "drop-shadow(0 0 5px #ef4444)" : "none"}}
+      />
+    </svg>
+  );
+}
+
+// One shot — slingshot mechanic. Press anywhere, pull in the direction OPPOSITE
+// from the target hoop, watch the chevron arrow's meter auto-fill, release in
+// the green zone with the arrow aimed at the hoop.
 function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComplete}){
-  // phase: ready (waiting) → pulling (finger down, meter filling) → result
-  const [phase, setPhase] = useState("ready");
+  const [phase, setPhase] = useState("ready"); // ready → pulling → result
   const [meterFill, setMeterFill] = useState(0);
-  const [pathPoints, setPathPoints] = useState([]);
+  const [pull, setPull] = useState({dx:0, dy:0, length:0});
   const [result, setResult] = useState(null);
   const [ballFlying, setBallFlying] = useState(false);
 
-  const swipePointsRef = useRef([]);
   const startPxRef = useRef(null);
-  const lineDirRef = useRef({ux:0, uy:0});
-  const maxDistanceRef = useRef(130);
+  const rectRef = useRef(null);
   const isTrackingRef = useRef(false);
+  const meterStartedAtRef = useRef(0);
+  const animRef = useRef(null);
   const finishedRef = useRef(false);
 
-  // Green zone — wider for better shooters. Center at 60% so a clean pull-back
-  // hits it naturally without needing extreme distance.
-  const greenWidth = 0.18 + (threePointSkill / 100) * 0.16;
-  const greenCenter = 0.60;
+  // Tuning constants
+  const METER_DURATION_MS = 1100;   // ~1.1s to fill the entire arrow
+  const MIN_PULL_DISTANCE = 22;     // pixels — pull farther than this to arm the meter
+
+  // Skill-based tolerances (mirror what evaluateMeterShot uses)
+  const greenWidth = 0.20 + (threePointSkill / 100) * 0.18;
+  const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
-  const inGreen = meterFill >= greenMin && meterFill <= greenMax;
+  const aimTolerance = 14 + (threePointSkill / 100) * 18;
 
   useEffect(()=>{
-    return ()=> {};
+    return ()=> {
+      if(animRef.current) cancelAnimationFrame(animRef.current);
+    };
   },[]);
+
+  // Cancel any in-flight meter animation
+  const stopMeter = () => {
+    if(animRef.current){
+      cancelAnimationFrame(animRef.current);
+      animRef.current = null;
+    }
+  };
+
+  const startMeter = () => {
+    meterStartedAtRef.current = performance.now();
+    const tick = () => {
+      if(finishedRef.current || !isTrackingRef.current) return;
+      const elapsed = performance.now() - meterStartedAtRef.current;
+      const fill = Math.min(1, elapsed / METER_DURATION_MS);
+      setMeterFill(fill);
+      if(fill < 1){
+        animRef.current = requestAnimationFrame(tick);
+      } else {
+        // Meter capped at 100% — keep finger down means waiting too late.
+        // We don't auto-fire here; we just stop animating. The release evaluator
+        // sees fill=1 and calls it a "too-late" miss.
+        animRef.current = null;
+      }
+    };
+    animRef.current = requestAnimationFrame(tick);
+  };
 
   const handlePointerDown = (e) => {
     if(phase === "result" || finishedRef.current) return;
     isTrackingRef.current = true;
     const rect = e.currentTarget.getBoundingClientRect();
+    rectRef.current = rect;
     const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
-    swipePointsRef.current = [p];
-    setPathPoints([p]);
     startPxRef.current = p;
-
-    // Line direction: rack → hoop. Backward = opposite. We project the finger's
-    // displacement onto this backward direction to fill the meter.
-    const rackPx = {x: rack.xP * rect.width, y: rack.yP * rect.height};
-    const hoopPx = {x: HOOP_X_FRAC * rect.width, y: HOOP_Y_FRAC * rect.height};
-    const ldx = hoopPx.x - rackPx.x;
-    const ldy = hoopPx.y - rackPx.y;
-    const lineLen = Math.hypot(ldx, ldy);
-    lineDirRef.current = {ux: ldx / lineLen, uy: ldy / lineLen};
-    // Max distance = 55% of the line. Easy enough to reach without exceeding
-    // screen bounds, hard enough that direction quality matters.
-    maxDistanceRef.current = lineLen * 0.55;
-
+    setPull({dx:0, dy:0, length:0});
     setMeterFill(0);
     setPhase("pulling");
     e.currentTarget.setPointerCapture?.(e.pointerId);
+    meterStartedAtRef.current = 0;
   };
 
   const handlePointerMove = (e) => {
     if(!isTrackingRef.current || finishedRef.current) return;
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = rectRef.current;
     const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
-    swipePointsRef.current.push(p);
-    setPathPoints([...swipePointsRef.current]);
+    const dx = p.x - startPxRef.current.x;
+    const dy = p.y - startPxRef.current.y;
+    const length = Math.hypot(dx, dy);
+    setPull({dx, dy, length});
 
-    // Backward projection of (current - start) along the line direction.
-    // Negative dot product with forward unit vector = how far backward they've gone.
-    const start = startPxRef.current;
-    const dx = p.x - start.x;
-    const dy = p.y - start.y;
-    const {ux, uy} = lineDirRef.current;
-    const backwardProj = -(dx * ux + dy * uy);
-    const fill = Math.max(0, Math.min(1, backwardProj / maxDistanceRef.current));
-    setMeterFill(fill);
+    // Once the pull exceeds the min threshold, arm the meter (only once).
+    if(length >= MIN_PULL_DISTANCE && meterStartedAtRef.current === 0){
+      startMeter();
+    }
   };
 
   const handlePointerUp = () => {
     if(!isTrackingRef.current || finishedRef.current) return;
     isTrackingRef.current = false;
-    const shotResult = evaluateMeterShot(meterFill, threePointSkill);
+    stopMeter();
+
+    // Compute the angle difference between the SHOOT direction (opposite of pull)
+    // and the direction from shooter → target hoop. That's our aim error.
+    const rect = rectRef.current;
+    const shooterX = SHOOTER_POS.xP * rect.width;
+    const shooterY = SHOOTER_POS.yP * rect.height;
+    const hoopX = rack.xP * rect.width;
+    const hoopY = rack.yP * rect.height;
+    const targetDx = hoopX - shooterX;
+    const targetDy = hoopY - shooterY;
+    const targetAngle = Math.atan2(targetDx, -targetDy) * 180 / Math.PI;
+    const shootDx = -pull.dx;
+    const shootDy = -pull.dy;
+    const shootAngle = Math.atan2(shootDx, -shootDy) * 180 / Math.PI;
+    // Wrap angle diff to 0-180
+    let angleDiff = Math.abs(shootAngle - targetAngle);
+    if(angleDiff > 180) angleDiff = 360 - angleDiff;
+
+    const shotResult = evaluateMeterShot(meterFill, angleDiff, threePointSkill);
     if(shotResult.recoverable){
-      // Accidental tap — reset and let them try again, no penalty.
-      setPathPoints([]);
-      setMeterFill(0);
+      // Pulled barely at all — accidental tap, reset to ready
       setPhase("ready");
+      setPull({dx:0, dy:0, length:0});
+      setMeterFill(0);
+      meterStartedAtRef.current = 0;
       return;
     }
     finalize(shotResult);
@@ -5850,6 +5937,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
   const finalize = (r) => {
     if(finishedRef.current) return;
     finishedRef.current = true;
+    stopMeter();
     setResult(r);
     setPhase("result");
     setBallFlying(true);
@@ -5862,22 +5950,37 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     }, 1200);
   };
 
+  // Arrow visibility + orientation
+  const showArrow = phase === "pulling" && pull.length >= MIN_PULL_DISTANCE;
+  // Shoot direction = -pull. Rotation from "up" (CSS terms): atan2(shootX, -shootY).
+  // shootX = -pull.dx, shootY = -pull.dy. So angle = atan2(-pull.dx, pull.dy).
+  const arrowAngleDeg = showArrow ? (Math.atan2(-pull.dx, pull.dy) * 180 / Math.PI) : 0;
+
+  // Aim-quality preview: is the current arrow direction within tolerance of
+  // the target hoop? Used to color the guide line so the user can see aim alignment.
+  let aimAligned = false;
+  if(showArrow && rectRef.current){
+    const rect = rectRef.current;
+    const shooterX = SHOOTER_POS.xP * rect.width;
+    const shooterY = SHOOTER_POS.yP * rect.height;
+    const hoopX = rack.xP * rect.width;
+    const hoopY = rack.yP * rect.height;
+    const targetAngle = Math.atan2(hoopX - shooterX, -(hoopY - shooterY)) * 180 / Math.PI;
+    let diff = Math.abs(arrowAngleDeg - targetAngle);
+    if(diff > 180) diff = 360 - diff;
+    aimAligned = diff <= aimTolerance;
+  }
+
   const reasonLabel = (reason) => {
-    if(reason === "weak")     return "TOO SHORT";
-    if(reason === "overshot") return "OVERSHOT";
+    if(reason === "off-aim")   return "OFF AIM";
+    if(reason === "too-quick") return "TOO QUICK";
+    if(reason === "too-late")  return "TOO LATE";
     return "MISS";
   };
 
-  // Wind-up extension visual: 20% of the line length, extending past the rack
-  // in the AWAY-from-hoop direction. Used purely for visual guidance — the
-  // meter math is independent of where this line is drawn.
-  const windUpRatio = 0.20;
-  const windUpEndXP = rack.xP - (HOOP_X_FRAC - rack.xP) * windUpRatio;
-  const windUpEndYP = rack.yP - (HOOP_Y_FRAC - rack.yP) * windUpRatio;
-
   return(
     <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
-      {/* Status strip — rack name + ball type */}
+      {/* Status strip */}
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8,fontSize:10,letterSpacing:1.5,color:"#aaa",fontWeight:700}}>
         <span>RACK {rack.idx+1}/5 · {rack.name}</span>
         <span style={{color: isMoneyball ? YE : OR, fontSize:11, fontWeight:900}}>
@@ -5885,7 +5988,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         </span>
       </div>
 
-      {/* Result overlay shown after shot */}
+      {/* Result overlay */}
       {phase === "result" && result && (
         <div style={{
           padding:"14px 16px",
@@ -5905,7 +6008,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         </div>
       )}
 
-      {/* THE COURT + swipe surface + meter */}
+      {/* Court + swipe surface */}
       {phase !== "result" && (
         <div
           onPointerDown={handlePointerDown}
@@ -5914,133 +6017,159 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
           onPointerCancel={handlePointerUp}
           style={{
             position:"relative",height:340,
-            background:"linear-gradient(180deg, #1a3a5c 0%, #2a5a8a 30%, #c97a3a 70%, #d68a4a 100%)",
+            background:"linear-gradient(180deg, #2a4060 0%, #3a5a8a 25%, #c97a3a 60%, #b86838 100%)",
             border:`2px solid ${OR}`,
             borderRadius:10,touchAction:"none",cursor:"crosshair",
             overflow:"hidden",
           }}
         >
-          {/* SVG overlay: 3pt arc + rack→hoop line + wind-up extension */}
+          {/* Court markings — faint 3pt arc + paint */}
           <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-            <path d="M 12 30 Q 50 100 88 30" stroke="rgba(255,255,255,0.35)" strokeWidth="0.4" fill="none" strokeDasharray="1.5,1"/>
+            {/* 3pt arc */}
+            <path d="M 8 55 Q 50 -10 92 55" stroke="rgba(255,255,255,0.25)" strokeWidth="0.35" fill="none" vectorEffect="non-scaling-stroke"/>
+            {/* Paint rectangle */}
+            <rect x="38" y="83" width="24" height="15" stroke="rgba(255,255,255,0.2)" strokeWidth="0.3" fill="rgba(255,255,255,0.05)" vectorEffect="non-scaling-stroke"/>
+            {/* Aim guide line shooter → current target hoop */}
             <line
-              x1={windUpEndXP * 100} y1={windUpEndYP * 100}
-              x2={rack.xP * 100}     y2={rack.yP * 100}
-              stroke="rgba(0,220,100,0.45)" strokeWidth="0.6"
-              strokeDasharray="1.2,0.8" strokeLinecap="round"
+              x1={SHOOTER_POS.xP*100} y1={SHOOTER_POS.yP*100}
+              x2={rack.xP*100}        y2={rack.yP*100}
+              stroke={aimAligned ? GR : "rgba(0,220,100,0.35)"}
+              strokeWidth={aimAligned ? "0.8" : "0.4"}
+              strokeDasharray="1.5,1.2"
               vectorEffect="non-scaling-stroke"
-            />
-            <line
-              x1={rack.xP * 100}        y1={rack.yP * 100}
-              x2={HOOP_X_FRAC * 100}    y2={HOOP_Y_FRAC * 100}
-              stroke={GR} strokeWidth="1.2"
-              strokeLinecap="round"
-              vectorEffect="non-scaling-stroke"
-              style={{filter:`drop-shadow(0 0 4px ${GR})`}}
+              style={{transition:"stroke 0.15s"}}
             />
           </svg>
 
-          {/* Hoop */}
-          <div style={{position:"absolute",left:`${HOOP_X_FRAC*100}%`,top:`${HOOP_Y_FRAC*100}%`,transform:"translate(-50%,-50%)",pointerEvents:"none"}}>
-            <div style={{position:"relative"}}>
-              <div style={{position:"absolute",left:"50%",top:-22,transform:"translateX(-50%)",width:88,height:32,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
-              <div style={{position:"absolute",left:"50%",top:6,transform:"translateX(-50%)",width:36,height:7,background:"#ff6600",borderRadius:4,border:"1.5px solid #fff"}}/>
-            </div>
-          </div>
-
-          {/* Rack dots */}
-          {THREE_POINT_RACKS.map((r,i)=>{
+          {/* All 5 hoops — current target highlighted */}
+          {THREE_POINT_RACKS.map((h,i)=>{
             const isCurrent = i === rack.idx;
             return(
               <div key={i} style={{
-                position:"absolute",left:`${r.xP*100}%`,top:`${r.yP*100}%`,
-                transform:"translate(-50%,-50%)",pointerEvents:"none",
-                width: isCurrent ? 26 : 10,
-                height: isCurrent ? 26 : 10,
-                borderRadius:"50%",
-                background: isCurrent ? OR : "rgba(255,255,255,0.18)",
-                border: isCurrent ? "2.5px solid #fff" : "1px solid rgba(255,255,255,0.4)",
-                boxShadow: isCurrent ? `0 0 16px ${OR}, 0 0 6px ${OR}` : "none",
+                position:"absolute",
+                left:`${h.xP*100}%`,
+                top:`${h.yP*100}%`,
+                transform:"translate(-50%, -50%)",
+                pointerEvents:"none",
+                width: isCurrent ? 70 : 44,
+                height: isCurrent ? 34 : 22,
                 transition:"all 0.2s",
-                zIndex: isCurrent ? 2 : 1,
-              }}/>
+              }}>
+                {/* Backboard */}
+                <div style={{
+                  position:"absolute",left:0,top:0,right:0,
+                  height: isCurrent ? 22 : 14,
+                  border: isCurrent ? "2px solid #fff" : "1.5px solid rgba(255,255,255,0.55)",
+                  borderRadius:3,
+                  background: isCurrent ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
+                  boxShadow: isCurrent ? "0 0 12px rgba(255,255,255,0.4)" : "none",
+                }}/>
+                {/* Rim */}
+                <div style={{
+                  position:"absolute",left:"50%",
+                  top: isCurrent ? 22 : 14,
+                  transform:"translateX(-50%)",
+                  width: isCurrent ? 36 : 22,
+                  height: isCurrent ? 6 : 4,
+                  background: isCurrent ? "#ff6600" : "rgba(255,100,0,0.6)",
+                  borderRadius:3,
+                  border: isCurrent ? "1.5px solid #fff" : "1px solid rgba(255,255,255,0.45)",
+                  boxShadow: isCurrent ? `0 0 14px ${OR}` : "none",
+                }}/>
+              </div>
             );
           })}
 
-          {/* Live swipe trail */}
-          {pathPoints.length > 1 && (
-            <svg style={{position:"absolute",inset:0,pointerEvents:"none",zIndex:3}} width="100%" height="100%">
-              <polyline
-                points={pathPoints.map(p=>`${p.x},${p.y}`).join(" ")}
-                fill="none" stroke="#fff" strokeWidth="3.5"
-                strokeLinecap="round" strokeLinejoin="round"
-                opacity="0.85"
-              />
-            </svg>
+          {/* Shooter marker — basketball at the bottom */}
+          <div style={{
+            position:"absolute",
+            left:`${SHOOTER_POS.xP*100}%`,
+            top:`${SHOOTER_POS.yP*100}%`,
+            transform:"translate(-50%, -50%)",
+            pointerEvents:"none",
+            zIndex:4,
+          }}>
+            <div style={{
+              width:34, height:34,
+              borderRadius:"50%",
+              background: `radial-gradient(circle at 35% 35%, #ff8a40, #c8501a)`,
+              border:"2.5px solid #fff",
+              boxShadow:`0 0 14px ${OR}, 0 2px 6px rgba(0,0,0,0.5)`,
+              display:"flex",alignItems:"center",justifyContent:"center",
+              fontSize:18,
+            }}>🏀</div>
+          </div>
+
+          {/* The aim arrow — only shown while pulling. Anchored at the shooter,
+              rotated so it points in the SHOOT direction (opposite of pull). */}
+          {showArrow && (
+            <div style={{
+              position:"absolute",
+              left:`${SHOOTER_POS.xP*100}%`,
+              top:`${SHOOTER_POS.yP*100}%`,
+              width:38, height:130,
+              marginLeft:-19,
+              marginTop:-130,
+              transform:`rotate(${arrowAngleDeg}deg)`,
+              transformOrigin:"50% 100%",
+              pointerEvents:"none",
+              zIndex:5,
+            }}>
+              <ChevronArrow meterFill={meterFill} greenMin={greenMin} greenMax={greenMax}/>
+            </div>
           )}
 
-          {/* Ball flight on result */}
+          {/* Ball flying after release */}
           {ballFlying && (
             <div style={{
-              position:"absolute",left:`${rack.xP*100}%`,top:`${rack.yP*100}%`,
-              transform:"translate(-50%,-50%)",fontSize:20,pointerEvents:"none",zIndex:4,
-              "--targetX": `${(HOOP_X_FRAC - rack.xP) * 100}%`,
-              "--targetY": `${(HOOP_Y_FRAC - rack.yP) * 100}%`,
-              animation: `traceFly${result?.made?"Made":"Missed"} 0.9s ease-out forwards`,
+              position:"absolute",
+              left:`${SHOOTER_POS.xP*100}%`,
+              top:`${SHOOTER_POS.yP*100}%`,
+              transform:"translate(-50%, -50%)",
+              fontSize:22,pointerEvents:"none",zIndex:6,
+              "--targetX": `${(rack.xP - SHOOTER_POS.xP) * 100}%`,
+              "--targetY": `${(rack.yP - SHOOTER_POS.yP) * 100}%`,
+              animation:`slingFly${result?.made?"Made":"Missed"} 0.95s ease-out forwards`,
             }}>{isMoneyball ? "🟡" : "🏀"}</div>
           )}
 
-          {/* THE METER — bottom of the court. Fills as you pull backward. */}
-          <div style={{
-            position:"absolute",left:"6%",right:"6%",bottom:12,height:20,
-            background:"rgba(0,0,0,0.55)",borderRadius:10,overflow:"hidden",
-            border:"1px solid rgba(255,255,255,0.25)",
-            boxShadow:inGreen?`0 0 14px ${GR}`:"none",
-            transition:"box-shadow 0.15s",
-            zIndex:5,
-            pointerEvents:"none",
-          }}>
-            {/* Background zones: red on the sides, green in the middle */}
-            <div style={{position:"absolute",left:0,top:0,bottom:0,width:`${greenMin*100}%`,background:`linear-gradient(90deg, ${RE}77 0%, ${RE}55 60%, ${YE}66 100%)`}}/>
-            <div style={{position:"absolute",left:`${greenMin*100}%`,top:0,bottom:0,width:`${(greenMax-greenMin)*100}%`,background:`linear-gradient(90deg, ${GR}aa, ${GR}cc, ${GR}aa)`,boxShadow:inGreen?`inset 0 0 8px ${GR}`:"none"}}/>
-            <div style={{position:"absolute",left:`${greenMax*100}%`,right:0,top:0,bottom:0,background:`linear-gradient(90deg, ${YE}66 0%, ${RE}55 40%, ${RE}77 100%)`}}/>
-            {/* Indicator line at current meter fill */}
+          {/* Instructions */}
+          {phase === "ready" && (
             <div style={{
-              position:"absolute",left:`${meterFill*100}%`,top:-3,bottom:-3,
-              width:5,background:inGreen?GR:"#fff",
-              transform:"translateX(-50%)",
-              boxShadow:inGreen?`0 0 10px ${GR}, 0 0 4px #fff`:`0 0 6px #fff`,
-              borderRadius:2,
-              transition:"background 0.1s",
-            }}/>
-          </div>
-
-          {/* Meter label above the bar — shows instruction or RELEASE prompt */}
-          <div style={{
-            position:"absolute",left:0,right:0,bottom:38,textAlign:"center",
-            pointerEvents:"none",zIndex:5,
-            fontSize:11,letterSpacing:2,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",
-            color: inGreen ? GR : (meterFill > 0 ? "#fff" : "rgba(255,255,255,0.7)"),
-            textShadow: inGreen ? `0 0 8px ${GR}` : "none",
-            transition:"color 0.15s",
-          }}>
-            {phase === "ready" ? "PULL BACK FROM THE RACK" :
-              inGreen ? "🟢 RELEASE NOW!" :
-              meterFill < greenMin ? "↓ KEEP PULLING ↓" :
-              "← TOO FAR ←"}
-          </div>
+              position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
+              pointerEvents:"none",
+              fontSize:10,letterSpacing:1.5,color:"rgba(255,255,255,0.75)",fontWeight:700,
+            }}>
+              PULL <span style={{color:OR}}>AWAY</span> FROM THE HIGHLIGHTED HOOP<br/>
+              RELEASE WHEN THE ARROW HITS <span style={{color:GR}}>GREEN</span>
+            </div>
+          )}
+          {showArrow && (
+            <div style={{
+              position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
+              pointerEvents:"none",
+              fontSize:10,letterSpacing:1.5,fontWeight:900,
+              color: meterFill >= greenMin && meterFill <= greenMax ? GR :
+                     meterFill < greenMin ? "#fff" : RE,
+              textShadow: meterFill >= greenMin && meterFill <= greenMax ? `0 0 8px ${GR}` : "none",
+              transition:"color 0.1s",
+            }}>
+              {meterFill >= greenMin && meterFill <= greenMax ? "🟢 RELEASE NOW!" :
+                meterFill < greenMin ? "↓ HOLD ↓" : "← TOO LATE ←"}
+            </div>
+          )}
         </div>
       )}
 
       <style>{`
-        @keyframes traceFlyMade {
+        @keyframes slingFlyMade {
           0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
           100% { transform: translate(calc(-50% + var(--targetX)), calc(-50% + var(--targetY))) scale(0.45); opacity: 0; }
         }
-        @keyframes traceFlyMissed {
+        @keyframes slingFlyMissed {
           0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          50%  { transform: translate(calc(-50% + var(--targetX) * 0.6), calc(-50% + var(--targetY) * 0.6 - 18px)) scale(0.7); opacity: 1; }
-          100% { transform: translate(calc(-50% + var(--targetX) * 0.4), calc(-50% + var(--targetY) * 0.4 + 25px)) scale(0.5); opacity: 0; }
+          55%  { transform: translate(calc(-50% + var(--targetX) * 0.65), calc(-50% + var(--targetY) * 0.65 - 24px)) scale(0.7); opacity: 1; }
+          100% { transform: translate(calc(-50% + var(--targetX) * 0.45), calc(-50% + var(--targetY) * 0.45 + 30px)) scale(0.5); opacity: 0; }
         }
       `}</style>
     </div>
@@ -6189,30 +6318,31 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
       <div style={{padding:"4px 0 14px"}}>
         <div style={{textAlign:"center",marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>HOW TO SHOOT</div>
-          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>PULL BACK · RELEASE AT GREEN</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>AIM · RELEASE AT GREEN</div>
           <div style={{fontSize:11,color:"#aaa",marginTop:4,lineHeight:1.4}}>
-            Press near the rack, pull back to fill the meter. Let go when it hits the green zone.
+            Pull away from the hoop — an aim arrow appears in the opposite direction. Release when the arrow fills to green.
           </div>
         </div>
 
         <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:12,marginBottom:14}}>
           <div style={{fontSize:10,fontWeight:900,color:OR,letterSpacing:1.5,marginBottom:8}}>THE FORMAT</div>
           <div style={{fontSize:12,color:"#ddd",lineHeight:1.6}}>
-            • 5 racks · 3 balls per rack<br/>
-            • The 3rd ball in each rack is the <span style={{color:YE,fontWeight:900}}>🟡 MONEYBALL</span> — worth <b>2 points</b><br/>
-            • Each rack has its own line away from the hoop — pull along it<br/>
-            • Release in the green zone of the meter → made shot<br/>
-            • Higher 3PT skill = wider green zone
+            • 5 hoops · 3 balls per hoop<br/>
+            • The 3rd ball at each hoop is the <span style={{color:YE,fontWeight:900}}>🟡 MONEYBALL</span> — worth <b>2 points</b><br/>
+            • Pull <b>opposite</b> to the target hoop — the arrow points where you'll shoot<br/>
+            • Meter fills automatically — release when it hits green<br/>
+            • Both aim AND timing have to land — higher 3PT skill widens both tolerances
           </div>
         </div>
 
         <div style={{background:"rgba(0,220,100,0.05)",border:`1px solid ${GR}44`,borderRadius:8,padding:"10px 12px",fontSize:11,color:"#ddd",marginBottom:14,lineHeight:1.5}}>
           <div style={{fontSize:10,fontWeight:900,color:GR,letterSpacing:1.5,marginBottom:5}}>💡 THE SHOT MOTION</div>
           <div>
-            1. Press at the rack (orange dot)<br/>
-            2. <b>Pull back</b> away from the hoop — the meter fills as you go<br/>
-            3. <b>Let go</b> the moment the meter hits the green zone<br/>
-            4. Too short → weak shot · Too far → overshot
+            1. Press anywhere on the court<br/>
+            2. <b>Pull away</b> from the highlighted hoop (down/diagonal)<br/>
+            3. An arrow appears from the shooter pointing at where you're aiming<br/>
+            4. The arrow's chevrons fill from base → tip (auto)<br/>
+            5. Release when the green chevrons light up — don't let it reach red
           </div>
         </div>
 
