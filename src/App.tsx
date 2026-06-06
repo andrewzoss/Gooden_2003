@@ -4418,6 +4418,14 @@ function calcCareerScore(player, nbaSeasons){
     else if(player.threePointContestResult === "finalsLost")  s += 80;
     else if(player.threePointContestResult === "eliminated")  s += 25;
   }
+  // PBA Tour sabbatical: bowling a clean game gives a small legacy nod,
+  // mediocre scores still get something for the experience.
+  if(fired.includes("bowling_career_2009") && player.bowlingPlayed){
+    if(player.bowlingScore >= 250)      s += 80;
+    else if(player.bowlingScore >= 200) s += 50;
+    else if(player.bowlingScore >= 150) s += 30;
+    else                                s += 15;
+  }
   // The Soup Incident — souping Damon Jones is iconic franchise lore.
   if(fired.includes("damon_jones_soup_2018") && player.soupedDamon){
     s += 75;
@@ -5008,6 +5016,7 @@ const SLAM_DUNK_EVENT_ID = "slam_dunk_contest_2005";
 const NACHO_EVENT_ID = "nacho_libre_2006";
 const WEED_EVENT_ID = "matt_barnes_2007";
 const THREE_POINT_EVENT_ID = "three_point_contest_2008";
+const BOWLING_EVENT_ID = "bowling_career_2009";
 const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
@@ -6177,6 +6186,78 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
           }}>{isMoneyball ? "🟡" : "🏀"}</div>
         )}
 
+        {/* MADE-shot result feedback — green glow ring at the hoop + floating
+            "+1" or "+2" score popup. Both delayed to fire as the ball reaches
+            the rim (≈85% of the 1.15s flight). */}
+        {ballFlying && result?.made && (
+          <>
+            <div style={{
+              position:"absolute",
+              left:`${rack.xP*100}%`,
+              top:`${rack.yP*100}%`,
+              transform:"translate(-50%, -50%)",
+              width:96, height:32, borderRadius:"50%",
+              background:`radial-gradient(ellipse, ${GR}88 0%, ${GR}33 45%, transparent 75%)`,
+              pointerEvents:"none",
+              zIndex:3,
+              opacity:0,
+              animation:"swishGlow 0.85s ease-out forwards 0.85s",
+            }}/>
+            <div style={{
+              position:"absolute",
+              left:`${rack.xP*100}%`,
+              top:`${rack.yP*100}%`,
+              pointerEvents:"none",
+              zIndex:7,
+              fontFamily:"'Barlow Condensed',sans-serif",
+              fontSize: isMoneyball ? 38 : 34,
+              fontWeight:900,
+              letterSpacing:1,
+              color: isMoneyball ? YE : GR,
+              textShadow:`0 0 14px ${isMoneyball ? YE : GR}, 0 2px 4px rgba(0,0,0,0.7)`,
+              opacity:0,
+              animation:"scorePop 1.2s cubic-bezier(0.34, 1.56, 0.64, 1) forwards 0.85s",
+              whiteSpace:"nowrap",
+            }}>+{isMoneyball ? 2 : 1}{isMoneyball ? "!" : ""}</div>
+          </>
+        )}
+
+        {/* MISSED-shot result feedback — quick red rim flash + dim "MISS" tag
+            right at the hoop, also delayed to coincide with the ball hitting
+            the rim area. */}
+        {ballFlying && result && !result.made && (
+          <>
+            <div style={{
+              position:"absolute",
+              left:`${rack.xP*100}%`,
+              top:`${rack.yP*100}%`,
+              transform:"translate(-50%, -50%)",
+              width:76, height:26, borderRadius:"50%",
+              background:`radial-gradient(ellipse, ${RE}aa 0%, ${RE}44 40%, transparent 70%)`,
+              pointerEvents:"none",
+              zIndex:3,
+              opacity:0,
+              animation:"rimFlash 0.55s ease-out forwards 0.88s",
+            }}/>
+            <div style={{
+              position:"absolute",
+              left:`${rack.xP*100}%`,
+              top:`${rack.yP*100}%`,
+              pointerEvents:"none",
+              zIndex:7,
+              fontFamily:"'Barlow Condensed',sans-serif",
+              fontSize:18,
+              fontWeight:900,
+              letterSpacing:2,
+              color:RE,
+              textShadow:`0 0 8px ${RE}, 0 2px 3px rgba(0,0,0,0.7)`,
+              opacity:0,
+              animation:"missTag 0.9s ease-out forwards 0.88s",
+              whiteSpace:"nowrap",
+            }}>MISS</div>
+          </>
+        )}
+
         {/* Instructions — only during ready/pulling */}
         {phase === "ready" && (
           <div style={{
@@ -6231,6 +6312,30 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
           78%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.85), calc(var(--landY) * 0.85 - 28px)) scale(0.68) rotate(305deg); }
           90%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.65) rotate(360deg); opacity: 1; }
           100% { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.95), calc(var(--landY) + 45px)) scale(0.4) rotate(440deg); opacity: 0; }
+        }
+        /* Made-shot feedback: glow at the rim + floating +1/+2 number */
+        @keyframes swishGlow {
+          0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+          30%  { opacity: 1; transform: translate(-50%, -50%) scale(1.4); }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(2.0); }
+        }
+        @keyframes scorePop {
+          0%   { transform: translate(-50%, -50%) scale(0.3); opacity: 0; }
+          15%  { transform: translate(-50%, -50%) translateY(-12px) scale(1.55); opacity: 1; }
+          45%  { transform: translate(-50%, -50%) translateY(-48px) scale(1.25); opacity: 1; }
+          100% { transform: translate(-50%, -50%) translateY(-100px) scale(1.0); opacity: 0; }
+        }
+        /* Missed-shot feedback: red flash at the rim + brief MISS tag */
+        @keyframes rimFlash {
+          0%   { opacity: 0; transform: translate(-50%, -50%) scale(0.6); }
+          35%  { opacity: 1; transform: translate(-50%, -50%) scale(1.3); }
+          100% { opacity: 0; transform: translate(-50%, -50%) scale(1.9); }
+        }
+        @keyframes missTag {
+          0%   { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+          25%  { transform: translate(-50%, -50%) translateY(-8px) scale(1.2); opacity: 1; }
+          70%  { transform: translate(-50%, -50%) translateY(-28px) scale(1.0); opacity: 0.8; }
+          100% { transform: translate(-50%, -50%) translateY(-44px) scale(0.85); opacity: 0; }
         }
       `}</style>
     </div>
@@ -6570,6 +6675,693 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
         threePointSkill={threePointSkill}
         onComplete={handleShot}
       />
+    </div>
+  );
+}
+
+// ─── MIDSEASON EVENT: PBA TOUR BOWLING SABBATICAL (2009) ────────────────────────
+// 2007-09 NBA gambling scandal allegory — Donaghy era. Player gets quietly
+// offered a "career change" to bowling. Yes path or "wtf" path both end up
+// at the lanes. After 10 frames, the season ends at 41 games.
+
+const BOWLER_BP = {xP: 0.50, yP: 0.88};
+const BOWLING_PINS = [
+  {xP: 0.50, yP: 0.34}, // 1 (head pin, closest to bowler)
+  {xP: 0.46, yP: 0.27}, // 2
+  {xP: 0.54, yP: 0.27}, // 3
+  {xP: 0.42, yP: 0.20}, // 4
+  {xP: 0.50, yP: 0.20}, // 5
+  {xP: 0.58, yP: 0.20}, // 6
+  {xP: 0.38, yP: 0.13}, // 7
+  {xP: 0.46, yP: 0.13}, // 8
+  {xP: 0.54, yP: 0.13}, // 9
+  {xP: 0.62, yP: 0.13}, // 10
+];
+
+// Bowling score calculator — handles strikes (10 + next 2 balls), spares
+// (10 + next ball), and the special 3-ball frame 10.
+function calcBowlingScore(frames){
+  // Flat list of all balls in order — easier to look up "next N balls"
+  // from a given frame for strike/spare bonuses.
+  const ballsByFrame = frames.map(f => {
+    const list = [];
+    if(f.ball1 != null) list.push(f.ball1);
+    if(f.ball2 != null) list.push(f.ball2);
+    if(f.ball3 != null) list.push(f.ball3);
+    return list;
+  });
+  let total = 0;
+  for(let i = 0; i < 10; i++){
+    const f = frames[i];
+    if(f.ball1 == null) break;
+    if(i < 9){
+      total += (f.ball1 || 0) + (f.ball2 || 0);
+      if(f.isStrike){
+        // Need next 2 balls (across frames if needed)
+        let need = 2;
+        let j = i + 1;
+        while(need > 0 && j < 10){
+          for(const v of ballsByFrame[j]){
+            if(need <= 0) break;
+            total += v;
+            need--;
+          }
+          j++;
+        }
+      } else if(f.isSpare){
+        // Need next 1 ball
+        for(let j = i + 1; j < 10; j++){
+          if(ballsByFrame[j].length > 0){
+            total += ballsByFrame[j][0];
+            break;
+          }
+        }
+      }
+    } else {
+      // Frame 10 — just sum all balls; bonus throws are already counted.
+      total += (f.ball1 || 0) + (f.ball2 || 0) + (f.ball3 || 0);
+    }
+  }
+  return total;
+}
+
+// Per-throw evaluator: where does the ball land + which pins fall?
+function evaluateBowlingThrow(meterFill, pull, rect, pinsStanding){
+  if(meterFill < 0.08) return {recoverable:true};
+  const aimDx = -pull.dx;
+  const aimDy = -pull.dy;
+  const aimLen = Math.hypot(aimDx, aimDy);
+  if(aimLen < 1) return {recoverable:true};
+  const aimUx = aimDx / aimLen;
+  const aimUy = aimDy / aimLen;
+
+  // Power from timing (same green-zone formula as the 3pt mechanic)
+  const greenWidth = 0.20;
+  const greenCenter = 0.55;
+  const greenMin = greenCenter - greenWidth / 2;
+  const greenMax = greenCenter + greenWidth / 2;
+  let power = 1.0;
+  if(meterFill < greenMin)      power = 0.40 + (meterFill / greenMin) * 0.60;
+  else if(meterFill > greenMax) power = 1.0 + (meterFill - greenMax) / (1 - greenMax) * 0.40;
+
+  // Landing position = bowler + aim × distance(bowler→head pin) × power
+  const bowlerX = BOWLER_BP.xP * rect.width;
+  const bowlerY = BOWLER_BP.yP * rect.height;
+  const headPinX = BOWLING_PINS[0].xP * rect.width;
+  const headPinY = BOWLING_PINS[0].yP * rect.height;
+  const D = Math.hypot(headPinX - bowlerX, headPinY - bowlerY);
+  const landX = bowlerX + aimUx * D * power;
+  const landY = bowlerY + aimUy * D * power;
+
+  // If power is super weak, the ball doesn't reach the pins at all
+  if(power < 0.50){
+    return {
+      landX, landY,
+      landOffsetX: landX - bowlerX,
+      landOffsetY: landY - bowlerY,
+      knocked: [],
+      power,
+    };
+  }
+
+  // Hit detection — pins along the ball's trajectory line get knocked.
+  // Then chain-react to adjacent standing pins.
+  const ballMaxReach = D * power * 1.25;
+  const directHitRadius = 16;
+  const grazeRadius = 22;
+  const knocked = new Set();
+  for(let i = 0; i < 10; i++){
+    if(!pinsStanding[i]) continue;
+    const pinX = BOWLING_PINS[i].xP * rect.width;
+    const pinY = BOWLING_PINS[i].yP * rect.height;
+    const pdx = pinX - bowlerX;
+    const pdy = pinY - bowlerY;
+    // Project onto trajectory direction
+    const t = pdx * aimUx + pdy * aimUy;
+    if(t < 0 || t > ballMaxReach) continue;
+    // Perpendicular distance from trajectory line
+    const perpX = pdx - t * aimUx;
+    const perpY = pdy - t * aimUy;
+    const perpDist = Math.hypot(perpX, perpY);
+    if(perpDist < directHitRadius){
+      knocked.add(i);
+    } else if(perpDist < grazeRadius && Math.random() < 0.55){
+      knocked.add(i);
+    }
+  }
+
+  // Chain effect — knocked pins flip adjacent standing pins with high prob.
+  // Up to 5 passes so a head-pin strike can cascade through the whole rack.
+  for(let iter = 0; iter < 5; iter++){
+    let changed = false;
+    const current = Array.from(knocked);
+    for(const idx of current){
+      for(let j = 0; j < 10; j++){
+        if(knocked.has(j) || !pinsStanding[j]) continue;
+        const a = BOWLING_PINS[idx];
+        const b = BOWLING_PINS[j];
+        const adx = (a.xP - b.xP) * rect.width;
+        const ady = (a.yP - b.yP) * rect.height;
+        const adjDist = Math.hypot(adx, ady);
+        if(adjDist < 32 && Math.random() < 0.7){
+          knocked.add(j);
+          changed = true;
+        }
+      }
+    }
+    if(!changed) break;
+  }
+
+  return {
+    landX, landY,
+    landOffsetX: landX - bowlerX,
+    landOffsetY: landY - bowlerY,
+    knocked: Array.from(knocked),
+    power,
+  };
+}
+
+// Single bowling pin (SVG) — narrow body, red collar, drops shadow.
+function BowlingPin({knocked, justFell}){
+  return(
+    <svg width="20" height="28" viewBox="0 0 20 28" style={{
+      display:"block",
+      opacity: knocked ? 0 : 1,
+      transition: knocked && !justFell ? "opacity 0.2s" : "none",
+      animation: justFell ? "pinFall 0.55s ease-out forwards" : "none",
+      transformOrigin: "50% 100%",
+      filter: "drop-shadow(0 2px 1px rgba(0,0,0,0.5))",
+    }}>
+      {/* Head */}
+      <ellipse cx="10" cy="4" rx="3" ry="2.6" fill="#fff" stroke="rgba(0,0,0,0.3)" strokeWidth="0.6"/>
+      {/* Body */}
+      <path d="M 6.8 5 Q 5.5 10 6 16 Q 6.5 22 8 26 L 12 26 Q 13.5 22 14 16 Q 14.5 10 13.2 5 Z" fill="#fff" stroke="rgba(0,0,0,0.3)" strokeWidth="0.6"/>
+      {/* Red collar stripes (classic two-stripe bowling pin) */}
+      <rect x="6.4" y="7" width="7.2" height="1.4" fill="#ef4444"/>
+      <rect x="6.6" y="9.4" width="6.8" height="1" fill="#ef4444" opacity="0.85"/>
+    </svg>
+  );
+}
+
+// Prompt screen — verbatim text from the user. Two paths converge on the
+// same bowling game; the "wtf" branch shows a follow-up Stern message first.
+function BowlingPromptScreen({onAccept, onDecline}){
+  const [stage, setStage] = useState("choice");
+
+  if(stage === "sternResponse"){
+    return(
+      <div style={{padding:"6px 0 18px"}}>
+        <div style={{textAlign:"center",marginBottom:16}}>
+          <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:4}}>📞 PHONE CALL — COMMISSIONER STERN</div>
+        </div>
+        <div style={{
+          background:`linear-gradient(135deg, ${GO}11, rgba(0,0,0,0.4))`,
+          border:`1px solid ${GO}55`,
+          borderRadius:10,
+          padding:"18px 16px",
+          marginBottom:18,
+          fontSize:14,
+          color:"#ddd",
+          lineHeight:1.6,
+          fontStyle:"italic",
+        }}>
+          "David Stern highly encourages you to pursue your dream...<br/>
+          <span style={{color:GO,fontWeight:700,fontStyle:"normal"}}>to avoid any unwanted attention.</span>"
+        </div>
+        <button onClick={onAccept} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          ah fuck okay let's bowl 🎳
+        </button>
+      </div>
+    );
+  }
+
+  return(
+    <div style={{padding:"6px 0 18px"}}>
+      <div style={{textAlign:"center",marginBottom:12}}>
+        <div style={{fontSize:42,marginBottom:6}}>🎳</div>
+        <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>A NEW CALLING?</div>
+      </div>
+      <div style={{
+        background:"rgba(255,255,255,0.04)",
+        borderRadius:10,
+        padding:"16px 16px",
+        marginBottom:16,
+        fontSize:14,
+        color:"#ddd",
+        lineHeight:1.55,
+      }}>
+        Your basketball career is really starting to take off, but deep down inside you've always wanted to be a bowler. Take off the rest of this season to try and make it on the PBA tour?
+        <div style={{fontSize:10,color:"#777",marginTop:12,fontStyle:"italic",lineHeight:1.45}}>
+          This is certainly not tied to any potential gambling scandal.
+        </div>
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:8}}>
+        <button onClick={onAccept} style={{...btnS,padding:"14px 18px",fontSize:13}}>
+          🎳 I'M GONNA BE THE GBOAT
+          <div style={{fontSize:9,fontWeight:600,opacity:0.8,marginTop:2,letterSpacing:0.5}}>(greatest bowler of all time)</div>
+        </button>
+        <button onClick={()=>setStage("sternResponse")} style={{...ghostS,padding:"12px 18px",fontSize:12}}>
+          What the fuck are you talking about?
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// The 10-frame bowling game itself.
+function BowlingGame({onDone}){
+  // Frame ledger — each frame has up to 3 balls + strike/spare flags
+  const [frames, setFrames] = useState(()=> Array(10).fill(null).map(()=>({
+    ball1:null, ball2:null, ball3:null, isStrike:false, isSpare:false,
+  })));
+  const [currentFrame, setCurrentFrame] = useState(0);
+  const [currentBall, setCurrentBall] = useState(1);
+  const [pinsStanding, setPinsStanding] = useState(Array(10).fill(true));
+  const [justKnocked, setJustKnocked] = useState([]); // pins that fell THIS throw, for fall animation
+  const [showingFinal, setShowingFinal] = useState(false);
+
+  // Per-throw state (resets between throws via key change)
+  const [throwPhase, setThrowPhase] = useState("ready"); // ready | pulling | rolling
+  const [meterFill, setMeterFill] = useState(0);
+  const [pull, setPull] = useState({dx:0, dy:0, length:0});
+  const [throwResult, setThrowResult] = useState(null);
+  const [ballRolling, setBallRolling] = useState(false);
+
+  const startPxRef = useRef(null);
+  const rectRef = useRef(null);
+  const isTrackingRef = useRef(false);
+  const meterStartedAtRef = useRef(0);
+  const animRef = useRef(null);
+  const throwLockRef = useRef(false); // prevents double-throws during the ball-roll animation
+
+  const METER_DURATION_MS = 1100;
+  const MIN_PULL_DISTANCE = 22;
+  const greenWidth = 0.20;
+  const greenCenter = 0.55;
+  const greenMin = greenCenter - greenWidth / 2;
+  const greenMax = greenCenter + greenWidth / 2;
+
+  useEffect(()=>{ return ()=>{ if(animRef.current) cancelAnimationFrame(animRef.current); }; },[]);
+
+  const totalScore = calcBowlingScore(frames);
+
+  // Reset per-throw state so the next throw starts clean
+  const armNextThrow = () => {
+    setThrowPhase("ready");
+    setMeterFill(0);
+    setPull({dx:0, dy:0, length:0});
+    setThrowResult(null);
+    setBallRolling(false);
+    meterStartedAtRef.current = 0;
+    throwLockRef.current = false;
+  };
+
+  const stopMeter = () => {
+    if(animRef.current){ cancelAnimationFrame(animRef.current); animRef.current = null; }
+  };
+
+  const startMeter = () => {
+    meterStartedAtRef.current = performance.now();
+    const tick = () => {
+      if(throwLockRef.current || !isTrackingRef.current) return;
+      const elapsed = performance.now() - meterStartedAtRef.current;
+      const fill = Math.min(1, elapsed / METER_DURATION_MS);
+      setMeterFill(fill);
+      if(fill < 1) animRef.current = requestAnimationFrame(tick);
+      else animRef.current = null;
+    };
+    animRef.current = requestAnimationFrame(tick);
+  };
+
+  const handlePointerDown = (e) => {
+    if(showingFinal || throwLockRef.current) return;
+    isTrackingRef.current = true;
+    const rect = e.currentTarget.getBoundingClientRect();
+    rectRef.current = rect;
+    const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
+    startPxRef.current = p;
+    setPull({dx:0, dy:0, length:0});
+    setMeterFill(0);
+    setThrowPhase("pulling");
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+    meterStartedAtRef.current = 0;
+  };
+
+  const handlePointerMove = (e) => {
+    if(!isTrackingRef.current || throwLockRef.current) return;
+    const rect = rectRef.current;
+    const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
+    const dx = p.x - startPxRef.current.x;
+    const dy = p.y - startPxRef.current.y;
+    const length = Math.hypot(dx, dy);
+    setPull({dx, dy, length});
+    if(length >= MIN_PULL_DISTANCE && meterStartedAtRef.current === 0){
+      startMeter();
+    }
+  };
+
+  // Apply a throw result to state and advance frames
+  const applyThrow = (result) => {
+    throwLockRef.current = true;
+    stopMeter();
+    isTrackingRef.current = false;
+
+    const knockedCount = result.knocked.length;
+    const newStanding = pinsStanding.slice();
+    for(const idx of result.knocked) newStanding[idx] = false;
+
+    setThrowResult(result);
+    setBallRolling(true);
+    setJustKnocked(result.knocked);
+
+    // After ball animation reaches pins (~0.7s in), update pin state
+    setTimeout(()=> {
+      setPinsStanding(newStanding);
+    }, 700);
+
+    // Sequence:
+    //   0-1.0s: ball rolls down lane
+    //   0.7-1.2s: pins fall
+    //   1.2s+: update frame ledger, possibly reset pins for next ball
+    setTimeout(()=> {
+      // Tally into frame ledger
+      const newFrames = frames.slice();
+      const frame = {...newFrames[currentFrame]};
+
+      if(currentBall === 1){
+        frame.ball1 = knockedCount;
+        if(knockedCount === 10) frame.isStrike = true;
+      } else if(currentBall === 2){
+        frame.ball2 = knockedCount;
+        if(!frame.isStrike && (frame.ball1 + frame.ball2 === 10)) frame.isSpare = true;
+      } else if(currentBall === 3){
+        frame.ball3 = knockedCount;
+      }
+      newFrames[currentFrame] = frame;
+      setFrames(newFrames);
+
+      // Decide next state
+      const inFrame10 = currentFrame === 9;
+      if(!inFrame10){
+        // Frames 1-9
+        if(currentBall === 1 && frame.isStrike){
+          // Strike — frame done, move on
+          advanceFrame(newFrames);
+        } else if(currentBall === 2){
+          // Frame done (open or spare)
+          advanceFrame(newFrames);
+        } else {
+          // Ball 1 not strike → throw ball 2 with remaining pins
+          setCurrentBall(2);
+          armNextThrow();
+          setJustKnocked([]);
+        }
+      } else {
+        // Frame 10
+        if(currentBall === 1){
+          if(frame.isStrike){
+            // Strike → reset pins for ball 2
+            setPinsStanding(Array(10).fill(true));
+          }
+          setCurrentBall(2);
+          armNextThrow();
+          setJustKnocked([]);
+        } else if(currentBall === 2){
+          if(frame.isStrike){
+            // Ball 1 was strike. Get ball 3.
+            if(knockedCount === 10) setPinsStanding(Array(10).fill(true));
+            setCurrentBall(3);
+            armNextThrow();
+            setJustKnocked([]);
+          } else if(frame.isSpare){
+            // Spare → reset pins for ball 3
+            setPinsStanding(Array(10).fill(true));
+            setCurrentBall(3);
+            armNextThrow();
+            setJustKnocked([]);
+          } else {
+            // Open 10th frame → game over
+            setShowingFinal(true);
+          }
+        } else if(currentBall === 3){
+          // Game over
+          setShowingFinal(true);
+        }
+      }
+    }, 1300);
+  };
+
+  // Reset pins + advance to next frame
+  const advanceFrame = (latestFrames) => {
+    const next = currentFrame + 1;
+    if(next >= 10){
+      setShowingFinal(true);
+      return;
+    }
+    setCurrentFrame(next);
+    setCurrentBall(1);
+    setPinsStanding(Array(10).fill(true));
+    armNextThrow();
+    setJustKnocked([]);
+  };
+
+  const handlePointerUp = () => {
+    if(!isTrackingRef.current || throwLockRef.current) return;
+    isTrackingRef.current = false;
+    stopMeter();
+    const rect = rectRef.current;
+    const result = evaluateBowlingThrow(meterFill, pull, rect, pinsStanding);
+    if(result.recoverable){
+      // Accidental tap — reset for retry, no state change
+      armNextThrow();
+      return;
+    }
+    applyThrow(result);
+  };
+
+  // Show arrow only when actively pulling past the threshold
+  const showArrow = throwPhase === "pulling" && pull.length >= MIN_PULL_DISTANCE;
+  const arrowAngleDeg = showArrow ? (Math.atan2(-pull.dx, pull.dy) * 180 / Math.PI) : 0;
+  const inGreen = meterFill >= greenMin && meterFill <= greenMax;
+
+  // Final "WHO DO YOU THINK YOU ARE? I AM!" stage
+  if(showingFinal){
+    return(
+      <div style={{padding:"6px 0 18px",textAlign:"center"}}>
+        <div style={{fontSize:48,marginBottom:8}}>🎳</div>
+        <div style={{fontSize:10,letterSpacing:3,color:GO,marginBottom:6}}>FINAL SCORE</div>
+        <div style={{
+          fontSize:54,fontWeight:900,
+          fontFamily:"'Barlow Condensed',sans-serif",
+          color: totalScore >= 200 ? GO : totalScore >= 150 ? GR : "#fff",
+          textShadow: totalScore >= 200 ? `0 0 18px ${GO}` : "none",
+          lineHeight:1,marginBottom:18,
+        }}>{totalScore}</div>
+
+        <div style={{
+          background:`linear-gradient(135deg, ${OR}22, rgba(0,0,0,0.5))`,
+          border:`2px solid ${OR}`,
+          borderRadius:10,
+          padding:"22px 14px",
+          marginBottom:18,
+        }}>
+          <div style={{
+            fontSize:22,fontWeight:900,letterSpacing:1.5,
+            fontFamily:"'Barlow Condensed',sans-serif",
+            color:"#fff",lineHeight:1.1,
+            textShadow:`0 0 12px ${OR}`,
+          }}>WHO DO YOU THINK<br/>YOU ARE?</div>
+          <div style={{
+            fontSize:30,fontWeight:900,letterSpacing:2,
+            fontFamily:"'Barlow Condensed',sans-serif",
+            color:OR,marginTop:8,
+            textShadow:`0 0 12px ${OR}`,
+          }}>I AM!</div>
+        </div>
+
+        <button onClick={()=>onDone&&onDone({score: totalScore})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+          → BACK TO BASKETBALL (?)
+        </button>
+      </div>
+    );
+  }
+
+  // The lane / playing surface
+  const ballPx = (rect) => ({
+    x: BOWLER_BP.xP * rect.width,
+    y: BOWLER_BP.yP * rect.height,
+  });
+
+  return(
+    <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
+      {/* Top scoreboard — frames and running total */}
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6,fontSize:10,letterSpacing:1.5,color:"#aaa",fontWeight:700}}>
+        <span>FRAME {currentFrame+1}/10 · BALL {currentBall}</span>
+        <span style={{color:GO,fontSize:14,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif"}}>SCORE: {totalScore}</span>
+      </div>
+      {/* Frame strip */}
+      <div style={{display:"flex",gap:2,marginBottom:8}}>
+        {frames.map((f,i)=>{
+          const isCur = i === currentFrame && !showingFinal;
+          const display = f.isStrike ? "X" :
+                          f.isSpare  ? `${f.ball1}/` :
+                          f.ball1 != null ? `${f.ball1}${f.ball2 != null ? ` ${f.ball2}` : ""}` : "";
+          return(
+            <div key={i} style={{
+              flex:1,
+              padding:"3px 2px",
+              background: isCur ? `${OR}33` : "rgba(255,255,255,0.04)",
+              border: `1px solid ${isCur ? OR : "rgba(255,255,255,0.08)"}`,
+              borderRadius:4,
+              textAlign:"center",
+              fontSize:9,
+              color: isCur ? "#fff" : "#888",
+            }}>
+              <div style={{fontSize:8,color:isCur?OR:"#666",letterSpacing:0.5,fontWeight:700}}>{i+1}</div>
+              <div style={{fontSize:10,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",color:f.ball1!=null?"#fff":"#444",minHeight:13}}>{display||"—"}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* The lane (also the swipe surface) */}
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{
+          position:"relative",height:380,
+          background:"linear-gradient(180deg, #3a2818 0%, #5a3820 25%, #8a5828 55%, #a06830 100%)",
+          border:`2px solid ${OR}`,
+          borderRadius:10,touchAction:"none",cursor:"crosshair",
+          overflow:"hidden",
+        }}
+      >
+        {/* Lane planks (subtle vertical lines for wood-grain feel) */}
+        <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+          {[25,33,41,50,59,67,75].map(x=>(
+            <line key={x} x1={x} y1="6" x2={x} y2="94" stroke="rgba(0,0,0,0.18)" strokeWidth="0.15" vectorEffect="non-scaling-stroke"/>
+          ))}
+          {/* Lane edges (gutters) */}
+          <line x1="20" y1="6" x2="20" y2="94" stroke="rgba(0,0,0,0.5)" strokeWidth="0.4" vectorEffect="non-scaling-stroke"/>
+          <line x1="80" y1="6" x2="80" y2="94" stroke="rgba(0,0,0,0.5)" strokeWidth="0.4" vectorEffect="non-scaling-stroke"/>
+          {/* Foul line */}
+          <line x1="20" y1="82" x2="80" y2="82" stroke="rgba(255,255,255,0.5)" strokeWidth="0.3" strokeDasharray="2,1" vectorEffect="non-scaling-stroke"/>
+          {/* Aim guide line from bowler to head pin */}
+          <line
+            x1={BOWLER_BP.xP*100} y1={BOWLER_BP.yP*100}
+            x2={BOWLING_PINS[0].xP*100} y2={BOWLING_PINS[0].yP*100}
+            stroke="rgba(0,220,100,0.25)" strokeWidth="0.4"
+            strokeDasharray="1.2,1" vectorEffect="non-scaling-stroke"
+          />
+        </svg>
+
+        {/* Pins */}
+        {BOWLING_PINS.map((p,i)=>(
+          <div key={i} style={{
+            position:"absolute",
+            left:`${p.xP*100}%`,
+            top:`${p.yP*100}%`,
+            transform:"translate(-50%, -85%)",
+            pointerEvents:"none",
+            zIndex:2,
+          }}>
+            <BowlingPin
+              knocked={!pinsStanding[i]}
+              justFell={justKnocked.includes(i)}
+            />
+          </div>
+        ))}
+
+        {/* Bowler / starting ball position */}
+        <div style={{
+          position:"absolute",
+          left:`${BOWLER_BP.xP*100}%`,
+          top:`${BOWLER_BP.yP*100}%`,
+          transform:"translate(-50%, -50%)",
+          pointerEvents:"none",
+          zIndex:4,
+          opacity: ballRolling ? 0.4 : 1,
+          transition:"opacity 0.2s",
+        }}>
+          <div style={{
+            width:30,height:30,borderRadius:"50%",
+            background:"radial-gradient(circle at 35% 30%, #888, #222)",
+            border:"2px solid #fff",
+            boxShadow:"0 2px 4px rgba(0,0,0,0.6), 0 0 8px rgba(255,255,255,0.2)",
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:14,
+          }}>🎳</div>
+        </div>
+
+        {/* Aim arrow during pull */}
+        {showArrow && (
+          <div style={{
+            position:"absolute",
+            left:`${BOWLER_BP.xP*100}%`,
+            top:`${BOWLER_BP.yP*100}%`,
+            width:38, height:130,
+            marginLeft:-19, marginTop:-130,
+            transform:`rotate(${arrowAngleDeg}deg)`,
+            transformOrigin:"50% 100%",
+            pointerEvents:"none",
+            zIndex:5,
+          }}>
+            <ChevronArrow meterFill={meterFill} greenMin={greenMin} greenMax={greenMax}/>
+          </div>
+        )}
+
+        {/* Rolling ball */}
+        {ballRolling && throwResult && (
+          <div style={{
+            position:"absolute",
+            left:`${BOWLER_BP.xP*100}%`,
+            top:`${BOWLER_BP.yP*100}%`,
+            transform:"translate(-50%, -50%)",
+            fontSize:26,pointerEvents:"none",zIndex:6,
+            ["--landX" as any]: `${throwResult.landOffsetX}px`,
+            ["--landY" as any]: `${throwResult.landOffsetY}px`,
+            animation:"ballRoll 1s linear forwards",
+          }}>🎳</div>
+        )}
+
+        {/* Instructions */}
+        {throwPhase === "ready" && (
+          <div style={{
+            position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
+            pointerEvents:"none",
+            fontSize:10,letterSpacing:1.5,color:"rgba(255,255,255,0.75)",fontWeight:700,
+          }}>
+            PULL <span style={{color:OR}}>BACK</span> TO AIM AT THE PINS<br/>
+            RELEASE AT <span style={{color:GR}}>GREEN</span>
+          </div>
+        )}
+        {showArrow && (
+          <div style={{
+            position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
+            pointerEvents:"none",
+            fontSize:10,letterSpacing:1.5,fontWeight:900,
+            color: inGreen ? GR : meterFill < greenMin ? "#fff" : RE,
+            textShadow: inGreen ? `0 0 8px ${GR}` : "none",
+          }}>
+            {inGreen ? "🟢 RELEASE NOW!" : meterFill < greenMin ? "↓ HOLD ↓" : "← TOO LATE ←"}
+          </div>
+        )}
+      </div>
+
+      <style>{`
+        @keyframes ballRoll {
+          0%   { transform: translate(-50%, -50%) scale(1); }
+          100% { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.7); }
+        }
+        @keyframes pinFall {
+          0%   { transform: rotate(0deg) translateY(0); opacity: 1; }
+          40%  { transform: rotate(60deg) translateY(2px); opacity: 1; }
+          80%  { transform: rotate(85deg) translateY(8px); opacity: 0.6; }
+          100% { transform: rotate(90deg) translateY(14px); opacity: 0; }
+        }
+      `}</style>
     </div>
   );
 }
@@ -7856,6 +8648,14 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             if(gp===0 && currentYear===2008 && !firedEvents.includes(THREE_POINT_EVENT_ID)){
               setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), THREE_POINT_EVENT_ID]}));
               go("threePointPrompt");
+              return;
+            }
+            // 2009-10 season — bowling sabbatical event. The verbatim "Donaghy
+            // era" gambling-scandal allegory; if accepted, the season ends at
+            // 41 games and the player goes straight to offseason.
+            if(gp===0 && currentYear===2009 && !firedEvents.includes(BOWLING_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), BOWLING_EVENT_ID]}));
+              go("bowlingPrompt");
               return;
             }
             // 2018-19 season — Damon Jones soup incident. Player has to be in
@@ -12836,6 +13636,32 @@ export default function App(){
       setScreen("threePointPrompt");
       toast("Test — 3-Point Contest prompt", YE);
     }
+    else if(preset==="bowlingCareer"){
+      // BOWLING CAREER — 2009-10 season. 5 NBA seasons logged. Season will
+      // truncate to 41 games and skip straight to offseason on completion.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:86,midRange:87,finishing:87,handles:85,playmaking:82,perimDefense:80,postDefense:74,rebounding:76};
+      mike.intangibles=["confident","clutch","highIQ"];
+      mike.contract={
+        type:"extension", signedYear:NBA_START_YEAR+3, years:5,
+        salaries:[14000000,15120000,16329600,17636000,19046880],
+        totalValue:82132480, signingBonus:4000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID, WEED_EVENT_ID, THREE_POINT_EVENT_ID, BOWLING_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(35000000); setSkillPoints(10);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
+        {year:"2008-09",team:"Sacramento Kings",teamRecord:"42-40",madePlayoffs:true,gp:79,ppg:26.4,rpg:6.2,apg:5.5,fg:50},
+      ]);
+      setScreen("bowlingPrompt");
+      toast("Test — Bowling 2009 sabbatical", OR);
+    }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
       // currentYear = 2018. Long-tenured vet with money + accolades to match.
@@ -13555,6 +14381,11 @@ export default function App(){
         <button onClick={()=>jumpToTesting("threePointContest")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${YE} 0%, #b08800 100%)`,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
           <div style={{fontSize:14,fontWeight:900}}>🎯 3-POINT CONTEST (2008)</div>
           <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>NBA Shootout · vs Kapono, Nowitzki, Gibson, Hamilton, Nash</div>
+        </button>
+
+        <button onClick={()=>jumpToTesting("bowlingCareer")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8a3a0c 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+          <div style={{fontSize:14,fontWeight:900}}>🎳 BOWLING SABBATICAL (2009)</div>
+          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Donaghy era · 10 frames · season ends at 41 games</div>
         </button>
 
         <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -14613,6 +15444,49 @@ export default function App(){
             toast&&toast(`Eliminated in Round 1 (${outcome.round1Score})`,"#888");
           }
           if(testingMode) exitTesting(); else go("leagueHub");
+        }}/>
+      </MenuFrame>
+    ),
+    bowlingPrompt:(
+      <MenuFrame sub="A Career Sabbatical" title="PBA TOUR?">
+        <BowlingPromptScreen
+          onAccept={()=>go("bowlingGame")}
+          onDecline={()=>{
+            // Shouldn't fire — both prompt paths converge on the bowling game.
+            // If somehow used, treat as a skip.
+            setPlayer(p=>({...p, bowlingPlayed:false}));
+            if(testingMode) exitTesting(); else go("leagueHub");
+          }}
+        />
+      </MenuFrame>
+    ),
+    bowlingGame:(
+      <MenuFrame sub="10 Frames" title="BOWLING">
+        <BowlingGame onDone={(outcome)=>{
+          // Save bowling score + force the 2009-10 season to end at 41 games.
+          // Construct a half-season record using the player's most recent
+          // averages, then jump straight to offseason.
+          const lastSeason = (nbaSeasons||[])[(nbaSeasons||[]).length - 1] || {};
+          const seasonYear = `${NBA_START_YEAR + 5}-${String((NBA_START_YEAR + 6) % 100).padStart(2, '0')}`;
+          const halfSeason = {
+            year: seasonYear,
+            team: nbaTeam || "Sacramento Kings",
+            teamRecord: "14-27",
+            madePlayoffs: false,
+            gp: 41,
+            ppg: typeof lastSeason.ppg === "number" ? lastSeason.ppg : 18.0,
+            rpg: typeof lastSeason.rpg === "number" ? lastSeason.rpg : 5.0,
+            apg: typeof lastSeason.apg === "number" ? lastSeason.apg : 4.0,
+            fg:  typeof lastSeason.fg  === "number" ? lastSeason.fg  : 47,
+          };
+          setNbaSeasons(prev => [...(prev||[]), halfSeason]);
+          setPlayer(p=>({
+            ...p,
+            bowlingScore: outcome.score,
+            bowlingPlayed: true,
+          }));
+          toast&&toast(`🎳 Bowled ${outcome.score}! Season ended at 41 games.`, OR);
+          if(testingMode) exitTesting(); else go("offseason");
         }}/>
       </MenuFrame>
     ),
