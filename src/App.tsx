@@ -5736,92 +5736,58 @@ const THREE_POINT_RACKS = [
   {idx:4, name:"RIGHT CORNER",   xP: 0.88, yP: 0.30},
 ];
 
-// Deterministic shot evaluator. The swipe must:
-//   (1) stay close to the rack→hoop line (small perpendicular distance avg)
-//   (2) actually wind up backward past the rack at some point
-//   (3) reach far enough forward toward the hoop
-// All three are pure path math — no RNG. The only skill-driven number is the
-// corridor width tolerance.
-function evaluateThreePointShot(path, rackPx, hoopPx, skill){
-  if(!path || path.length < 8) return {made:false, reason:"too-short"};
-  const ldx = hoopPx.x - rackPx.x;
-  const ldy = hoopPx.y - rackPx.y;
-  const lineLen = Math.hypot(ldx, ldy);
-  if(lineLen === 0) return {made:false, reason:"bad-line"};
-  const ux = ldx / lineLen;   // unit vector rack→hoop
-  const uy = ldy / lineLen;
-
-  let minT = Infinity, maxT = -Infinity;
-  let sumPerpDist = 0;
-  let totalPathLen = 0;
-  let prev = path[0];
-  for(let i=0;i<path.length;i++){
-    const p = path[i];
-    // Vector from rack to point
-    const dx = p.x - rackPx.x;
-    const dy = p.y - rackPx.y;
-    // Projection on line direction (negative = behind rack, positive = toward hoop)
-    const t = dx * ux + dy * uy;
-    // Perpendicular distance from line (always positive)
-    const perp = Math.abs(-dx * uy + dy * ux);
-    if(t < minT) minT = t;
-    if(t > maxT) maxT = t;
-    sumPerpDist += perp;
-    if(i > 0){
-      totalPathLen += Math.hypot(p.x - prev.x, p.y - prev.y);
-    }
-    prev = p;
+// Deterministic shot evaluator. The mechanic: press at the rack, pull backward
+// (away from the hoop along the line), and release when the meter hits the
+// green zone. Meter fills with the BACKWARD projection of the finger position
+// — so a true backward pull along the line fills fastest. Off-direction drift
+// fills the meter slowly because only the backward component counts.
+function evaluateMeterShot(meterFill, skill){
+  // Green zone center sits at 60% of the meter. Width widens with skill.
+  const greenWidth = 0.18 + (skill / 100) * 0.16; // skill 50→0.26, 90→0.32, 100→0.34
+  const greenCenter = 0.60;
+  const greenMin = greenCenter - greenWidth / 2;
+  const greenMax = greenCenter + greenWidth / 2;
+  if(meterFill < 0.10){
+    // Hardly pulled back at all — treat as an accidental tap rather than a miss
+    return {made:false, reason:"abandon", fill:meterFill, recoverable:true};
   }
-
-  // Short flick = probably an accidental tap, don't even register as a miss
-  if(totalPathLen < 60) return {made:false, reason:"too-short", recoverable:true};
-
-  const avgPerpDist = sumPerpDist / path.length;
-  // Tolerance corridor — wider for better shooters. Tuned so a clean traced
-  // line easily clears it, but a sloppy diagonal swipe won't.
-  const corridorWidth = 32 + (skill / 100) * 22; // skill 50→43, 90→52, 100→54
-  // Need to actually wind up backward past the rack
-  const minBack = -22;
-  // And follow through to within reasonable range of the hoop
-  const minForward = lineLen * 0.55;
-
-  if(avgPerpDist > corridorWidth)  return {made:false, reason:"off-line", avgPerpDist, corridorWidth};
-  if(minT > minBack)               return {made:false, reason:"no-wind-up", minT};
-  if(maxT < minForward)            return {made:false, reason:"short", maxT, target:minForward};
-
-  // Made — accuracy 0-1 based on how tight the trace was
-  return {made:true, accuracy: Math.max(0, 1 - avgPerpDist / corridorWidth)};
+  if(meterFill >= greenMin && meterFill <= greenMax){
+    return {made:true, fill:meterFill};
+  }
+  if(meterFill < greenMin){
+    return {made:false, reason:"weak", fill:meterFill};
+  }
+  return {made:false, reason:"overshot", fill:meterFill};
 }
 
-// One shot — the entire court IS the swipe surface. You trace the green line
-// from the rack up to the hoop (back-then-forth in one continuous motion).
+// One shot — press, pull back, release at green. The entire court is the swipe
+// surface. The visible line points you in the direction you need to pull.
 function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComplete}){
-  // phase: ready (waiting) → tracking (finger down) → result
+  // phase: ready (waiting) → pulling (finger down, meter filling) → result
   const [phase, setPhase] = useState("ready");
+  const [meterFill, setMeterFill] = useState(0);
   const [pathPoints, setPathPoints] = useState([]);
   const [result, setResult] = useState(null);
   const [ballFlying, setBallFlying] = useState(false);
 
   const swipePointsRef = useRef([]);
+  const startPxRef = useRef(null);
+  const lineDirRef = useRef({ux:0, uy:0});
+  const maxDistanceRef = useRef(130);
   const isTrackingRef = useRef(false);
   const finishedRef = useRef(false);
-  const timeoutTimerRef = useRef(null);
 
-  // Generous time limit — 4 seconds is plenty for any swipe, but stops the
-  // shot from hanging forever if the finger slips off.
-  const SHOT_TIMEOUT_MS = 4000;
+  // Green zone — wider for better shooters. Center at 60% so a clean pull-back
+  // hits it naturally without needing extreme distance.
+  const greenWidth = 0.18 + (threePointSkill / 100) * 0.16;
+  const greenCenter = 0.60;
+  const greenMin = greenCenter - greenWidth / 2;
+  const greenMax = greenCenter + greenWidth / 2;
+  const inGreen = meterFill >= greenMin && meterFill <= greenMax;
 
   useEffect(()=>{
-    return ()=> {
-      if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
-    };
+    return ()=> {};
   },[]);
-
-  // Convert a frac-based position to actual pixels using a bounding rect
-  const fracToPx = (rect, xFrac, yFrac) => ({
-    x: xFrac * rect.width,
-    y: yFrac * rect.height,
-  });
 
   const handlePointerDown = (e) => {
     if(phase === "result" || finishedRef.current) return;
@@ -5830,15 +5796,23 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
     swipePointsRef.current = [p];
     setPathPoints([p]);
-    setPhase("tracking");
+    startPxRef.current = p;
+
+    // Line direction: rack → hoop. Backward = opposite. We project the finger's
+    // displacement onto this backward direction to fill the meter.
+    const rackPx = {x: rack.xP * rect.width, y: rack.yP * rect.height};
+    const hoopPx = {x: HOOP_X_FRAC * rect.width, y: HOOP_Y_FRAC * rect.height};
+    const ldx = hoopPx.x - rackPx.x;
+    const ldy = hoopPx.y - rackPx.y;
+    const lineLen = Math.hypot(ldx, ldy);
+    lineDirRef.current = {ux: ldx / lineLen, uy: ldy / lineLen};
+    // Max distance = 55% of the line. Easy enough to reach without exceeding
+    // screen bounds, hard enough that direction quality matters.
+    maxDistanceRef.current = lineLen * 0.55;
+
+    setMeterFill(0);
+    setPhase("pulling");
     e.currentTarget.setPointerCapture?.(e.pointerId);
-    if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
-    timeoutTimerRef.current = setTimeout(()=>{
-      if(isTrackingRef.current && !finishedRef.current){
-        isTrackingRef.current = false;
-        finalize({made:false, reason:"timeout"});
-      }
-    }, SHOT_TIMEOUT_MS);
   };
 
   const handlePointerMove = (e) => {
@@ -5847,19 +5821,26 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     const p = {x: e.clientX - rect.left, y: e.clientY - rect.top};
     swipePointsRef.current.push(p);
     setPathPoints([...swipePointsRef.current]);
+
+    // Backward projection of (current - start) along the line direction.
+    // Negative dot product with forward unit vector = how far backward they've gone.
+    const start = startPxRef.current;
+    const dx = p.x - start.x;
+    const dy = p.y - start.y;
+    const {ux, uy} = lineDirRef.current;
+    const backwardProj = -(dx * ux + dy * uy);
+    const fill = Math.max(0, Math.min(1, backwardProj / maxDistanceRef.current));
+    setMeterFill(fill);
   };
 
-  const handlePointerUp = (e) => {
+  const handlePointerUp = () => {
     if(!isTrackingRef.current || finishedRef.current) return;
     isTrackingRef.current = false;
-    if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
-    const rect = e.currentTarget.getBoundingClientRect();
-    const rackPx = fracToPx(rect, rack.xP, rack.yP);
-    const hoopPx = fracToPx(rect, HOOP_X_FRAC, HOOP_Y_FRAC);
-    const shotResult = evaluateThreePointShot(swipePointsRef.current, rackPx, hoopPx, threePointSkill);
-    // If they barely touched the screen, treat as accidental tap and reset
+    const shotResult = evaluateMeterShot(meterFill, threePointSkill);
     if(shotResult.recoverable){
+      // Accidental tap — reset and let them try again, no penalty.
       setPathPoints([]);
+      setMeterFill(0);
       setPhase("ready");
       return;
     }
@@ -5869,7 +5850,6 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
   const finalize = (r) => {
     if(finishedRef.current) return;
     finishedRef.current = true;
-    if(timeoutTimerRef.current) clearTimeout(timeoutTimerRef.current);
     setResult(r);
     setPhase("result");
     setBallFlying(true);
@@ -5882,19 +5862,16 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     }, 1200);
   };
 
-  // Reason → user-friendly message
   const reasonLabel = (reason) => {
-    if(reason === "off-line") return "OFF THE LINE";
-    if(reason === "no-wind-up") return "NO WIND-UP";
-    if(reason === "short") return "SHORT SHOT";
-    if(reason === "timeout") return "TIMED OUT";
+    if(reason === "weak")     return "TOO SHORT";
+    if(reason === "overshot") return "OVERSHOT";
     return "MISS";
   };
 
-  // Compute the wind-up extension end point — extends past the rack in the
-  // direction AWAY from the hoop, so the user has a visible "wind-up runway".
-  // Using percent coords for SVG/CSS consistency.
-  const windUpRatio = 0.20; // 20% of the line length extends behind the rack
+  // Wind-up extension visual: 20% of the line length, extending past the rack
+  // in the AWAY-from-hoop direction. Used purely for visual guidance — the
+  // meter math is independent of where this line is drawn.
+  const windUpRatio = 0.20;
   const windUpEndXP = rack.xP - (HOOP_X_FRAC - rack.xP) * windUpRatio;
   const windUpEndYP = rack.yP - (HOOP_Y_FRAC - rack.yP) * windUpRatio;
 
@@ -5928,8 +5905,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         </div>
       )}
 
-      {/* THE COURT — and also the swipe surface. Hoop at top, rack at the
-          current spot, green line you have to trace. */}
+      {/* THE COURT + swipe surface + meter */}
       {phase !== "result" && (
         <div
           onPointerDown={handlePointerDown}
@@ -5944,20 +5920,16 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             overflow:"hidden",
           }}
         >
-          {/* SVG overlay carries the 3pt arc + green trace lines. viewBox 100×100
-              with non-uniform aspect lets us position purely in percent. */}
+          {/* SVG overlay: 3pt arc + rack→hoop line + wind-up extension */}
           <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {/* 3pt arc — decorative, dashed white */}
             <path d="M 12 30 Q 50 100 88 30" stroke="rgba(255,255,255,0.35)" strokeWidth="0.4" fill="none" strokeDasharray="1.5,1"/>
-            {/* Wind-up extension — dashed lighter green, BEHIND the rack */}
             <line
               x1={windUpEndXP * 100} y1={windUpEndYP * 100}
               x2={rack.xP * 100}     y2={rack.yP * 100}
-              stroke="rgba(0,220,100,0.5)" strokeWidth="0.6"
+              stroke="rgba(0,220,100,0.45)" strokeWidth="0.6"
               strokeDasharray="1.2,0.8" strokeLinecap="round"
               vectorEffect="non-scaling-stroke"
             />
-            {/* Forward shot line — solid bright green from rack to hoop */}
             <line
               x1={rack.xP * 100}        y1={rack.yP * 100}
               x2={HOOP_X_FRAC * 100}    y2={HOOP_Y_FRAC * 100}
@@ -5968,18 +5940,15 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             />
           </svg>
 
-          {/* Hoop — drawn as overlay divs so it doesn't get distorted by the
-              non-uniform SVG aspect */}
+          {/* Hoop */}
           <div style={{position:"absolute",left:`${HOOP_X_FRAC*100}%`,top:`${HOOP_Y_FRAC*100}%`,transform:"translate(-50%,-50%)",pointerEvents:"none"}}>
             <div style={{position:"relative"}}>
-              {/* Backboard */}
               <div style={{position:"absolute",left:"50%",top:-22,transform:"translateX(-50%)",width:88,height:32,border:"2px solid #fff",borderRadius:3,background:"rgba(255,255,255,0.08)"}}/>
-              {/* Rim */}
               <div style={{position:"absolute",left:"50%",top:6,transform:"translateX(-50%)",width:36,height:7,background:"#ff6600",borderRadius:4,border:"1.5px solid #fff"}}/>
             </div>
           </div>
 
-          {/* Rack dots — all 5 visible for context, current one highlighted */}
+          {/* Rack dots */}
           {THREE_POINT_RACKS.map((r,i)=>{
             const isCurrent = i === rack.idx;
             return(
@@ -5998,19 +5967,19 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             );
           })}
 
-          {/* Live swipe path traced as you swipe */}
+          {/* Live swipe trail */}
           {pathPoints.length > 1 && (
             <svg style={{position:"absolute",inset:0,pointerEvents:"none",zIndex:3}} width="100%" height="100%">
               <polyline
                 points={pathPoints.map(p=>`${p.x},${p.y}`).join(" ")}
                 fill="none" stroke="#fff" strokeWidth="3.5"
                 strokeLinecap="round" strokeLinejoin="round"
-                opacity="0.9"
+                opacity="0.85"
               />
             </svg>
           )}
 
-          {/* Ball flying animation when shot fires */}
+          {/* Ball flight on result */}
           {ballFlying && (
             <div style={{
               position:"absolute",left:`${rack.xP*100}%`,top:`${rack.yP*100}%`,
@@ -6021,16 +5990,45 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             }}>{isMoneyball ? "🟡" : "🏀"}</div>
           )}
 
-          {/* Instruction text — shown only on ready, hidden during swipe */}
-          {phase === "ready" && (
+          {/* THE METER — bottom of the court. Fills as you pull backward. */}
+          <div style={{
+            position:"absolute",left:"6%",right:"6%",bottom:12,height:20,
+            background:"rgba(0,0,0,0.55)",borderRadius:10,overflow:"hidden",
+            border:"1px solid rgba(255,255,255,0.25)",
+            boxShadow:inGreen?`0 0 14px ${GR}`:"none",
+            transition:"box-shadow 0.15s",
+            zIndex:5,
+            pointerEvents:"none",
+          }}>
+            {/* Background zones: red on the sides, green in the middle */}
+            <div style={{position:"absolute",left:0,top:0,bottom:0,width:`${greenMin*100}%`,background:`linear-gradient(90deg, ${RE}77 0%, ${RE}55 60%, ${YE}66 100%)`}}/>
+            <div style={{position:"absolute",left:`${greenMin*100}%`,top:0,bottom:0,width:`${(greenMax-greenMin)*100}%`,background:`linear-gradient(90deg, ${GR}aa, ${GR}cc, ${GR}aa)`,boxShadow:inGreen?`inset 0 0 8px ${GR}`:"none"}}/>
+            <div style={{position:"absolute",left:`${greenMax*100}%`,right:0,top:0,bottom:0,background:`linear-gradient(90deg, ${YE}66 0%, ${RE}55 40%, ${RE}77 100%)`}}/>
+            {/* Indicator line at current meter fill */}
             <div style={{
-              position:"absolute",left:0,right:0,bottom:10,
-              textAlign:"center",pointerEvents:"none",
-              fontSize:10,letterSpacing:1.5,color:"rgba(255,255,255,0.7)",fontWeight:700,
-            }}>
-              SWIPE BACK ALONG THE DASHED LINE,<br/>THEN FORWARD ALONG THE GREEN LINE TO THE HOOP
-            </div>
-          )}
+              position:"absolute",left:`${meterFill*100}%`,top:-3,bottom:-3,
+              width:5,background:inGreen?GR:"#fff",
+              transform:"translateX(-50%)",
+              boxShadow:inGreen?`0 0 10px ${GR}, 0 0 4px #fff`:`0 0 6px #fff`,
+              borderRadius:2,
+              transition:"background 0.1s",
+            }}/>
+          </div>
+
+          {/* Meter label above the bar — shows instruction or RELEASE prompt */}
+          <div style={{
+            position:"absolute",left:0,right:0,bottom:38,textAlign:"center",
+            pointerEvents:"none",zIndex:5,
+            fontSize:11,letterSpacing:2,fontWeight:900,fontFamily:"'Barlow Condensed',sans-serif",
+            color: inGreen ? GR : (meterFill > 0 ? "#fff" : "rgba(255,255,255,0.7)"),
+            textShadow: inGreen ? `0 0 8px ${GR}` : "none",
+            transition:"color 0.15s",
+          }}>
+            {phase === "ready" ? "PULL BACK FROM THE RACK" :
+              inGreen ? "🟢 RELEASE NOW!" :
+              meterFill < greenMin ? "↓ KEEP PULLING ↓" :
+              "← TOO FAR ←"}
+          </div>
         </div>
       )}
 
@@ -6191,9 +6189,9 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
       <div style={{padding:"4px 0 14px"}}>
         <div style={{textAlign:"center",marginBottom:14}}>
           <div style={{fontSize:10,letterSpacing:3,color:OR,marginBottom:4}}>HOW TO SHOOT</div>
-          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>TRACE THE LINE</div>
+          <div style={{fontSize:18,fontWeight:900,color:"#fff"}}>PULL BACK · RELEASE AT GREEN</div>
           <div style={{fontSize:11,color:"#aaa",marginTop:4,lineHeight:1.4}}>
-            Each rack has a green line to the hoop. Swipe along it — back past the rack, then forward to the rim.
+            Press near the rack, pull back to fill the meter. Let go when it hits the green zone.
           </div>
         </div>
 
@@ -6202,9 +6200,9 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
           <div style={{fontSize:12,color:"#ddd",lineHeight:1.6}}>
             • 5 racks · 3 balls per rack<br/>
             • The 3rd ball in each rack is the <span style={{color:YE,fontWeight:900}}>🟡 MONEYBALL</span> — worth <b>2 points</b><br/>
-            • Each rack has its own green line to the hoop<br/>
-            • Stay on the line as you swipe — closer to the line = swish<br/>
-            • Higher 3PT skill = wider tolerance corridor
+            • Each rack has its own line away from the hoop — pull along it<br/>
+            • Release in the green zone of the meter → made shot<br/>
+            • Higher 3PT skill = wider green zone
           </div>
         </div>
 
@@ -6212,9 +6210,9 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
           <div style={{fontSize:10,fontWeight:900,color:GR,letterSpacing:1.5,marginBottom:5}}>💡 THE SHOT MOTION</div>
           <div>
             1. Press at the rack (orange dot)<br/>
-            2. Drag <b>back</b> along the dashed line (wind-up)<br/>
-            3. Reverse and drag <b>forward</b> along the solid green line to the hoop<br/>
-            4. Lift your finger near the rim
+            2. <b>Pull back</b> away from the hoop — the meter fills as you go<br/>
+            3. <b>Let go</b> the moment the meter hits the green zone<br/>
+            4. Too short → weak shot · Too far → overshot
           </div>
         </div>
 
