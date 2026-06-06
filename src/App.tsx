@@ -5736,22 +5736,52 @@ const THREE_POINT_RACKS = [
   {idx:4, name:"RIGHT CORNER",   xP: 0.90, yP: 0.50},
 ];
 
-// Both AIM (arrow direction vs target hoop) AND TIMING (release in green zone)
-// have to pass for a made shot. Skill widens both tolerances.
-function evaluateMeterShot(meterFill, aimAngleDiff, skill){
-  const greenWidth = 0.20 + (skill / 100) * 0.18; // skill 50→0.29, 90→0.36, 100→0.38
+// Trajectory-based shot evaluator. The result is no longer a "did aim pass +
+// did timing pass" boolean dance — it's a physics-style computation: given the
+// user's aim direction (opposite of pull) and the power (derived from timing),
+// where does the ball actually land? Then we check whether that landing point
+// is inside the rim. This makes aim matter directly — a 6° aim error sends the
+// ball clearly past the rim, while a tiny error still goes in.
+function evaluateShot(meterFill, pull, shooterPx, hoopPx, skill){
+  if(meterFill < 0.08) return {recoverable:true};
+  const aimDx = -pull.dx;
+  const aimDy = -pull.dy;
+  const aimLen = Math.hypot(aimDx, aimDy);
+  if(aimLen < 1) return {recoverable:true};
+  const aimUx = aimDx / aimLen;
+  const aimUy = aimDy / aimLen;
+
+  // Power from meter timing — under-filled = short shot, in green = perfect,
+  // over-filled = long shot. Linear ramp to either side of the green zone.
+  const greenWidth = 0.20 + (skill / 100) * 0.18;
   const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
-  const aimTolerance = 14 + (skill / 100) * 18; // skill 50→23°, 90→30.2°, 100→32°
+  let power;
+  if(meterFill < greenMin){
+    power = 0.50 + (meterFill / greenMin) * 0.50; // 0 fill → 0.5, greenMin → 1.0
+  } else if(meterFill <= greenMax){
+    power = 1.0;
+  } else {
+    power = 1.0 + (meterFill - greenMax) / (1 - greenMax) * 0.50; // greenMax → 1.0, 1.0 → 1.5
+  }
 
-  if(meterFill < 0.08) return {made:false, reason:"abandon", recoverable:true};
-  const inGreen = meterFill >= greenMin && meterFill <= greenMax;
-  const aimGood = aimAngleDiff <= aimTolerance;
-  if(inGreen && aimGood) return {made:true};
-  if(!aimGood && inGreen) return {made:false, reason:"off-aim"};
-  if(aimGood && !inGreen) return {made:false, reason: meterFill < greenMin ? "too-quick" : "too-late"};
-  return {made:false, reason:"miss"};
+  // Landing position = shooter + aim × distance × power. So aim direction
+  // controls the lateral component and timing controls the distance traveled.
+  const D = Math.hypot(hoopPx.x - shooterPx.x, hoopPx.y - shooterPx.y);
+  const landOffsetX = aimUx * D * power;
+  const landOffsetY = aimUy * D * power;
+  const landX = shooterPx.x + landOffsetX;
+  const landY = shooterPx.y + landOffsetY;
+
+  // Made if the landing is inside the rim. Rim radius widens with skill but
+  // stays tight — aim accuracy matters a LOT. At skill 50 the max aim error
+  // is about 5°; at skill 100 it's about 7.5°.
+  const missDist = Math.hypot(landX - hoopPx.x, landY - hoopPx.y);
+  const rimRadius = 14 + (skill / 100) * 18; // skill 50→23, 90→30.2, 100→32
+  const made = missDist < rimRadius;
+
+  return {made, landOffsetX, landOffsetY, missDist, power};
 }
 
 // Chevron arrow visual — tall narrow shape with stacked chevrons that light
@@ -5905,26 +5935,23 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     isTrackingRef.current = false;
     stopMeter();
 
-    // Compute the angle difference between the SHOOT direction (opposite of pull)
-    // and the direction from shooter → target hoop. That's our aim error.
+    // Compute landing position via the trajectory evaluator. The result
+    // includes the actual landing offsets so the ball animation flies along
+    // the user's real aim line and either passes through the rim or misses
+    // visibly — no hard cut to "MADE/MISS" text.
     const rect = rectRef.current;
-    const shooterX = SHOOTER_POS.xP * rect.width;
-    const shooterY = SHOOTER_POS.yP * rect.height;
-    const hoopX = rack.xP * rect.width;
-    const hoopY = rack.yP * rect.height;
-    const targetDx = hoopX - shooterX;
-    const targetDy = hoopY - shooterY;
-    const targetAngle = Math.atan2(targetDx, -targetDy) * 180 / Math.PI;
-    const shootDx = -pull.dx;
-    const shootDy = -pull.dy;
-    const shootAngle = Math.atan2(shootDx, -shootDy) * 180 / Math.PI;
-    // Wrap angle diff to 0-180
-    let angleDiff = Math.abs(shootAngle - targetAngle);
-    if(angleDiff > 180) angleDiff = 360 - angleDiff;
+    const shooterPx = {
+      x: SHOOTER_POS.xP * rect.width,
+      y: SHOOTER_POS.yP * rect.height,
+    };
+    const hoopPx = {
+      x: rack.xP * rect.width,
+      y: rack.yP * rect.height,
+    };
+    const shotResult = evaluateShot(meterFill, pull, shooterPx, hoopPx, threePointSkill);
 
-    const shotResult = evaluateMeterShot(meterFill, angleDiff, threePointSkill);
     if(shotResult.recoverable){
-      // Pulled barely at all — accidental tap, reset to ready
+      // Barely pulled / no real aim — accidental tap, reset and let them try again
       setPhase("ready");
       setPull({dx:0, dy:0, length:0});
       setMeterFill(0);
@@ -5971,12 +5998,22 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
     aimAligned = diff <= aimTolerance;
   }
 
-  const reasonLabel = (reason) => {
-    if(reason === "off-aim")   return "OFF AIM";
-    if(reason === "too-quick") return "TOO QUICK";
-    if(reason === "too-late")  return "TOO LATE";
-    return "MISS";
-  };
+  // Aim-quality preview during pull: is the current direction within a tight
+  // tolerance of the target? Used only to color the on-court guide line.
+  // (The actual made/missed check is the trajectory evaluator, not this angle.)
+  const PREVIEW_AIM_DEG = 7;
+  let aimAligned = false;
+  if(showArrow && rectRef.current){
+    const rect = rectRef.current;
+    const shooterX = SHOOTER_POS.xP * rect.width;
+    const shooterY = SHOOTER_POS.yP * rect.height;
+    const hoopX = rack.xP * rect.width;
+    const hoopY = rack.yP * rect.height;
+    const targetAngle = Math.atan2(hoopX - shooterX, -(hoopY - shooterY)) * 180 / Math.PI;
+    let diff = Math.abs(arrowAngleDeg - targetAngle);
+    if(diff > 180) diff = 360 - diff;
+    aimAligned = diff <= PREVIEW_AIM_DEG;
+  }
 
   return(
     <div style={{position:"relative",userSelect:"none",touchAction:"none"}}>
@@ -5988,188 +6025,177 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         </span>
       </div>
 
-      {/* Result overlay */}
-      {phase === "result" && result && (
+      {/* Court — ALWAYS visible. During "result" phase the ball animates
+          along the actual aim trajectory; the visual itself is the feedback,
+          no text card cuts in. */}
+      <div
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+        onPointerCancel={handlePointerUp}
+        style={{
+          position:"relative",height:340,
+          background:"linear-gradient(180deg, #2a4060 0%, #3a5a8a 25%, #c97a3a 60%, #b86838 100%)",
+          border:`2px solid ${OR}`,
+          borderRadius:10,touchAction:"none",cursor:"crosshair",
+          overflow:"hidden",
+        }}
+      >
+        {/* Court markings — faint 3pt arc + paint */}
+        <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
+          {/* 3pt arc */}
+          <path d="M 8 55 Q 50 -10 92 55" stroke="rgba(255,255,255,0.25)" strokeWidth="0.35" fill="none" vectorEffect="non-scaling-stroke"/>
+          {/* Paint rectangle */}
+          <rect x="38" y="83" width="24" height="15" stroke="rgba(255,255,255,0.2)" strokeWidth="0.3" fill="rgba(255,255,255,0.05)" vectorEffect="non-scaling-stroke"/>
+          {/* Aim guide line shooter → current target hoop */}
+          <line
+            x1={SHOOTER_POS.xP*100} y1={SHOOTER_POS.yP*100}
+            x2={rack.xP*100}        y2={rack.yP*100}
+            stroke={aimAligned ? GR : "rgba(0,220,100,0.35)"}
+            strokeWidth={aimAligned ? "0.8" : "0.4"}
+            strokeDasharray="1.5,1.2"
+            vectorEffect="non-scaling-stroke"
+            style={{transition:"stroke 0.15s"}}
+          />
+        </svg>
+
+        {/* All 5 hoops — current target highlighted */}
+        {THREE_POINT_RACKS.map((h,i)=>{
+          const isCurrent = i === rack.idx;
+          return(
+            <div key={i} style={{
+              position:"absolute",
+              left:`${h.xP*100}%`,
+              top:`${h.yP*100}%`,
+              transform:"translate(-50%, -50%)",
+              pointerEvents:"none",
+              width: isCurrent ? 70 : 44,
+              height: isCurrent ? 34 : 22,
+              transition:"all 0.2s",
+            }}>
+              {/* Backboard */}
+              <div style={{
+                position:"absolute",left:0,top:0,right:0,
+                height: isCurrent ? 22 : 14,
+                border: isCurrent ? "2px solid #fff" : "1.5px solid rgba(255,255,255,0.55)",
+                borderRadius:3,
+                background: isCurrent ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
+                boxShadow: isCurrent ? "0 0 12px rgba(255,255,255,0.4)" : "none",
+              }}/>
+              {/* Rim */}
+              <div style={{
+                position:"absolute",left:"50%",
+                top: isCurrent ? 22 : 14,
+                transform:"translateX(-50%)",
+                width: isCurrent ? 36 : 22,
+                height: isCurrent ? 6 : 4,
+                background: isCurrent ? "#ff6600" : "rgba(255,100,0,0.6)",
+                borderRadius:3,
+                border: isCurrent ? "1.5px solid #fff" : "1px solid rgba(255,255,255,0.45)",
+                boxShadow: isCurrent ? `0 0 14px ${OR}` : "none",
+              }}/>
+            </div>
+          );
+        })}
+
+        {/* Shooter marker — basketball at the bottom */}
         <div style={{
-          padding:"14px 16px",
-          background: result.made
-            ? `linear-gradient(135deg, ${GR}33, rgba(0,0,0,0.4))`
-            : `linear-gradient(135deg, ${RE}22, rgba(0,0,0,0.4))`,
-          border: result.made ? `2px solid ${GR}` : `1px solid ${RE}66`,
-          borderRadius:10,textAlign:"center",
-          animation:"fadeIn 0.25s ease-out",
+          position:"absolute",
+          left:`${SHOOTER_POS.xP*100}%`,
+          top:`${SHOOTER_POS.yP*100}%`,
+          transform:"translate(-50%, -50%)",
+          pointerEvents:"none",
+          zIndex:4,
+          opacity: ballFlying ? 0.5 : 1, // dim shooter while ball is in flight
+          transition:"opacity 0.2s",
         }}>
-          <div style={{fontSize:30,marginBottom:4}}>{result.made ? "✓" : "✗"}</div>
-          <div style={{fontSize:14,fontWeight:900,color:result.made?GR:RE,letterSpacing:2,fontFamily:"'Barlow Condensed',sans-serif"}}>
-            {result.made
-              ? (isMoneyball ? "MONEYBALL — +2!" : "SWISH — +1")
-              : reasonLabel(result.reason)}
-          </div>
+          <div style={{
+            width:34, height:34,
+            borderRadius:"50%",
+            background: `radial-gradient(circle at 35% 35%, #ff8a40, #c8501a)`,
+            border:"2.5px solid #fff",
+            boxShadow:`0 0 14px ${OR}, 0 2px 6px rgba(0,0,0,0.5)`,
+            display:"flex",alignItems:"center",justifyContent:"center",
+            fontSize:18,
+          }}>🏀</div>
         </div>
-      )}
 
-      {/* Court + swipe surface */}
-      {phase !== "result" && (
-        <div
-          onPointerDown={handlePointerDown}
-          onPointerMove={handlePointerMove}
-          onPointerUp={handlePointerUp}
-          onPointerCancel={handlePointerUp}
-          style={{
-            position:"relative",height:340,
-            background:"linear-gradient(180deg, #2a4060 0%, #3a5a8a 25%, #c97a3a 60%, #b86838 100%)",
-            border:`2px solid ${OR}`,
-            borderRadius:10,touchAction:"none",cursor:"crosshair",
-            overflow:"hidden",
-          }}
-        >
-          {/* Court markings — faint 3pt arc + paint */}
-          <svg style={{position:"absolute",inset:0,pointerEvents:"none"}} width="100%" height="100%" viewBox="0 0 100 100" preserveAspectRatio="none">
-            {/* 3pt arc */}
-            <path d="M 8 55 Q 50 -10 92 55" stroke="rgba(255,255,255,0.25)" strokeWidth="0.35" fill="none" vectorEffect="non-scaling-stroke"/>
-            {/* Paint rectangle */}
-            <rect x="38" y="83" width="24" height="15" stroke="rgba(255,255,255,0.2)" strokeWidth="0.3" fill="rgba(255,255,255,0.05)" vectorEffect="non-scaling-stroke"/>
-            {/* Aim guide line shooter → current target hoop */}
-            <line
-              x1={SHOOTER_POS.xP*100} y1={SHOOTER_POS.yP*100}
-              x2={rack.xP*100}        y2={rack.yP*100}
-              stroke={aimAligned ? GR : "rgba(0,220,100,0.35)"}
-              strokeWidth={aimAligned ? "0.8" : "0.4"}
-              strokeDasharray="1.5,1.2"
-              vectorEffect="non-scaling-stroke"
-              style={{transition:"stroke 0.15s"}}
-            />
-          </svg>
+        {/* The aim arrow — only shown while pulling */}
+        {showArrow && (
+          <div style={{
+            position:"absolute",
+            left:`${SHOOTER_POS.xP*100}%`,
+            top:`${SHOOTER_POS.yP*100}%`,
+            width:38, height:130,
+            marginLeft:-19,
+            marginTop:-130,
+            transform:`rotate(${arrowAngleDeg}deg)`,
+            transformOrigin:"50% 100%",
+            pointerEvents:"none",
+            zIndex:5,
+          }}>
+            <ChevronArrow meterFill={meterFill} greenMin={greenMin} greenMax={greenMax}/>
+          </div>
+        )}
 
-          {/* All 5 hoops — current target highlighted */}
-          {THREE_POINT_RACKS.map((h,i)=>{
-            const isCurrent = i === rack.idx;
-            return(
-              <div key={i} style={{
-                position:"absolute",
-                left:`${h.xP*100}%`,
-                top:`${h.yP*100}%`,
-                transform:"translate(-50%, -50%)",
-                pointerEvents:"none",
-                width: isCurrent ? 70 : 44,
-                height: isCurrent ? 34 : 22,
-                transition:"all 0.2s",
-              }}>
-                {/* Backboard */}
-                <div style={{
-                  position:"absolute",left:0,top:0,right:0,
-                  height: isCurrent ? 22 : 14,
-                  border: isCurrent ? "2px solid #fff" : "1.5px solid rgba(255,255,255,0.55)",
-                  borderRadius:3,
-                  background: isCurrent ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
-                  boxShadow: isCurrent ? "0 0 12px rgba(255,255,255,0.4)" : "none",
-                }}/>
-                {/* Rim */}
-                <div style={{
-                  position:"absolute",left:"50%",
-                  top: isCurrent ? 22 : 14,
-                  transform:"translateX(-50%)",
-                  width: isCurrent ? 36 : 22,
-                  height: isCurrent ? 6 : 4,
-                  background: isCurrent ? "#ff6600" : "rgba(255,100,0,0.6)",
-                  borderRadius:3,
-                  border: isCurrent ? "1.5px solid #fff" : "1px solid rgba(255,255,255,0.45)",
-                  boxShadow: isCurrent ? `0 0 14px ${OR}` : "none",
-                }}/>
-              </div>
-            );
-          })}
-
-          {/* Shooter marker — basketball at the bottom */}
+        {/* Ball in flight — flies along the ACTUAL aim trajectory, lands at
+            the computed landing offset. On made shots it ends inside the rim
+            and scales away (through the net); on misses it falls past the
+            target and tumbles. */}
+        {ballFlying && result && (
           <div style={{
             position:"absolute",
             left:`${SHOOTER_POS.xP*100}%`,
             top:`${SHOOTER_POS.yP*100}%`,
             transform:"translate(-50%, -50%)",
+            fontSize:24,pointerEvents:"none",zIndex:6,
+            "--landX": `${result.landOffsetX}px`,
+            "--landY": `${result.landOffsetY}px`,
+            animation:`ballFly${result.made?"Made":"Missed"} 1s ease-out forwards`,
+          }}>{isMoneyball ? "🟡" : "🏀"}</div>
+        )}
+
+        {/* Instructions — only during ready/pulling */}
+        {phase === "ready" && (
+          <div style={{
+            position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
             pointerEvents:"none",
-            zIndex:4,
+            fontSize:10,letterSpacing:1.5,color:"rgba(255,255,255,0.75)",fontWeight:700,
           }}>
-            <div style={{
-              width:34, height:34,
-              borderRadius:"50%",
-              background: `radial-gradient(circle at 35% 35%, #ff8a40, #c8501a)`,
-              border:"2.5px solid #fff",
-              boxShadow:`0 0 14px ${OR}, 0 2px 6px rgba(0,0,0,0.5)`,
-              display:"flex",alignItems:"center",justifyContent:"center",
-              fontSize:18,
-            }}>🏀</div>
+            PULL <span style={{color:OR}}>AWAY</span> FROM THE HIGHLIGHTED HOOP<br/>
+            RELEASE WHEN THE ARROW HITS <span style={{color:GR}}>GREEN</span>
           </div>
-
-          {/* The aim arrow — only shown while pulling. Anchored at the shooter,
-              rotated so it points in the SHOOT direction (opposite of pull). */}
-          {showArrow && (
-            <div style={{
-              position:"absolute",
-              left:`${SHOOTER_POS.xP*100}%`,
-              top:`${SHOOTER_POS.yP*100}%`,
-              width:38, height:130,
-              marginLeft:-19,
-              marginTop:-130,
-              transform:`rotate(${arrowAngleDeg}deg)`,
-              transformOrigin:"50% 100%",
-              pointerEvents:"none",
-              zIndex:5,
-            }}>
-              <ChevronArrow meterFill={meterFill} greenMin={greenMin} greenMax={greenMax}/>
-            </div>
-          )}
-
-          {/* Ball flying after release */}
-          {ballFlying && (
-            <div style={{
-              position:"absolute",
-              left:`${SHOOTER_POS.xP*100}%`,
-              top:`${SHOOTER_POS.yP*100}%`,
-              transform:"translate(-50%, -50%)",
-              fontSize:22,pointerEvents:"none",zIndex:6,
-              "--targetX": `${(rack.xP - SHOOTER_POS.xP) * 100}%`,
-              "--targetY": `${(rack.yP - SHOOTER_POS.yP) * 100}%`,
-              animation:`slingFly${result?.made?"Made":"Missed"} 0.95s ease-out forwards`,
-            }}>{isMoneyball ? "🟡" : "🏀"}</div>
-          )}
-
-          {/* Instructions */}
-          {phase === "ready" && (
-            <div style={{
-              position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
-              pointerEvents:"none",
-              fontSize:10,letterSpacing:1.5,color:"rgba(255,255,255,0.75)",fontWeight:700,
-            }}>
-              PULL <span style={{color:OR}}>AWAY</span> FROM THE HIGHLIGHTED HOOP<br/>
-              RELEASE WHEN THE ARROW HITS <span style={{color:GR}}>GREEN</span>
-            </div>
-          )}
-          {showArrow && (
-            <div style={{
-              position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
-              pointerEvents:"none",
-              fontSize:10,letterSpacing:1.5,fontWeight:900,
-              color: meterFill >= greenMin && meterFill <= greenMax ? GR :
-                     meterFill < greenMin ? "#fff" : RE,
-              textShadow: meterFill >= greenMin && meterFill <= greenMax ? `0 0 8px ${GR}` : "none",
-              transition:"color 0.1s",
-            }}>
-              {meterFill >= greenMin && meterFill <= greenMax ? "🟢 RELEASE NOW!" :
-                meterFill < greenMin ? "↓ HOLD ↓" : "← TOO LATE ←"}
-            </div>
-          )}
-        </div>
-      )}
+        )}
+        {showArrow && (
+          <div style={{
+            position:"absolute",left:0,right:0,bottom:8,textAlign:"center",
+            pointerEvents:"none",
+            fontSize:10,letterSpacing:1.5,fontWeight:900,
+            color: meterFill >= greenMin && meterFill <= greenMax ? GR :
+                   meterFill < greenMin ? "#fff" : RE,
+            textShadow: meterFill >= greenMin && meterFill <= greenMax ? `0 0 8px ${GR}` : "none",
+            transition:"color 0.1s",
+          }}>
+            {meterFill >= greenMin && meterFill <= greenMax ? "🟢 RELEASE NOW!" :
+              meterFill < greenMin ? "↓ HOLD ↓" : "← TOO LATE ←"}
+          </div>
+        )}
+      </div>
 
       <style>{`
-        @keyframes slingFlyMade {
-          0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          100% { transform: translate(calc(-50% + var(--targetX)), calc(-50% + var(--targetY))) scale(0.45); opacity: 0; }
+        @keyframes ballFlyMade {
+          /* Made shots: arc up to peak, land inside the rim, drop through net */
+          0%   { transform: translate(-50%, -50%); }
+          50%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.5), calc(var(--landY) * 0.5 - 55px)) scale(0.85); opacity: 1; }
+          82%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.6); opacity: 1; }
+          100% { transform: translate(-50%, -50%) translate(var(--landX), calc(var(--landY) + 14px)) scale(0.2); opacity: 0; }
         }
-        @keyframes slingFlyMissed {
-          0%   { transform: translate(-50%, -50%) scale(1); opacity: 1; }
-          55%  { transform: translate(calc(-50% + var(--targetX) * 0.65), calc(-50% + var(--targetY) * 0.65 - 24px)) scale(0.7); opacity: 1; }
-          100% { transform: translate(calc(-50% + var(--targetX) * 0.45), calc(-50% + var(--targetY) * 0.45 + 30px)) scale(0.5); opacity: 0; }
+        @keyframes ballFlyMissed {
+          /* Missed shots: arc to landing (off-rim), then tumble away */
+          0%   { transform: translate(-50%, -50%); }
+          50%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.55), calc(var(--landY) * 0.55 - 50px)) scale(0.85) rotate(180deg); opacity: 1; }
+          80%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.7) rotate(320deg); opacity: 1; }
+          100% { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.85), calc(var(--landY) + 40px)) scale(0.5) rotate(540deg); opacity: 0; }
         }
       `}</style>
     </div>
