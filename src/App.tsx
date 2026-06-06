@@ -7429,9 +7429,9 @@ function BowlingGame({onDone}){
 function ArenasPromptScreen({onDone}){
   // stage: choice → snitched | kept_quiet
   const [stage, setStage] = useState("choice");
-  // Independent failure tracking for the two assets — the big event portrait
-  // (gil.webp) and the contact card avatar (gil2.AVIF) are different files
-  // that can fail/load independently.
+  // Independent failure tracking for the two assets. Filenames are now the
+  // exact paths confirmed in /public/: gil.WEBP (uppercase extension) for
+  // the event portrait, gil2.AVIF (uppercase extension) for the contact avatar.
   const [mainImgFailed, setMainImgFailed] = useState(false);
   const [contactImgFailed, setContactImgFailed] = useState(false);
 
@@ -7456,7 +7456,7 @@ function ArenasPromptScreen({onDone}){
             </div>
           ) : (
             <img
-              src="/gil.webp"
+              src="/gil.WEBP"
               alt="Gilbert Arenas"
               onError={()=>setMainImgFailed(true)}
               style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}
