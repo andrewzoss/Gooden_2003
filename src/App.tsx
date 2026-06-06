@@ -5017,6 +5017,7 @@ const NACHO_EVENT_ID = "nacho_libre_2006";
 const WEED_EVENT_ID = "matt_barnes_2007";
 const THREE_POINT_EVENT_ID = "three_point_contest_2008";
 const BOWLING_EVENT_ID = "bowling_career_2009";
+const ARENAS_EVENT_ID = "arenas_gun_2010";
 const SOUP_EVENT_ID = "damon_jones_soup_2018";
 
 // Prompt screen — shows context, two choices, image of Ron. "Hell no" still
@@ -7418,6 +7419,100 @@ function BowlingGame({onDone}){
   );
 }
 
+// ─── MIDSEASON EVENT: GILBERT ARENAS LOCKER ROOM (2010) ────────────────────────
+// January 2010 — "Agent Zero" Arenas brought firearms into the Wizards locker
+// room (real story; allegedly pulled them on Javaris Crittenton over a card-
+// game gambling debt). Real-world outcome: Stern suspended him for 50 games.
+// Player gets pulled aside, two choices:
+//   - Snitch → Arenas gets suspended 50 games (news beat shown)
+//   - Stay quiet → Gil trusts you, added to contacts as "No Chill Gil"
+function ArenasPromptScreen({onDone}){
+  // stage: choice → snitched | kept_quiet
+  const [stage, setStage] = useState("choice");
+
+  return(
+    <div style={{padding:"4px 0 20px"}}>
+      <div style={{textAlign:"center",marginBottom:12}}>
+        <div style={{fontSize:10,letterSpacing:3,color:RE,marginBottom:4}}>🔫 LOCKER ROOM · JANUARY 2010</div>
+        <div style={{fontSize:20,fontWeight:900,color:"#fff",lineHeight:1.15}}>AGENT ZERO</div>
+      </div>
+
+      <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
+        <div style={{padding:4,background:`linear-gradient(135deg, #002B5C, #c8102e)`,borderRadius:10,boxShadow:"0 4px 20px rgba(0,43,92,0.4)"}}>
+          <img src="/gil.webp" alt="Gilbert Arenas" style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}/>
+        </div>
+      </div>
+
+      {stage === "choice" && (
+        <>
+          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:14,marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.55}}>
+            <span style={{color:"#fff",fontWeight:700}}>Gilbert Arenas</span> pulls you aside in the locker room. "Yo, check this out," he says, and reaches into his locker. He pulls out a gun. Then another. Then two more. He lays all four on the bench and grins at you.
+            <div style={{marginTop:8,fontSize:11,color:"#888",fontStyle:"italic"}}>Do you tell on him?</div>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            <button onClick={()=>setStage("snitched")} style={{...btnS,padding:"14px 18px",fontSize:13,background:RE,color:"#fff",border:"none"}}>
+              🚨 UH YEAH HE HAS FOUR GUNS
+            </button>
+            <button onClick={()=>setStage("kept_quiet")} style={{...ghostS,padding:"12px 16px",fontSize:12,lineHeight:1.35,textAlign:"left"}}>
+              He's no chill gil for a reason,<br/>I'm not messing with him.
+            </button>
+          </div>
+        </>
+      )}
+
+      {stage === "snitched" && (
+        <>
+          <div style={{
+            background:`linear-gradient(135deg, ${RE}22, rgba(0,0,0,0.5))`,
+            border:`2px solid ${RE}`,
+            borderRadius:10,padding:"16px 14px",marginBottom:14,
+          }}>
+            <div style={{fontSize:9,letterSpacing:2,color:RE,fontWeight:700,marginBottom:6}}>🔴 BREAKING · ESPN</div>
+            <div style={{fontSize:18,fontWeight:900,color:"#fff",fontFamily:"'Barlow Condensed',sans-serif",lineHeight:1.1,marginBottom:8,letterSpacing:0.5}}>
+              ARENAS SUSPENDED 50 GAMES
+            </div>
+            <div style={{fontSize:12,color:"#ddd",lineHeight:1.5}}>
+              Wizards guard Gilbert Arenas has been suspended for the remainder of the season after a fellow player reported he brought multiple firearms into the locker room. League sources confirm <span style={{color:RE,fontWeight:700}}>at least four unloaded handguns</span> were seized. Commissioner Stern called the conduct "detrimental to the league."
+            </div>
+          </div>
+          <div style={{padding:"10px 12px",background:"rgba(255,255,255,0.03)",borderRadius:8,marginBottom:14,fontSize:11,color:"#888",lineHeight:1.5,fontStyle:"italic"}}>
+            Word gets around the locker room about who talked. You probably shouldn't expect a Christmas card.
+          </div>
+          <button onClick={()=>onDone({snitched:true})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            ← BACK TO THE LEAGUE
+          </button>
+        </>
+      )}
+
+      {stage === "kept_quiet" && (
+        <>
+          <div style={{
+            padding:"16px 14px",background:"rgba(255,255,255,0.04)",
+            border:`1px solid rgba(255,255,255,0.08)`,
+            borderRadius:10,marginBottom:14,fontSize:13,color:"#ddd",lineHeight:1.55,
+          }}>
+            You nod. You say nothing. Gil studies your face for a beat, then breaks into the biggest grin you've ever seen. "MY DAWG," he yells, and pulls you into a one-armed hug. "You're official now. You ever need ANYTHING — anything at all — you call me."
+          </div>
+          <div style={{
+            display:"flex",alignItems:"center",gap:10,
+            padding:"12px 12px",background:`#002B5C22`,border:`1px solid #002B5C99`,borderRadius:10,marginBottom:14,
+          }}>
+            <img src="/gil.webp" alt="Gilbert Arenas" style={{width:48,height:48,borderRadius:"50%",objectFit:"cover",border:`2px solid #c8102e`,flexShrink:0,background:"#000"}}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:9,letterSpacing:1.5,color:"#c8102e",fontWeight:700,marginBottom:2}}>★ NEW CONTACT</div>
+              <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Gilbert Arenas</div>
+              <div style={{fontSize:10,color:"#aaa",marginTop:1}}>Agent Zero · No Chill Gil · Call anytime</div>
+            </div>
+          </div>
+          <button onClick={()=>onDone({snitched:false})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
+            ← BACK TO THE LEAGUE
+          </button>
+        </>
+      )}
+    </div>
+  );
+}
+
 // ─── MIDSEASON EVENT: SPRITE RISING STARS SLAM DUNK (2005) ────────────────────
 // All-Star Weekend invite — fires once after the first 41-game stretch of the
 // 2005-06 season. Contestants are the player, Josh Smith, JR Smith, and Chris
@@ -8710,6 +8805,14 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
               go("bowlingPrompt");
               return;
             }
+            // 2010 January — Arenas pulls four guns out of his locker. Snitch
+            // and he's suspended 50 games; stay quiet and he's added to your
+            // contacts as "No Chill Gil."
+            if(gp===0 && currentYear===2010 && !firedEvents.includes(ARENAS_EVENT_ID)){
+              setPlayer(p=>({...p, midseasonEvents:[...(p?.midseasonEvents||[]), ARENAS_EVENT_ID]}));
+              go("arenasPrompt");
+              return;
+            }
             // 2018-19 season — Damon Jones soup incident. Player has to be in
             // their year-15 season for this to fire (currentYear 2018 means
             // nbaSeasons.length === 14). The choice is rigged but the punchline
@@ -9586,6 +9689,56 @@ const CALL_CONTACTS = [
           "Oh I would love to but I'm contractually obligated to only perform on licensed releases. Lawyers, you know. But picture this: me, a piano, a soft spotlight. You're welcome.",
           "Hmm hmm hmm — no, I'd better not. The acoustics in this phone are abysmal.",
           "I'll do one bar. Just one. ...Actually no, I won't. Save it for the album.",
+        ],
+      },
+    ],
+  },
+  {
+    // Gilbert Arenas — added to contacts after the 2010 locker-room incident
+    // IF the player kept quiet about the four guns. Gated on player.gilUnlocked.
+    // Voice is full Agent Zero: erratic, generous, slightly chaotic, very
+    // loud, equally likely to recommend a hyperbaric chamber or a casino.
+    id:"gilbert_arenas",
+    name:"Gilbert Arenas",
+    role:"Agent Zero · No Chill Gil",
+    portrait:"/gil.webp",
+    accentColor:"#c8102e",
+    available:(player)=>!!player?.gilUnlocked,
+    topics:[
+      {
+        prompt:"What's up Gil?",
+        responses:[
+          "MY DAWG. I'm in my hyperbaric chamber right now btw. You ever try sleeping in one of these? Game changer. I'm 14% taller already. Probably.",
+          "Yo what's good. Just finished a 47-shot pregame routine. I'm so locked in right now I could shoot from the parking lot and call bank. And it would go in. And then I'd get fined for celebrating too hard.",
+          "What's up — I'm at the casino. Don't tell anyone. Actually maybe DO tell Stern. I want him to know. I want him to be ANGRY.",
+          "AYYYYYY my guy! I just bought a bouncy castle. For my house. Inside my house. The ceiling is now permanently dented. Worth it. Come over.",
+        ],
+      },
+      {
+        prompt:"Tell me a story",
+        responses:[
+          "Aight so one time in Vegas — and this is true — I bet $20K I could make a half court shot before the buffet closed. Made it. Ate three plates of crab legs. Best night of my life.",
+          "You know I once shot 1,000 shots after a game right? Coach was like 'go home' and I was like 'no'. The janitor had to kick me out. Mans was MAD. He had keys. I had jumpers. Stalemate.",
+          "Bro listen — I used to keep a fish tank in my locker. Not for any reason. Just because. Tigger the goldfish lived there for two seasons. Rest in peace Tigger. He saw too much.",
+          "One time DeShawn Stevenson and me bet $20K on a half court shot in practice. I missed. Paid him in singles. Took two hours. Best $20K I ever lost.",
+        ],
+      },
+      {
+        prompt:"Got any advice?",
+        responses:[
+          "Don't bet against me in cards. Just don't do it. It will not end well for you, your finances, or potentially your career. Ask around. People know.",
+          "Sleep in a hyperbaric chamber. Eat one chicken Caesar wrap before every game. Take 1,000 jumpers a day. That's the formula. That's it. That's the secret. You're welcome.",
+          "Always have a backup plan. And a backup for the backup. I have like 47 backup plans. Some of them involve fireworks. Some involve goats. Don't worry about it.",
+          "Listen — if a teammate ever shows you something in his locker, just nod. Don't ask questions. Don't tell ANYONE. You learned that one already though. Good man.",
+        ],
+      },
+      {
+        prompt:"You good?",
+        responses:[
+          "I am IMMACULATELY good. I just made a half-court shot on the practice floor and gave a security guard $500 because I felt like it. He was confused. He took it though.",
+          "Bro I'm SO good. Just got back from arguing with a vending machine for forty minutes. I won.",
+          "Always good my dawg. Always good. Why do you ask. Did you hear something. Who said what. Tell me right now.",
+          "Couldn't be better. Couldn't be worse. Couldn't be anywhere else. I'm just here, in my chamber, vibing. Existence is wild.",
         ],
       },
     ],
@@ -13714,6 +13867,34 @@ export default function App(){
       setScreen("bowlingPrompt");
       toast("Test — Bowling 2009 sabbatical", OR);
     }
+    else if(preset==="arenasGun"){
+      // ARENAS GUN — 2010 locker-room incident. 6 NBA seasons logged so the
+      // event lands at the right point in the timeline. Skips bowling so
+      // player has a full 5 NBA seasons + a normal 2009-10 in the books.
+      const mike=buildMike({draftPick:5,elite:true});
+      mike.skills={threePoint:86,midRange:87,finishing:87,handles:85,playmaking:82,perimDefense:80,postDefense:74,rebounding:76};
+      mike.intangibles=["confident","clutch","highIQ"];
+      mike.contract={
+        type:"extension", signedYear:NBA_START_YEAR+3, years:5,
+        salaries:[14000000,15120000,16329600,17636000,19046880],
+        totalValue:82132480, signingBonus:4000000,
+        team:"Sacramento Kings",
+      };
+      mike.midseasonEvents=[ARTEST_EVENT_ID, SLAM_DUNK_EVENT_ID, NACHO_EVENT_ID, WEED_EVENT_ID, THREE_POINT_EVENT_ID, BOWLING_EVENT_ID, ARENAS_EVENT_ID];
+      setPlayer(mike); setNbaTeam("Sacramento Kings");
+      setSignedShoeBrand({id:"nike",name:"Nike",maxPick:5,bonus:2000000,skillBonus:5,color:"#FA5400",subtitle:"Top 5 picks only"});
+      setAgent(AGENTS[0]); setMoney(40000000); setSkillPoints(10);
+      setNbaSeasons([
+        {year:"2004-05",team:"Sacramento Kings",teamRecord:"50-32",madePlayoffs:true,gp:79,ppg:14.2,rpg:4.1,apg:3.5,fg:46},
+        {year:"2005-06",team:"Sacramento Kings",teamRecord:"44-38",madePlayoffs:true,gp:81,ppg:19.4,rpg:5.0,apg:4.2,fg:48},
+        {year:"2006-07",team:"Sacramento Kings",teamRecord:"33-49",madePlayoffs:false,gp:80,ppg:23.1,rpg:5.6,apg:4.9,fg:49},
+        {year:"2007-08",team:"Sacramento Kings",teamRecord:"38-44",madePlayoffs:false,gp:78,ppg:25.8,rpg:6.0,apg:5.2,fg:50},
+        {year:"2008-09",team:"Sacramento Kings",teamRecord:"42-40",madePlayoffs:true,gp:79,ppg:26.4,rpg:6.2,apg:5.5,fg:50},
+        {year:"2009-10",team:"Sacramento Kings",teamRecord:"40-42",madePlayoffs:false,gp:80,ppg:27.1,rpg:6.4,apg:5.7,fg:50},
+      ]);
+      setScreen("arenasPrompt");
+      toast("Test — Arenas 2010 incident", "#c8102e");
+    }
     else if(preset==="soupIncident"){
       // SOUP INCIDENT — 2018-19 season. Player needs 14 NBA seasons logged so
       // currentYear = 2018. Long-tenured vet with money + accolades to match.
@@ -14440,6 +14621,11 @@ export default function App(){
           <button onClick={()=>jumpToTesting("bowlingCareer")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${OR} 0%, #8a3a0c 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
             <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🎳 BOWLING (2009)</div>
             <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Donaghy era · 41 GP</div>
+          </button>
+
+          <button onClick={()=>jumpToTesting("arenasGun")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, #c8102e 0%, #002B5C 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🔫 ARENAS (2010)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Four guns in the locker</div>
           </button>
 
           <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
@@ -15542,6 +15728,24 @@ export default function App(){
           }));
           toast&&toast(`🎳 Bowled ${outcome.score}! Season ended at 41 games.`, OR);
           if(testingMode) exitTesting(); else go("offseason");
+        }}/>
+      </MenuFrame>
+    ),
+    arenasPrompt:(
+      <MenuFrame sub="Locker Room · January 2010" title="AGENT ZERO">
+        <ArenasPromptScreen onDone={({snitched})=>{
+          if(snitched){
+            // Player told the league. Arenas is gone for 50 games. Flag both
+            // outcomes on the player so career-score + locker-room knowing
+            // can read it back later.
+            setPlayer(p=>({...p, arenasSnitched:true}));
+            toast&&toast("🚨 Arenas suspended 50 games", RE);
+          } else {
+            // Player kept quiet. Gil trusts you — added to contacts.
+            setPlayer(p=>({...p, gilUnlocked:true, arenasSnitched:false}));
+            toast&&toast("📱 Gilbert Arenas added to contacts", "#c8102e");
+          }
+          if(testingMode) exitTesting(); else go("leagueHub");
         }}/>
       </MenuFrame>
     ),
