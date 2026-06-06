@@ -3783,6 +3783,14 @@ function DraftScreen({player,school,starTier,agent,allYears,combineScore,intervi
     if(proj.tier==="undrafted"&&Math.random()<0.55) p=0;
     setPick(p);
     setTeam(NBA_TEAMS[rand(0,NBA_TEAMS.length-1)]);
+    // Defensive cleanup — if a shoe brand somehow persisted from a previous
+    // career (stale save, partial wipe, testing-mode leftover) and the new
+    // draft pick can't actually qualify for it (e.g. Nike maxPick=5 but the
+    // player landed at #14), clear it. Otherwise the UI shows "SIGNED Nike"
+    // on a pick that never could have signed Nike.
+    if(signedShoeBrand && p > (signedShoeBrand.maxPick||0)){
+      setSignedShoeBrand && setSignedShoeBrand(null);
+    }
     // Update agent attention based on actual pick
     if(setAgentAttention&&agent){
       // attention = 100 if pick matches/beats agent's expected tier, drops as pick gets worse relative to agent's tier
@@ -14522,11 +14530,13 @@ export default function App(){
     const onPause=()=>{
       setAudioState(s=>s==="playing"?"paused":s);
       // Self-heal: if iOS paused us against our wishes (musicOn is true, user
-      // has interacted), try to resume. Throttle to once per 500ms to avoid
-      // tight loops if iOS keeps refusing.
+      // has interacted), try to resume IMMEDIATELY. Throttle is short (80ms)
+      // because route transitions can briefly stutter the audio thread and a
+      // tighter window means the cutout is shorter; 80ms still guards against
+      // an infinite retry loop if iOS is structurally refusing.
       if(userHasInteractedRef.current && musicOnRef.current){
         const now=Date.now();
-        if(now-lastRetryRef.current<500) return;
+        if(now-lastRetryRef.current<80) return;
         lastRetryRef.current=now;
         const a=audioElRef.current;
         if(a){
@@ -14612,6 +14622,32 @@ export default function App(){
       document.removeEventListener("touchend",ensurePlaying);
     };
   },[]);
+
+  // STEP 2.7: Re-assert audio playback right after route transitions. Heavy
+  // re-renders (e.g. switching screens) can briefly stall the audio buffer
+  // on iOS Safari, causing tiny cutouts. This effect fires on every screen
+  // change and pokes play() if the audio got paused during the render —
+  // tighter than waiting for the next click, so the gap is imperceptible.
+  useEffect(()=>{
+    if(!userHasInteractedRef.current) return;
+    if(!musicOnRef.current) return;
+    // Defer one frame so the browser finishes painting the new screen before
+    // we ask the audio thread to resume — otherwise play() can race the
+    // render and itself contribute to the stutter.
+    const raf=requestAnimationFrame(()=>{
+      const a=audioElRef.current;
+      if(a && a.paused){
+        const p=a.play();
+        if(p && typeof p.then==="function") p.catch(()=>{});
+      }
+      const v=silentVideoRef.current;
+      if(v && v.paused){
+        const vp=v.play();
+        if(vp && typeof vp.then==="function") vp.catch(()=>{});
+      }
+    });
+    return()=>cancelAnimationFrame(raf);
+  },[screen]);
 
   // STEP 2.6: Media Session API — declares us as a real media player so iOS
   // gives our audio higher priority and won't pause it on incidental clicks
@@ -15165,15 +15201,19 @@ export default function App(){
       // accidentally wipe progress.
       const startNewCareer=()=>{
         if(hasSave){
+          // Existing save exists — confirm before wiping.
           // eslint-disable-next-line no-restricted-globals
           const ok = typeof window!=="undefined" && window.confirm
             ? window.confirm("Starting a new career will erase your saved progress. Continue?")
             : true;
           if(!ok) return;
-          wipeAndStartNew();
-        } else {
-          go("bio");
         }
+        // Always reset all career state (player, money, seasons, NBA team,
+        // signed shoe brand, etc.) even when there's no save file. Otherwise
+        // state from a previous testing-mode session OR from a still-loaded
+        // career in memory bleeds into the new one — showing pre-existing
+        // stats, $ in the bank, and shoe deals on a "fresh" career.
+        wipeAndStartNew();
       };
       const menuItems=hasSave?[
         {id:"resume",label:"RESUME CAREER",   sub:"Pick up where you left off", action:resumeCareer},
