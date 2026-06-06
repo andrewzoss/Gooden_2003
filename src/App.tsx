@@ -6417,9 +6417,10 @@ function ThreePointContestGame({player, nbaTeam, onDone}){
     nash:      11 + Math.floor(Math.random()*4),  // 11-14
     hamilton:   9 + Math.floor(Math.random()*4),  //  9-12
   }),[playthrough]);
-  // Finals — Kapono closes the door (real winner with 25). Player needs a
-  // strong round to beat him.
-  const finalsKapono = useMemo(()=> 18 + Math.floor(Math.random()*4),[playthrough]); // 18-21
+  // Finals — Kapono closes the door but leaves the door open. Locked at 17
+  // so the player's target is always exactly 18+; no random variance means
+  // the win threshold is predictable across runs.
+  const finalsKapono = 17;
 
   // Reset state for a fresh playthrough
   const replay = () => {
@@ -6764,7 +6765,8 @@ function evaluateBowlingThrow(meterFill, pull, rect, pinsStanding){
   if(meterFill < greenMin)      power = 0.40 + (meterFill / greenMin) * 0.60;
   else if(meterFill > greenMax) power = 1.0 + (meterFill - greenMax) / (1 - greenMax) * 0.40;
 
-  // Landing position = bowler + aim × distance(bowler→head pin) × power
+  // Landing position = bowler + aim × distance(bowler→head pin) × power.
+  // Distance scales with power so weak throws visibly stop short of the pins.
   const bowlerX = BOWLER_BP.xP * rect.width;
   const bowlerY = BOWLER_BP.yP * rect.height;
   const headPinX = BOWLING_PINS[0].xP * rect.width;
@@ -6772,83 +6774,118 @@ function evaluateBowlingThrow(meterFill, pull, rect, pinsStanding){
   const D = Math.hypot(headPinX - bowlerX, headPinY - bowlerY);
   const landX = bowlerX + aimUx * D * power;
   const landY = bowlerY + aimUy * D * power;
+  const landOffsetX = landX - bowlerX;
+  const landOffsetY = landY - bowlerY;
 
-  // If power is super weak, the ball doesn't reach the pins at all
-  if(power < 0.50){
-    return {
-      landX, landY,
-      landOffsetX: landX - bowlerX,
-      landOffsetY: landY - bowlerY,
-      knocked: [],
-      power,
-    };
+  // Ball reach scales with power. Below ~0.83 power the ball doesn't reach
+  // the head pin at all — gutter / weak roll, no pins fall. This makes power
+  // genuinely matter alongside aim, the way it does in real bowling games.
+  const ballReach = D * power * 1.25;
+  if(ballReach < D * 0.85){
+    return {landX, landY, landOffsetX, landOffsetY, knocked:[], power};
   }
 
-  // Hit detection — pins along the ball's trajectory line get knocked.
-  // Then chain-react to adjacent standing pins.
-  const ballMaxReach = D * power * 1.25;
-  const directHitRadius = 16;
-  const grazeRadius = 22;
-  const knocked = new Set();
+  // Direct ball-pin contact detection. TIGHT radius (11px) so the ball
+  // typically touches only the 1-2 pins directly on its trajectory line.
+  // A "pocket" shot threading between pins 1 and 3 can touch both for a
+  // proper strike setup; a head-on hit touches only the head pin and has
+  // to rely on cascade. This is the part that was broken before — the old
+  // radius of 16 + 22 graze meant any pin in the front half got knocked
+  // by the ball directly.
+  const BALL_RADIUS = 11;
+  const directHits = [];
   for(let i = 0; i < 10; i++){
     if(!pinsStanding[i]) continue;
     const pinX = BOWLING_PINS[i].xP * rect.width;
     const pinY = BOWLING_PINS[i].yP * rect.height;
     const pdx = pinX - bowlerX;
     const pdy = pinY - bowlerY;
-    // Project onto trajectory direction
     const t = pdx * aimUx + pdy * aimUy;
-    if(t < 0 || t > ballMaxReach) continue;
-    // Perpendicular distance from trajectory line
-    const perpX = pdx - t * aimUx;
-    const perpY = pdy - t * aimUy;
-    const perpDist = Math.hypot(perpX, perpY);
-    if(perpDist < directHitRadius){
-      knocked.add(i);
-    } else if(perpDist < grazeRadius && Math.random() < 0.55){
-      knocked.add(i);
+    if(t < 0 || t > ballReach) continue;
+    const perpDist = Math.hypot(pdx - t * aimUx, pdy - t * aimUy);
+    if(perpDist < BALL_RADIUS){
+      directHits.push({idx:i, perpDist});
     }
   }
 
-  // Chain effect — knocked pins flip adjacent standing pins with high prob.
-  // Up to 5 passes so a head-pin strike can cascade through the whole rack.
+  if(directHits.length === 0){
+    return {landX, landY, landOffsetX, landOffsetY, knocked:[], power};
+  }
+
+  // Energy-based cascade — each knocked pin carries "knock energy" that
+  // decays as it propagates. Direct hits start at high energy (scaled by
+  // power and hit quality). Each chained pin gets a fraction of its
+  // parent's energy. Below ~0.18 the pin can't push any further — so the
+  // cascade dies out, leaving splits when momentum runs out before the
+  // back of the rack.
+  const knocked = new Set();
+  const energy = new Map();
+  const powerMod = Math.max(0.6, Math.min(1.15, power));
+  for(const h of directHits){
+    knocked.add(h.idx);
+    // Dead-center hit (perpDist=0) gives more energy than a glancing one
+    const hitQuality = 1 - (h.perpDist / BALL_RADIUS);
+    energy.set(h.idx, (0.70 + hitQuality * 0.25) * powerMod);
+  }
+
+  // Cascade — up to 5 passes. Each pass, every "powered" pin tries to
+  // knock each adjacent standing pin probabilistically. Forward-facing
+  // pins (further from bowler) are much easier to topple than sideways
+  // or backward neighbors, mirroring real pin momentum.
+  const ADJ_THRESHOLD = 35;
   for(let iter = 0; iter < 5; iter++){
-    let changed = false;
-    const current = Array.from(knocked);
-    for(const idx of current){
+    const toKnock = [];
+    for(const [idx, e] of energy){
+      if(e < 0.18) continue;
+      const a = BOWLING_PINS[idx];
       for(let j = 0; j < 10; j++){
         if(knocked.has(j) || !pinsStanding[j]) continue;
-        const a = BOWLING_PINS[idx];
         const b = BOWLING_PINS[j];
         const adx = (a.xP - b.xP) * rect.width;
         const ady = (a.yP - b.yP) * rect.height;
         const adjDist = Math.hypot(adx, ady);
-        if(adjDist < 32 && Math.random() < 0.7){
-          knocked.add(j);
-          changed = true;
+        if(adjDist > ADJ_THRESHOLD) continue;
+
+        // Direction bias — bowler is at high yP, pins are at low yP, so
+        // "forward" means target b has SMALLER yP than parent a.
+        const isForward  = b.yP < a.yP - 0.02;
+        const isSideways = Math.abs(b.yP - a.yP) < 0.025;
+        const dirMod = isForward ? 1.0 : isSideways ? 0.65 : 0.30;
+
+        const closeness = 1 - (adjDist / ADJ_THRESHOLD);
+        const prob = e * dirMod * (0.75 + closeness * 0.20);
+
+        if(Math.random() < prob){
+          const childEnergy = e * (0.65 + closeness * 0.15);
+          toKnock.push({idx:j, energy:childEnergy});
         }
       }
     }
-    if(!changed) break;
+    if(toKnock.length === 0) break;
+    for(const tk of toKnock){
+      knocked.add(tk.idx);
+      // If multiple parents knocked the same pin this pass, keep the
+      // strongest energy so it can chain further.
+      const existing = energy.get(tk.idx) || 0;
+      energy.set(tk.idx, Math.max(existing, tk.energy));
+    }
   }
 
-  return {
-    landX, landY,
-    landOffsetX: landX - bowlerX,
-    landOffsetY: landY - bowlerY,
-    knocked: Array.from(knocked),
-    power,
-  };
+  return {landX, landY, landOffsetX, landOffsetY, knocked:Array.from(knocked), power};
 }
 
 // Single bowling pin (SVG) — narrow body, red collar, drops shadow.
-function BowlingPin({knocked, justFell}){
+// Fall direction varies by pin index for visual chaos when multiple pins
+// topple at once (otherwise all pins would tip the same way and look stiff).
+function BowlingPin({knocked, justFell, pinIdx}){
+  const dir = (pinIdx || 0) % 3;
+  const fallAnim = dir === 0 ? "pinFallLeft" : dir === 1 ? "pinFallRight" : "pinFallBack";
   return(
     <svg width="20" height="28" viewBox="0 0 20 28" style={{
       display:"block",
       opacity: knocked ? 0 : 1,
       transition: knocked && !justFell ? "opacity 0.2s" : "none",
-      animation: justFell ? "pinFall 0.55s ease-out forwards" : "none",
+      animation: justFell ? `${fallAnim} 0.55s ease-out forwards` : "none",
       transformOrigin: "50% 100%",
       filter: "drop-shadow(0 2px 1px rgba(0,0,0,0.5))",
     }}>
@@ -7027,22 +7064,27 @@ function BowlingGame({onDone}){
     isTrackingRef.current = false;
 
     const knockedCount = result.knocked.length;
-    const newStanding = pinsStanding.slice();
-    for(const idx of result.knocked) newStanding[idx] = false;
 
+    // Start the ball rolling. Pin updates wait until the ball ARRIVES — the
+    // original bug was that justKnocked was set immediately, so pins started
+    // tipping before the ball got to them.
     setThrowResult(result);
     setBallRolling(true);
-    setJustKnocked(result.knocked);
 
-    // After ball animation reaches pins (~0.7s in), update pin state
+    // Ball is ~85% of the way through its 1s roll animation when it reaches
+    // the pin cluster. Trigger pin fall + standing update at that moment.
     setTimeout(()=> {
-      setPinsStanding(newStanding);
-    }, 700);
+      setJustKnocked(result.knocked);
+      setPinsStanding(prev => {
+        const next = prev.slice();
+        for(const idx of result.knocked) next[idx] = false;
+        return next;
+      });
+    }, 850);
 
-    // Sequence:
-    //   0-1.0s: ball rolls down lane
-    //   0.7-1.2s: pins fall
-    //   1.2s+: update frame ledger, possibly reset pins for next ball
+    // Frame ledger + advance after pin fall animation completes (~0.55s
+    // after fall starts → 1450ms total). Gives the player a clean moment
+    // to see the result before the next throw arms up.
     setTimeout(()=> {
       // Tally into frame ledger
       const newFrames = frames.slice();
@@ -7108,7 +7150,7 @@ function BowlingGame({onDone}){
           setShowingFinal(true);
         }
       }
-    }, 1300);
+    }, 1500);
   };
 
   // Reset pins + advance to next frame
@@ -7180,7 +7222,7 @@ function BowlingGame({onDone}){
         </div>
 
         <button onClick={()=>onDone&&onDone({score: totalScore})} style={{...btnS,padding:"14px 20px",fontSize:13,width:"100%"}}>
-          → BACK TO BASKETBALL (?)
+          → BACK TO BASKETBALL
         </button>
       </div>
     );
@@ -7270,6 +7312,7 @@ function BowlingGame({onDone}){
             <BowlingPin
               knocked={!pinsStanding[i]}
               justFell={justKnocked.includes(i)}
+              pinIdx={i}
             />
           </div>
         ))}
@@ -7355,11 +7398,20 @@ function BowlingGame({onDone}){
           0%   { transform: translate(-50%, -50%) scale(1); }
           100% { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.7); }
         }
-        @keyframes pinFall {
-          0%   { transform: rotate(0deg) translateY(0); opacity: 1; }
-          40%  { transform: rotate(60deg) translateY(2px); opacity: 1; }
-          80%  { transform: rotate(85deg) translateY(8px); opacity: 0.6; }
-          100% { transform: rotate(90deg) translateY(14px); opacity: 0; }
+        @keyframes pinFallLeft {
+          0%   { transform: rotate(0deg) translate(0, 0); opacity: 1; }
+          30%  { transform: rotate(-40deg) translate(-3px, 1px); opacity: 1; }
+          100% { transform: rotate(-92deg) translate(-12px, 14px); opacity: 0; }
+        }
+        @keyframes pinFallRight {
+          0%   { transform: rotate(0deg) translate(0, 0); opacity: 1; }
+          30%  { transform: rotate(40deg) translate(3px, 1px); opacity: 1; }
+          100% { transform: rotate(92deg) translate(12px, 14px); opacity: 0; }
+        }
+        @keyframes pinFallBack {
+          0%   { transform: rotate(0deg) translate(0, 0); opacity: 1; }
+          30%  { transform: rotate(15deg) translate(0, -2px); opacity: 1; }
+          100% { transform: rotate(88deg) translate(4px, -10px); opacity: 0; }
         }
       `}</style>
     </div>
@@ -14355,43 +14407,46 @@ export default function App(){
 
         {/* Midseason events — jump straight to the prompt so the actual flow
             (prompt → game → result toast → back to leagueHub) is testable
-            without playing through the season. */}
+            without playing through the season. Laid out as a 2-column grid
+            since this list keeps growing. */}
         <div style={{fontSize:9,letterSpacing:2,color:"#666",fontWeight:700,margin:"6px 0 6px 2px"}}>MIDSEASON EVENTS</div>
 
-        <button onClick={()=>jumpToTesting("artestFight")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${RE} 0%, #8a1a1a 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>👊 ARTEST FIGHT (2004)</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Malice at the Palace · Punch-Out mini-game</div>
-        </button>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+          <button onClick={()=>jumpToTesting("artestFight")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${RE} 0%, #8a1a1a 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>👊 ARTEST (2004)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Malice at the Palace</div>
+          </button>
 
-        <button onClick={()=>jumpToTesting("dunkContest")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, #00aa44 0%, #007733 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>🏀 DUNK CONTEST (2005)</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Sprite Rising Stars · vs Josh Smith, JR Smith, Birdman</div>
-        </button>
+          <button onClick={()=>jumpToTesting("dunkContest")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, #00aa44 0%, #007733 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🏀 DUNK CTST (2005)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Sprite Rising Stars</div>
+          </button>
 
-        <button onClick={()=>jumpToTesting("nachoLibre")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, #c8501a 0%, #6b2810 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>🎬 NACHO LIBRE (2006)</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Hey Nacho · Unlocks Jack Black contact</div>
-        </button>
+          <button onClick={()=>jumpToTesting("nachoLibre")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, #c8501a 0%, #6b2810 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🎬 NACHO (2006)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Jack Black cameo</div>
+          </button>
 
-        <button onClick={()=>jumpToTesting("barnesJoint")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>💨 BARNES & STACK (2007)</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Locker-room offer · ends the same either way</div>
-        </button>
+          <button onClick={()=>jumpToTesting("barnesJoint")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${GR} 0%, #006633 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>💨 BARNES (2007)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Locker-room offer</div>
+          </button>
 
-        <button onClick={()=>jumpToTesting("threePointContest")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${YE} 0%, #b08800 100%)`,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>🎯 3-POINT CONTEST (2008)</div>
-          <div style={{fontSize:10,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>NBA Shootout · vs Kapono, Nowitzki, Gibson, Hamilton, Nash</div>
-        </button>
+          <button onClick={()=>jumpToTesting("threePointContest")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${YE} 0%, #b08800 100%)`,border:"none",borderRadius:8,color:"#080c10",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🎯 3PT CTST (2008)</div>
+            <div style={{fontSize:9,color:"rgba(0,0,0,0.7)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>vs Kapono · need 18</div>
+          </button>
 
-        <button onClick={()=>jumpToTesting("bowlingCareer")} style={{textAlign:"left",padding:"12px 14px",marginBottom:8,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8a3a0c 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>🎳 BOWLING SABBATICAL (2009)</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Donaghy era · 10 frames · season ends at 41 games</div>
-        </button>
+          <button onClick={()=>jumpToTesting("bowlingCareer")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${OR} 0%, #8a3a0c 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🎳 BOWLING (2009)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Donaghy era · 41 GP</div>
+          </button>
 
-        <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"12px 14px",marginBottom:14,display:"block",width:"100%",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
-          <div style={{fontSize:14,fontWeight:900}}>🍲 SOUP INCIDENT (2018)</div>
-          <div style={{fontSize:10,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.5}}>Damon Jones · The trap-choice gag</div>
-        </button>
+          <button onClick={()=>jumpToTesting("soupIncident")} style={{textAlign:"left",padding:"10px 11px",background:`linear-gradient(135deg, ${OR} 0%, #8b3a08 100%)`,border:"none",borderRadius:8,color:"#fff",cursor:"pointer",fontFamily:"'Barlow Condensed',sans-serif"}}>
+            <div style={{fontSize:12,fontWeight:900,letterSpacing:0.3}}>🍲 SOUP (2018)</div>
+            <div style={{fontSize:9,color:"rgba(255,255,255,0.8)",marginTop:2,fontWeight:600,letterSpacing:0.3,lineHeight:1.25}}>Damon Jones gag</div>
+          </button>
+        </div>
 
         <div style={{fontSize:11,color:"#888",lineHeight:1.5,padding:"10px 12px",background:"rgba(0,0,0,0.25)",borderRadius:8,marginBottom:14}}>
           Each preset wipes whatever career state is in memory and drops you in fresh. Your saved career on disk is preserved.
