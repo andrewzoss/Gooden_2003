@@ -5753,7 +5753,8 @@ function evaluateShot(meterFill, pull, shooterPx, hoopPx, skill){
 
   // Power from meter timing — under-filled = short shot, in green = perfect,
   // over-filled = long shot. Linear ramp to either side of the green zone.
-  const greenWidth = 0.20 + (skill / 100) * 0.18;
+  // Green band is now noticeably tighter than before — release timing matters.
+  const greenWidth = 0.08 + (skill / 100) * 0.14; // skill 50→15%, 90→20.6%, 100→22%
   const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
@@ -5775,11 +5776,10 @@ function evaluateShot(meterFill, pull, shooterPx, hoopPx, skill){
   const landX = shooterPx.x + landOffsetX;
   const landY = shooterPx.y + landOffsetY;
 
-  // Made if the landing is inside the rim. Rim radius widens with skill but
-  // stays tight — aim accuracy matters a LOT. At skill 50 the max aim error
-  // is about 5°; at skill 100 it's about 7.5°.
+  // Made if the landing is inside the rim. Rim is tight now — aim has to be
+  // precise. At skill 50 the max aim error is ~3°, at skill 90 it's ~4.5°.
   const missDist = Math.hypot(landX - hoopPx.x, landY - hoopPx.y);
-  const rimRadius = 14 + (skill / 100) * 18; // skill 50→23, 90→30.2, 100→32
+  const rimRadius = 8 + (skill / 100) * 12; // skill 50→14, 90→18.8, 100→20
   const made = missDist < rimRadius;
 
   return {made, landOffsetX, landOffsetY, missDist, power};
@@ -5863,7 +5863,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
   const MIN_PULL_DISTANCE = 22;     // pixels — pull farther than this to arm the meter
 
   // Skill-based green-zone tuning for the meter (matches evaluator).
-  const greenWidth = 0.20 + (threePointSkill / 100) * 0.18;
+  const greenWidth = 0.08 + (threePointSkill / 100) * 0.14;
   const greenCenter = 0.55;
   const greenMin = greenCenter - greenWidth / 2;
   const greenMax = greenCenter + greenWidth / 2;
@@ -5974,7 +5974,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
         isMoneyball,
         points: r.made ? (isMoneyball ? 2 : 1) : 0,
       });
-    }, 1200);
+    }, 1300); // matches the 1.15s ball flight + a beat of breathing room
   };
 
   // Arrow visibility + orientation
@@ -6044,41 +6044,76 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
           />
         </svg>
 
-        {/* All 5 hoops — current target highlighted */}
+        {/* All 5 hoops — proper backboard + shooter's-square + orange rim
+            ellipse + tapered net. Current target gets full size + glow halo. */}
         {THREE_POINT_RACKS.map((h,i)=>{
           const isCurrent = i === rack.idx;
+          const scale = isCurrent ? 1.0 : 0.62;
+          const W = 80 * scale;
+          const H = 60 * scale;
           return(
             <div key={i} style={{
               position:"absolute",
               left:`${h.xP*100}%`,
               top:`${h.yP*100}%`,
-              transform:"translate(-50%, -50%)",
+              // Anchor at the rim center (viewBox y=28 of 60 = 46.7%), so the
+              // hoop visually sits exactly where the rack coordinate points.
+              transform:"translate(-50%, -46.7%)",
+              width: W, height: H,
               pointerEvents:"none",
-              width: isCurrent ? 70 : 44,
-              height: isCurrent ? 34 : 22,
               transition:"all 0.2s",
+              filter: isCurrent ? `drop-shadow(0 0 7px ${OR})` : "none",
+              zIndex: isCurrent ? 2 : 1,
             }}>
-              {/* Backboard */}
-              <div style={{
-                position:"absolute",left:0,top:0,right:0,
-                height: isCurrent ? 22 : 14,
-                border: isCurrent ? "2px solid #fff" : "1.5px solid rgba(255,255,255,0.55)",
-                borderRadius:3,
-                background: isCurrent ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.05)",
-                boxShadow: isCurrent ? "0 0 12px rgba(255,255,255,0.4)" : "none",
-              }}/>
-              {/* Rim */}
-              <div style={{
-                position:"absolute",left:"50%",
-                top: isCurrent ? 22 : 14,
-                transform:"translateX(-50%)",
-                width: isCurrent ? 36 : 22,
-                height: isCurrent ? 6 : 4,
-                background: isCurrent ? "#ff6600" : "rgba(255,100,0,0.6)",
-                borderRadius:3,
-                border: isCurrent ? "1.5px solid #fff" : "1px solid rgba(255,255,255,0.45)",
-                boxShadow: isCurrent ? `0 0 14px ${OR}` : "none",
-              }}/>
+              <svg width={W} height={H} viewBox="0 0 80 60" style={{display:"block",overflow:"visible"}}>
+                {/* Backboard outer rectangle */}
+                <rect
+                  x="13" y="0" width="54" height="24" rx="2"
+                  fill={isCurrent ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.08)"}
+                  stroke={isCurrent ? "#fff" : "rgba(255,255,255,0.55)"}
+                  strokeWidth={isCurrent ? 1.8 : 1.2}
+                />
+                {/* Shooter's square inside the backboard */}
+                <rect
+                  x="32" y="6" width="16" height="10"
+                  fill="none"
+                  stroke={isCurrent ? "rgba(255,255,255,0.65)" : "rgba(255,255,255,0.35)"}
+                  strokeWidth="1"
+                />
+                {/* Halo behind the rim for the current hoop */}
+                {isCurrent && (
+                  <ellipse cx="40" cy="28" rx="20" ry="6" fill={`${OR}44`} style={{filter:"blur(3px)"}}/>
+                )}
+                {/* Orange rim — drawn as an ellipse so it reads as a ring */}
+                <ellipse
+                  cx="40" cy="28" rx="14" ry="3.5"
+                  fill={isCurrent ? "#ff6600" : "rgba(255,100,0,0.78)"}
+                  stroke={isCurrent ? "#fff" : "rgba(255,255,255,0.5)"}
+                  strokeWidth={isCurrent ? 1.5 : 1}
+                />
+                {/* Rim highlight (top arc — gives it 3D feel) */}
+                <path
+                  d="M 27 28 Q 40 25 53 28"
+                  fill="none"
+                  stroke="rgba(255,210,140,0.7)"
+                  strokeWidth="0.7"
+                />
+                {/* Net — 5 tapered vertical strands */}
+                <path d="M 27 30 Q 30 42 35 48" fill="none" stroke={isCurrent ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.4)"} strokeWidth="0.9"/>
+                <path d="M 32 30 Q 33 42 37 48" fill="none" stroke={isCurrent ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.4)"} strokeWidth="0.9"/>
+                <path d="M 40 30 L 40 48"       fill="none" stroke={isCurrent ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.4)"} strokeWidth="0.9"/>
+                <path d="M 48 30 Q 47 42 43 48" fill="none" stroke={isCurrent ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.4)"} strokeWidth="0.9"/>
+                <path d="M 53 30 Q 50 42 45 48" fill="none" stroke={isCurrent ? "rgba(255,255,255,0.7)" : "rgba(255,255,255,0.4)"} strokeWidth="0.9"/>
+                {/* Net — horizontal mesh lines */}
+                <path d="M 30 36 Q 40 38 50 36" fill="none" stroke={isCurrent ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.25)"} strokeWidth="0.6"/>
+                <path d="M 33 42 Q 40 44 47 42" fill="none" stroke={isCurrent ? "rgba(255,255,255,0.4)" : "rgba(255,255,255,0.25)"} strokeWidth="0.6"/>
+                {/* Net bottom opening (small ellipse) */}
+                <ellipse cx="40" cy="47.5" rx="5" ry="0.8"
+                  fill="none"
+                  stroke={isCurrent ? "rgba(255,255,255,0.55)" : "rgba(255,255,255,0.32)"}
+                  strokeWidth="0.7"
+                />
+              </svg>
             </div>
           );
         })}
@@ -6138,7 +6173,7 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
             // CSSProperties type doesn't include `--*` keys by default.
             ["--landX" as any]: `${result.landOffsetX}px`,
             ["--landY" as any]: `${result.landOffsetY}px`,
-            animation:`ballFly${result.made?"Made":"Missed"} 1s ease-out forwards`,
+            animation:`ballFly${result.made?"Made":"Missed"} 1.15s linear forwards`,
           }}>{isMoneyball ? "🟡" : "🏀"}</div>
         )}
 
@@ -6171,18 +6206,31 @@ function ThreePointShot({rack, ballIndex, isMoneyball, threePointSkill, onComple
 
       <style>{`
         @keyframes ballFlyMade {
-          /* Made shots: arc up to peak, land inside the rim, drop through net */
-          0%   { transform: translate(-50%, -50%); }
-          50%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.5), calc(var(--landY) * 0.5 - 55px)) scale(0.85); opacity: 1; }
-          82%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.6); opacity: 1; }
-          100% { transform: translate(-50%, -50%) translate(var(--landX), calc(var(--landY) + 14px)) scale(0.2); opacity: 0; }
+          /* Smooth parabolic arc — sample positions at multiple t values so
+             the trajectory reads as a real basketball flight rather than a
+             linear hop. peakY of -55px lifts the apex above the straight line. */
+          0%   { transform: translate(-50%, -50%) scale(1); }
+          14%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.15), calc(var(--landY) * 0.15 - 28px)) scale(0.95); }
+          28%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.30), calc(var(--landY) * 0.30 - 46px)) scale(0.90); }
+          42%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.45), calc(var(--landY) * 0.45 - 54px)) scale(0.83); }
+          50%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.55), calc(var(--landY) * 0.55 - 55px)) scale(0.78); }
+          64%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.70), calc(var(--landY) * 0.70 - 46px)) scale(0.70); }
+          78%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.85), calc(var(--landY) * 0.85 - 28px)) scale(0.62); }
+          90%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.55); opacity: 1; }
+          100% { transform: translate(-50%, -50%) translate(var(--landX), calc(var(--landY) + 18px)) scale(0.08); opacity: 0; }
         }
         @keyframes ballFlyMissed {
-          /* Missed shots: arc to landing (off-rim), then tumble away */
-          0%   { transform: translate(-50%, -50%); }
-          50%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.55), calc(var(--landY) * 0.55 - 50px)) scale(0.85) rotate(180deg); opacity: 1; }
-          80%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.7) rotate(320deg); opacity: 1; }
-          100% { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.85), calc(var(--landY) + 40px)) scale(0.5) rotate(540deg); opacity: 0; }
+          /* Same parabolic flight but the ball spins (basketball backspin) and
+             after landing it tumbles forward and falls away — like a brick. */
+          0%   { transform: translate(-50%, -50%) scale(1) rotate(0deg); }
+          14%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.15), calc(var(--landY) * 0.15 - 28px)) scale(0.95) rotate(35deg); }
+          28%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.30), calc(var(--landY) * 0.30 - 46px)) scale(0.90) rotate(80deg); }
+          42%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.45), calc(var(--landY) * 0.45 - 54px)) scale(0.83) rotate(135deg); }
+          50%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.55), calc(var(--landY) * 0.55 - 55px)) scale(0.78) rotate(180deg); }
+          64%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.70), calc(var(--landY) * 0.70 - 46px)) scale(0.72) rotate(240deg); }
+          78%  { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.85), calc(var(--landY) * 0.85 - 28px)) scale(0.68) rotate(305deg); }
+          90%  { transform: translate(-50%, -50%) translate(var(--landX), var(--landY)) scale(0.65) rotate(360deg); opacity: 1; }
+          100% { transform: translate(-50%, -50%) translate(calc(var(--landX) * 0.95), calc(var(--landY) + 45px)) scale(0.4) rotate(440deg); opacity: 0; }
         }
       `}</style>
     </div>
