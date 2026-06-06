@@ -7429,6 +7429,11 @@ function BowlingGame({onDone}){
 function ArenasPromptScreen({onDone}){
   // stage: choice → snitched | kept_quiet
   const [stage, setStage] = useState("choice");
+  // Independent failure tracking for the two assets — the big event portrait
+  // (gil.webp) and the contact card avatar (gil2.AVIF) are different files
+  // that can fail/load independently.
+  const [mainImgFailed, setMainImgFailed] = useState(false);
+  const [contactImgFailed, setContactImgFailed] = useState(false);
 
   return(
     <div style={{padding:"4px 0 20px"}}>
@@ -7439,7 +7444,24 @@ function ArenasPromptScreen({onDone}){
 
       <div style={{display:"flex",justifyContent:"center",marginBottom:14}}>
         <div style={{padding:4,background:`linear-gradient(135deg, #002B5C, #c8102e)`,borderRadius:10,boxShadow:"0 4px 20px rgba(0,43,92,0.4)"}}>
-          <img src="/gil.webp" alt="Gilbert Arenas" style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}/>
+          {mainImgFailed ? (
+            <div style={{
+              width:240,height:240,borderRadius:6,background:"#000",
+              display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+              color:"#fff",fontFamily:"'Barlow Condensed',sans-serif",
+            }}>
+              <div style={{fontSize:64,marginBottom:6}}>🔫</div>
+              <div style={{fontSize:18,fontWeight:900,letterSpacing:2}}>GILBERT ARENAS</div>
+              <div style={{fontSize:11,color:"#aaa",letterSpacing:1,marginTop:4}}>#0 · WASHINGTON</div>
+            </div>
+          ) : (
+            <img
+              src="/gil.webp"
+              alt="Gilbert Arenas"
+              onError={()=>setMainImgFailed(true)}
+              style={{display:"block",width:240,height:"auto",borderRadius:6,background:"#000"}}
+            />
+          )}
         </div>
       </div>
 
@@ -7450,11 +7472,25 @@ function ArenasPromptScreen({onDone}){
             <div style={{marginTop:8,fontSize:11,color:"#888",fontStyle:"italic"}}>Do you tell on him?</div>
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            <button onClick={()=>setStage("snitched")} style={{...btnS,padding:"14px 18px",fontSize:13,background:RE,color:"#fff",border:"none"}}>
+            <button onClick={()=>setStage("snitched")} style={{
+              padding:"14px 16px",fontSize:13,fontWeight:900,
+              fontFamily:"'Barlow Condensed',sans-serif",
+              background:`linear-gradient(135deg, ${RE} 0%, #8a1a1a 100%)`,
+              color:"#fff",border:"none",borderRadius:8,
+              cursor:"pointer",textAlign:"center",lineHeight:1.25,
+              letterSpacing:0.5,
+            }}>
               🚨 UH YEAH HE HAS FOUR GUNS
             </button>
-            <button onClick={()=>setStage("kept_quiet")} style={{...ghostS,padding:"12px 16px",fontSize:12,lineHeight:1.35,textAlign:"left"}}>
-              He's no chill gil for a reason,<br/>I'm not messing with him.
+            <button onClick={()=>setStage("kept_quiet")} style={{
+              padding:"14px 16px",fontSize:13,fontWeight:900,
+              fontFamily:"'Barlow Condensed',sans-serif",
+              background:"linear-gradient(135deg, #002B5C 0%, #c8102e 100%)",
+              color:"#fff",border:"none",borderRadius:8,
+              cursor:"pointer",textAlign:"center",lineHeight:1.25,
+              letterSpacing:0.5,
+            }}>
+              🤐 HE'S NO CHILL GIL FOR A REASON,<br/>I'M NOT MESSING WITH HIM
             </button>
           </div>
         </>
@@ -7497,7 +7533,22 @@ function ArenasPromptScreen({onDone}){
             display:"flex",alignItems:"center",gap:10,
             padding:"12px 12px",background:`#002B5C22`,border:`1px solid #002B5C99`,borderRadius:10,marginBottom:14,
           }}>
-            <img src="/gil.webp" alt="Gilbert Arenas" style={{width:48,height:48,borderRadius:"50%",objectFit:"cover",border:`2px solid #c8102e`,flexShrink:0,background:"#000"}}/>
+            {contactImgFailed ? (
+              <div style={{
+                width:48,height:48,borderRadius:"50%",
+                background:"linear-gradient(135deg, #002B5C, #c8102e)",
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:22,flexShrink:0,
+                border:`2px solid #c8102e`,
+              }}>🔫</div>
+            ) : (
+              <img
+                src="/gil2.AVIF"
+                alt="Gilbert Arenas"
+                onError={()=>setContactImgFailed(true)}
+                style={{width:48,height:48,borderRadius:"50%",objectFit:"cover",border:`2px solid #c8102e`,flexShrink:0,background:"#000"}}
+              />
+            )}
             <div style={{flex:1,minWidth:0}}>
               <div style={{fontSize:9,letterSpacing:1.5,color:"#c8102e",fontWeight:700,marginBottom:2}}>★ NEW CONTACT</div>
               <div style={{fontSize:14,fontWeight:900,color:"#fff",lineHeight:1.1}}>Gilbert Arenas</div>
@@ -9701,7 +9752,7 @@ const CALL_CONTACTS = [
     id:"gilbert_arenas",
     name:"Gilbert Arenas",
     role:"Agent Zero · No Chill Gil",
-    portrait:"/gil.webp",
+    portrait:"/gil2.AVIF",
     accentColor:"#c8102e",
     available:(player)=>!!player?.gilUnlocked,
     topics:[
