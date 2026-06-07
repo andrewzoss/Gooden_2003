@@ -7652,6 +7652,14 @@ function LockoutOptionCard({option, disabled, onClick}){
 
 function LockoutPromptScreen({player, onChoose}){
   const ovr = calcOVR(player.skills||{}, player.intangibles||[], player.position, player.height);
+  // Belt-and-suspenders: even with the App-level lockoutFiredRef gating the
+  // route-gate intercept, mobile taps can sometimes register two clicks in
+  // rapid succession before React processes the state change. This ref is
+  // checked synchronously at the click site and prevents onChoose from
+  // firing more than once for this component instance — so even if the
+  // route somehow re-renders the prompt, this gate is a hard stop on the
+  // second-boost bug.
+  const submittedRef = useRef(false);
 
   // The four lockout workout options. Three stat-skill boosts + the Drew
   // League SP bonus (gated to OVR 90+).
@@ -7707,7 +7715,14 @@ function LockoutPromptScreen({player, onChoose}){
           key={opt.id}
           option={opt}
           disabled={!!opt.gated && ovr < opt.gateOVR}
-          onClick={()=>onChoose(opt)}
+          onClick={()=>{
+            // Hard gate — never call onChoose twice from this component.
+            // Refs update synchronously so a second tap (even one fired
+            // mid-frame before React re-renders) hits this early-return.
+            if(submittedRef.current) return;
+            submittedRef.current = true;
+            onChoose(opt);
+          }}
         />
       ))}
     </div>
