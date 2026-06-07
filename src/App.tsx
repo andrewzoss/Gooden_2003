@@ -14824,6 +14824,16 @@ export default function App(){
     // Awards gate: if heading to nbaPlay AND the regular season is complete
     // AND awards haven't been shown for this season yet, divert to the
     // awards ceremony first. Player then continues to playoffs from there.
+    //
+    // Legacy save recovery: the old bowling handler used to go("offseason")
+    // which was a dead route — anyone with that screen persisted in their
+    // save lands on the Unknown-screen fallback. Redirect to nbaPlay so
+    // they continue cleanly (the bowling season has already been committed
+    // to nbaSeasons by the broken handler, so they'll see the next season's
+    // play screen).
+    if(s==="offseason"){
+      s="nbaPlay";
+    }
     if(s==="nbaPlay"&&nbaTeam&&player&&!player.retired){
       const yr=NBA_START_YEAR+(nbaSeasons?.length||0);
       const firedEvts=player?.midseasonEvents||[];
@@ -16200,30 +16210,42 @@ export default function App(){
     bowlingGame:(
       <MenuFrame sub="10 Frames" title="BOWLING">
         <BowlingGame onDone={(outcome)=>{
-          // Save bowling score + force the 2009-10 season to end at 41 games.
-          // Construct a half-season record using the player's most recent
-          // averages, then jump straight to offseason.
+          // The 2009-10 season ends at 41 games. But the player didn't play
+          // any basketball — they were bowling. Extrapolate 41 games of
+          // stats from last season's per-game averages, drop them into
+          // nbaSeasonTotals, then advance gp + force playoffsDone so the
+          // next NbaPlayScreen render returns the OffseasonScreen. That
+          // way the year-end flow (paycheck, restaurants, age decay,
+          // mentor retirement, etc.) runs exactly like a normal season —
+          // and the season log records gp=41 instead of gp=0.
+          //
+          // Previously this handler manually pushed a season record then
+          // called go("offseason") — but no such route exists, so the
+          // player landed on the "Unknown screen: offseason" fallback.
+          const yr = NBA_START_YEAR + (nbaSeasons||[]).length;
           const lastSeason = (nbaSeasons||[])[(nbaSeasons||[]).length - 1] || {};
-          const seasonYear = `${NBA_START_YEAR + 5}-${String((NBA_START_YEAR + 6) % 100).padStart(2, '0')}`;
-          const halfSeason = {
-            year: seasonYear,
-            team: nbaTeam || "Sacramento Kings",
-            teamRecord: "14-27",
-            madePlayoffs: false,
-            gp: 41,
-            ppg: typeof lastSeason.ppg === "number" ? lastSeason.ppg : 18.0,
-            rpg: typeof lastSeason.rpg === "number" ? lastSeason.rpg : 5.0,
-            apg: typeof lastSeason.apg === "number" ? lastSeason.apg : 4.0,
-            fg:  typeof lastSeason.fg  === "number" ? lastSeason.fg  : 47,
-          };
-          setNbaSeasons(prev => [...(prev||[]), halfSeason]);
+          const ppg = typeof lastSeason.ppg === "number" ? lastSeason.ppg : 18.0;
+          const rpg = typeof lastSeason.rpg === "number" ? lastSeason.rpg : 5.0;
+          const apg = typeof lastSeason.apg === "number" ? lastSeason.apg : 4.0;
+          const fg  = typeof lastSeason.fg  === "number" ? lastSeason.fg  : 47;
+          const games = 41;
+          const fga = Math.round(18 * games);
+          const fgm = Math.round((fg/100) * fga);
+          setNbaSeasonTotals({
+            pts: ppg * games,
+            reb: rpg * games,
+            ast: apg * games,
+            games, fgm, fga,
+          });
+          setNbaGamesPlayed(seasonGamesForYear(yr));
+          setPlayoffsDone(true);
           setPlayer(p=>({
             ...p,
             bowlingScore: outcome.score,
             bowlingPlayed: true,
           }));
           toast&&toast(`🎳 Bowled ${outcome.score}! Season ended at 41 games.`, OR);
-          if(testingMode) exitTesting(); else go("offseason");
+          if(testingMode) exitTesting(); else go("nbaPlay");
         }}/>
       </MenuFrame>
     ),
