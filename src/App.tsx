@@ -216,7 +216,7 @@ const FRANCHISE_EVOLUTION = {
 // returns a usable identity — falls back to the original key if no change has
 // happened yet, and to a safe placeholder if the key itself is unknown.
 function getTeamIdentity(teamKey, currentYear){
-  if(!teamKey) return {name:"--", abbr:"???", p:"#444", s:"#888", logoUrl:null, rosterKey:teamKey};
+  if(!teamKey) return {name:"--", abbr:"???", p:"#444", s:"#888", logoUrl:null, rosterKey:teamKey, fallbackRosterKey:teamKey};
   const evolution=FRANCHISE_EVOLUTION[teamKey];
   // Find the latest evolution that applies for this year
   let displayKey=teamKey;
@@ -229,6 +229,11 @@ function getTeamIdentity(teamKey, currentYear){
   return {
     name:displayKey,        // display name — "Oklahoma City Thunder" in 2010
     rosterKey:displayKey,   // what to look up in season-roster data
+    // Pre-evolution key as a fallback for season-data lookups when the
+    // roster file has the OLD name in a season AFTER the evolution year
+    // (e.g. 2010 OKC was keyed "Seattle SuperSonics" in the data file).
+    // Consumers do: data[id.rosterKey] || data[id.fallbackRosterKey] || {…}
+    fallbackRosterKey:teamKey,
     abbr:data.abbr,
     p:data.p,
     s:data.s,
@@ -4863,13 +4868,20 @@ function LeagueHub({player, nbaTeam, nbaSeasons, nbaGamesPlayed, nbaSeasonTotals
   const id=getTeamIdentity(nbaTeam,currentYear);
   const teamData={p:id.p,s:id.s,abbr:id.abbr,logoUrl:id.logoUrl};
   const displayName=id.name;
-  const season=getNbaSeasonData(currentYear).data[id.rosterKey]||{w:0,l:0};
+  const season=getNbaSeasonData(currentYear).data[id.rosterKey]||getNbaSeasonData(currentYear).data[id.fallbackRosterKey]||{w:0,l:0};
+  // Sentinel: if the lookup defaulted (no real entry), we can detect it via
+  // total games. Real NBA team rows always have w+l == season length;
+  // missing/unknown teams come back as {w:0, l:0} which sums to 0.
+  const hasSeasonData=(season.w+season.l)>0;
   // Current season's projected record proportional to games played
   const gp=nbaGamesPlayed;
   // 2011-12 was lockout-shortened to 66 games. All other years are 82.
   const seasonGames=seasonGamesForYear(currentYear);
-  const projectedW=Math.round((season.w*gp)/seasonGames);
-  const projectedL=gp-projectedW;
+  const projectedW=hasSeasonData ? Math.round((season.w*gp)/seasonGames) : 0;
+  // If we have real season data, project losses proportionally; otherwise
+  // avoid the gp-projectedW math that would surface a misleading "0-82"
+  // when the team lookup silently failed.
+  const projectedL=hasSeasonData ? (gp-projectedW) : 0;
   const yearLabel=formatSeasonLabel(currentYear);
   // Player's overall rating — shown as a badge so they can see the impact of
   // skill-point spending at a glance.
@@ -9026,7 +9038,7 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
   const id=getTeamIdentity(nbaTeam,currentYear);
   const teamData={p:id.p,s:id.s,abbr:id.abbr,logoUrl:id.logoUrl};
   const seasonData=getNbaSeasonData(currentYear).data;
-  const season=seasonData[id.rosterKey]||{w:0,l:0};
+  const season=seasonData[id.rosterKey]||seasonData[id.fallbackRosterKey]||{w:0,l:0};
   // Pass the historical roster key so the player gets matched against the
   // correct roster after a relocation (e.g. OKC's roster post-2008).
   const {slot, minutes, isStarter}=calcRotationSlot(player,id.rosterKey,seasonData,nbaSeasons);
