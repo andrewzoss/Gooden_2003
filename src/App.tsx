@@ -14531,6 +14531,14 @@ export default function App(){
   // Tracks the last self-heal retry timestamp to prevent infinite retry loops
   // if iOS keeps refusing playback for a structural reason.
   const lastRetryRef=useRef(0);
+  // Synchronous flag for the 2011 lockout one-shot. The route-gate intercept
+  // bounces the player back to lockoutPrompt if LOCKOUT_EVENT_ID isn't in
+  // player.midseasonEvents — but setPlayer is async, so the FIRST click on
+  // an option fires setPlayer + go("nbaPlay") and the gate still sees the
+  // pre-update player state → bounces back to the prompt. Refs update
+  // synchronously, so checking this ref in the intercept closes that gap
+  // and the first click navigates cleanly.
+  const lockoutFiredRef=useRef(false);
 
   // STEP 1: Create the HTMLAudioElement on mount. It loads in the background.
   useEffect(()=>{
@@ -14859,7 +14867,11 @@ export default function App(){
       // Lockout intercept — fires BEFORE the 2011-12 season begins. The
       // workout choice screen redirects back here once a buff is selected,
       // and from there the player plays a single 66-game stretch.
-      if((nbaGamesPlayed||0)===0 && yr===2011 && !firedEvts.includes(LOCKOUT_EVENT_ID)){
+      // The lockoutFiredRef gate is needed because setPlayer (which adds
+      // LOCKOUT_EVENT_ID to midseasonEvents) is async — without the ref,
+      // the first click on a workout option would bounce back to the
+      // prompt and let the player double-dip on bonuses.
+      if((nbaGamesPlayed||0)===0 && yr===2011 && !firedEvts.includes(LOCKOUT_EVENT_ID) && !lockoutFiredRef.current){
         setScreen("lockoutPrompt");
         return;
       }
@@ -16289,6 +16301,12 @@ export default function App(){
     lockoutPrompt:(
       <MenuFrame sub="CBA Negotiations · 2011" title="LOCKOUT">
         <LockoutPromptScreen player={player} onChoose={(option)=>{
+          // Set the ref BEFORE setPlayer so the intercept inside go() sees
+          // the gate even though the state update hasn't flushed yet —
+          // otherwise a double-click would bounce back to the prompt and
+          // let the player double-dip on workout bonuses.
+          if(lockoutFiredRef.current) return;
+          lockoutFiredRef.current=true;
           // Apply the chosen workout's reward. Three options grant +2 to a
           // specific skill; the Drew League grants +5 SP (gated by OVR 90+).
           // Either way, mark the event as fired so the intercept doesn't
