@@ -13934,7 +13934,14 @@ export default function App(){
     // (legacy saves from before the menu-screen guard was added), infer the
     // best resume point from the saved progress data — much better UX than
     // dumping them back at the very start.
-    const saved=data.screen;
+    //
+    // Legacy "offseason" recovery: the bowling event used to navigate to a
+    // dead "offseason" route. Saves with that screen would resume to the
+    // Unknown-screen fallback. Rewrite to "nbaPlay" here so existing stuck
+    // careers self-heal on next resume — the route gate has the same
+    // redirect for any in-session attempts.
+    let saved=data.screen;
+    if(saved==="offseason") saved="nbaPlay";
     if(saved && !MENU_SCREENS.has(saved)){
       setScreen(saved);
     } else {
