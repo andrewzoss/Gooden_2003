@@ -7652,14 +7652,37 @@ function LockoutOptionCard({option, disabled, onClick}){
 
 function LockoutPromptScreen({player, onChoose}){
   const ovr = calcOVR(player.skills||{}, player.intangibles||[], player.position, player.height);
-  // Belt-and-suspenders: even with the App-level lockoutFiredRef gating the
-  // route-gate intercept, mobile taps can sometimes register two clicks in
-  // rapid succession before React processes the state change. This ref is
-  // checked synchronously at the click site and prevents onChoose from
-  // firing more than once for this component instance — so even if the
-  // route somehow re-renders the prompt, this gate is a hard stop on the
-  // second-boost bug.
+  // Synchronous ref — first line of defense against double-fire from rapid
+  // taps. Reads/writes happen in the same event tick so a second tap that
+  // arrives before React processes the first cannot slip through.
   const submittedRef = useRef(false);
+  // State-based gate — once true, the WHOLE UI is replaced with a transient
+  // "Working..." screen. This makes the click visibly final and removes
+  // every clickable surface from the DOM, so the second-boost bug can't
+  // happen regardless of what's going on with the route gate or refs.
+  const [submitted, setSubmitted] = useState(false);
+
+  const handleChoose = (opt) => {
+    if (submittedRef.current) return;
+    submittedRef.current = true;
+    setSubmitted(true);
+    onChoose(opt);
+  };
+
+  // Once submitted, render a confirmation that displaces all option cards.
+  // The route gate's setScreen("nbaPlay") will normally navigate away before
+  // the user sees this for more than a frame — but if anything delays the
+  // transition, the user is on a dead-end loading panel, NOT a clickable
+  // grid of options.
+  if (submitted) {
+    return(
+      <div style={{padding:"40px 0",textAlign:"center"}}>
+        <div style={{fontSize:42,marginBottom:14}}>🔒</div>
+        <div style={{fontSize:14,fontWeight:900,letterSpacing:2,color:"#fff",marginBottom:6}}>WORKOUT LOCKED IN</div>
+        <div style={{fontSize:11,color:"#888",letterSpacing:1}}>Starting the 66-game season…</div>
+      </div>
+    );
+  }
 
   // The four lockout workout options. Three stat-skill boosts + the Drew
   // League SP bonus (gated to OVR 90+).
@@ -7715,14 +7738,7 @@ function LockoutPromptScreen({player, onChoose}){
           key={opt.id}
           option={opt}
           disabled={!!opt.gated && ovr < opt.gateOVR}
-          onClick={()=>{
-            // Hard gate — never call onChoose twice from this component.
-            // Refs update synchronously so a second tap (even one fired
-            // mid-frame before React re-renders) hits this early-return.
-            if(submittedRef.current) return;
-            submittedRef.current = true;
-            onChoose(opt);
-          }}
+          onClick={()=>handleChoose(opt)}
         />
       ))}
     </div>
@@ -8807,12 +8823,26 @@ function OffseasonScreen({
     // (2) Restaurant earnings — one line per restaurant + totals on each.
     const restaurantsList=ensurePurchases(player).restaurants||[];
     if(restaurantsList.length>0&&setMoney){
-      const earnings=restaurantsList.map(r=>({
-        id:r.id,
-        label:r.type==="invested"?r.chainName:r.name,
-        kind:r.type==="invested"?"Investment dividend":`${r.locations||1} location${(r.locations||1)===1?"":"s"}`,
-        inc:r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations),
-      }));
+      const earnings=restaurantsList.map(r=>{
+        // Pick the icon for this row. Invested chains have a fixed icon
+        // sitting on the chain definition (🍩 Krispy, 🌯 Chipotle, etc.).
+        // Own chains store the emoji the player picked at launch time as
+        // `logoEmoji`. Fallback to a generic burger if neither is set.
+        let icon="🍔";
+        if(r.type==="invested"){
+          const chain=RESTAURANT_CHAIN_BY_ID[r.chainId];
+          if(chain&&chain.icon) icon=chain.icon;
+        } else if(r.logoEmoji){
+          icon=r.logoEmoji;
+        }
+        return {
+          id:r.id,
+          icon,
+          label:r.type==="invested"?r.chainName:r.name,
+          kind:r.type==="invested"?"Investment dividend":`${r.locations||1} location${(r.locations||1)===1?"":"s"}`,
+          inc:r.type==="invested"?r.dividend:ownChainAnnualIncome(r.locations),
+        };
+      });
       const totalInc=earnings.reduce((sum,e)=>sum+e.inc,0);
       if(totalInc>0){
         setMoney(m=>(m||0)+totalInc);
@@ -8825,7 +8855,7 @@ function OffseasonScreen({
           return {...p, purchases:{...purchases, restaurants:updated}};
         });
         earnings.forEach(e=>{
-          if(e.inc>0) collected.push({type:"restaurant", icon:"🍔", title:e.label, subtitle:e.kind, amount:e.inc, tone:YE});
+          if(e.inc>0) collected.push({type:"restaurant", icon:e.icon, title:e.label, subtitle:e.kind, amount:e.inc, tone:YE});
         });
       }
     }
@@ -8849,7 +8879,11 @@ function OffseasonScreen({
         const status=r.outcome.status;
         const tone=status==="flop"?RE:status==="classic"?YE:status==="mid"?"#aaa":GR;
         const label=status==="classic"?"💎 CLASSIC":status==="hit"?"🔥 HIT":status==="mid"?"📊 MID":"💔 FLOP";
-        collected.push({type:"album", icon:"💿", title:r.name, subtitle:`Album dropped — ${label}`, amount:r.outcome.payout, tone});
+        // Use the emoji the player chose when designing the album cover —
+        // falls back to the generic 💿 if no emoji was selected.
+        const albumRecord=recording.find(a=>a.id===r.id);
+        const albumIcon=(albumRecord&&albumRecord.emoji)?albumRecord.emoji:"💿";
+        collected.push({type:"album", icon:albumIcon, title:r.name, subtitle:`Album dropped — ${label}`, amount:r.outcome.payout, tone});
       });
     }
 
@@ -14483,6 +14517,10 @@ export default function App(){
   const wipeAndStartNew=()=>{
     clearSave();
     setHasSave(false);
+    // Reset session-level refs so a fresh career starts in a clean state.
+    // Without this, a player who already passed the 2011 lockout in a prior
+    // session would never see the prompt on a new career.
+    lockoutFiredRef.current=false;
     setPlayer({name:"",position:"SG",height:76,weight:210,hometown:"",skills:defaultSkills("SG"),intangibles:[],appearance:{skin:"#4A2912",hair:"Low Cut",beard:"Clean",headband:"Black",headbandColor:"Black",jerseyNumber:23}});
     setStarTier(null);setSchool(null);setPriorities([]);
     setYear(1);setAllYears([]);
