@@ -9156,12 +9156,36 @@ function NbaPlayScreen({player, setPlayer, nbaTeam, nbaGamesPlayed, setNbaGamesP
             fgm:prev.fgm+Math.round(stats.fg*0.18*stretchSize),
             fga:prev.fga+Math.round(0.18*100*stretchSize),
           }));
-          // Award SP based on stretch performance — totalPts maxes around 15
-          // (5 mini-games × 3 max pts each), so the formula gives 1-8 SP per
-          // stretch. Floors at 1 so showing up always earns something. Players
-          // 31+ stop earning skill points (their skill ceiling is locked at peak).
+          // Award SP based on stretch performance.
+          //   Base from mini-game effort: 1-5 SP for showing up + playing well.
+          //   Performance bonuses for actual box-score numbers — a 25 PPG
+          //   scorer or a 10 RPG big should feel meaningfully rewarded for
+          //   their statistical impact, not just for tapping a meter at the
+          //   right time.
+          //   Players 31+ stop earning skill points (skill ceiling locks at
+          //   peak — aging is the dominant force).
           const ageNow=calcAge(allYears,nbaSeasons);
-          const spEarned=ageNow>=31?0:Math.max(1,Math.round(totalPts/2));
+          let spEarned=0;
+          if(ageNow<31){
+            const baseSp=Math.max(1,Math.round(totalPts/3));
+            // PPG tiers — most rewarding stat since scoring is the headline
+            let ppgBonus=0;
+            if(stats.ppg>=28) ppgBonus=4;
+            else if(stats.ppg>=23) ppgBonus=3;
+            else if(stats.ppg>=18) ppgBonus=2;
+            else if(stats.ppg>=13) ppgBonus=1;
+            // RPG tiers — board work is rewarded but capped lower than scoring
+            let rpgBonus=0;
+            if(stats.rpg>=11) rpgBonus=3;
+            else if(stats.rpg>=8) rpgBonus=2;
+            else if(stats.rpg>=5) rpgBonus=1;
+            // APG tiers — playmaking gets the same scale as rebounding
+            let apgBonus=0;
+            if(stats.apg>=8) apgBonus=3;
+            else if(stats.apg>=6) apgBonus=2;
+            else if(stats.apg>=4) apgBonus=1;
+            spEarned=baseSp+ppgBonus+rpgBonus+apgBonus;
+          }
           setSkillPoints&&setSkillPoints(p=>(p||0)+spEarned);
           if(isPlayoffRun){
             setPlayoffsDone(true);
@@ -16523,6 +16547,13 @@ export default function App(){
         input[type=range]{-webkit-appearance:none;height:4px;border-radius:2px;background:rgba(255,255,255,0.1);outline:none;cursor:pointer}
         input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:18px;height:18px;border-radius:50%;background:#e8873a;cursor:pointer}
         button:active{opacity:0.82}
+        /* touch-action: manipulation tells iOS Safari this is a tap target —
+           skip the 300ms click delay AND skip the "warm up" phase where the
+           first tap on a freshly-rendered element doesn't register until the
+           page is scrolled. Applies to every button + every element with the
+           "tappable" style cue (cursor: pointer). */
+        button, [role="button"], [data-tappable] { touch-action: manipulation; }
+        button { -webkit-touch-callout: none; user-select: none; }
       `}</style>
       <NotifBar notif={notif}/>
       {/* Always-visible music toggle in the top-right corner. Persists across every screen.
